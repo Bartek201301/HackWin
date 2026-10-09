@@ -8,7 +8,8 @@ HackWin is a workflow and a planned CLI for hackathon teams of 2 to 4 people who
 | --- | --- |
 | Team and duration | 4 people, about 23 hours: first merge 3 Oct 11:23, last 4 Oct 10:21 (local) |
 | Merged PRs | 133 (50, 39, 32, 12 per account), 2 closed unmerged; median 5 files, 262 lines |
-| Conflicts | 0 merges into main conflicted; 8 branch-side conflict merges |
+| Conflicting merges into main | 0 |
+| Branch-side conflict merges, resolved on the branches | 8 |
 | Production regressions | None observed after a merge |
 | Lead conversation | Busy about 146 min in one night on watcher events; median 1.9, p90 6.8 min each |
 | Watcher loop | 54 launches of the watcher loop in one night, most of them manual restarts |
