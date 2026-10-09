@@ -22,3 +22,7 @@ Closes #
 ## Remaining limitations
 
 <!-- What does not work yet, and what was not checked. -->
+
+## Workflow notes
+
+<!-- What you observed about the workflow during this task: rules that blocked you, conflicts, missing interfaces, unclear instructions, time lost. Only what you observed, or "none". The integrator copies this into docs/test-log.md when it merges. -->

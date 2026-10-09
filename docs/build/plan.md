@@ -17,7 +17,7 @@ One integrator and three builder lanes work in parallel on this repository, the 
 
 | Role | Owns | Does |
 | --- | --- | --- |
-| `integrator` (shared role) | Shared code, package files, CI, the test harness, docs other than `docs/verification.md` | Plans in the main checkout; builds the foundation and the integration; merges, one pull request at a time, only when the human names it (section 8) |
+| `integrator` (shared role) | Shared code, package files, CI, the test harness, docs other than `docs/verification.md` | Plans in the main checkout; builds the foundation and the integration; merges, one pull request at a time, only when the human names it (section 8); is the only session that edits `docs/test-log.md` |
 | `lane-a` | Git hooks, CI generation, Claude Code settings and hooks, `setup`, `join` | Tasks 1.4a to 1.4g |
 | `lane-b` | `take`, `ship`, the platform verification | Tasks 1.2 and 1.5a to 1.5e |
 | `lane-c` | `gate`, `status` | Tasks 1.6a to 1.6f |
@@ -176,6 +176,9 @@ Only the integrator merges, one pull request at a time, and only when the human 
 | 7 | CI | `gh pr checks <PR> --watch` until the check `test` succeeds on this head |
 | 8 | Freshness | `origin/main` is still the SHA tested in step 6; otherwise repeat from step 5 |
 | 9 | Merge | `gh pr merge <PR> --merge --match-head-commit <full head SHA>`, then delete the remote branch and the scratch worktree |
+| 10 | Test log | Add the pull request's "Workflow notes" to `docs/test-log.md` as an entry in the format the file describes, newest first, writing only what was observed or measured |
+
+**The test log.** Only the integrator's planning session edits `docs/test-log.md`. Main is protected, so each update is its own pull request from a branch `log/pr-<PR>` off the new `origin/main` that changes only that file. The integrator merges it right after the pull request it records, with steps 1, 7, 8 and 9; it has no task issue, so step 2 does not apply.
 
 A failed step leaves one comment on the pull request with the step, the reason and the next action. A fix never lands on main directly: a conflict is resolved on the branch, and a problem that two pull requests cause together is fixed by a separate small task of the owning role.
 
@@ -192,5 +195,5 @@ Nothing below is guessed in the plan or the issues. Each answer changes the issu
 7. **Repositories where GitHub refuses.** AC2, AC70 and AC80 need repositories where GitHub refuses all protection, refuses only the update restriction, and refuses push protection. Which repositories, or does step 1.2 show that some of these cases cannot be produced, so that they are tested only against the fake GitHub? (1.4f, 1.7b)
 8. **Test ids.** A named acceptance test that does not exist must fail (T5, AC15). For a file that is checkable. For a test id with an arbitrary `commands.test`, the specification does not say how existence is proven. (1.3c, 1.5d)
 9. **Claude Code in automated tests.** AC14, AC55, AC58 and the deny part of AC63 involve Claude Code sessions. Do the tests run real headless Claude Code sessions, which cost tokens and need a login, or do they feed recorded hook events to the handlers and run each wrapper's command line? (1.4c, 1.7b, 1.7c)
-10. **Step 1.0.** On `hackwin-sandbox` the `main` branch holds only the template commit; the Node and Tailwind project is on the branch `foundation/node-scaffold`. Is `test-bot-builder` the machine account of step 1.0? 1.3d needs the project merged on the sandbox's `main`.
+10. **Step 1.0.** The Node and Tailwind project is merged on the sandbox's `main` (PR #1, merge commit `bf2af03`), and `test-bot-builder` has write access. Is `test-bot-builder` the machine account of step 1.0?
 11. **Node version.** The specification requires Node (A1) but names no minimum version. Task 1.3a chooses one and records it in `docs/build/contracts.md`; confirm it before lanes start.

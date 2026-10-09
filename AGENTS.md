@@ -11,6 +11,7 @@ Use English for code, comments, commits, issues and pull requests. Answer the hu
 - `owners.yml` gives every path exactly one role: `integrator`, `lane-a`, `lane-b` or `lane-c`. A path that matches no role belongs to `integrator`.
 - Your task issue names one role. Change only files inside that role's paths. Never edit, move, delete or revert a file of another role, not even to fix a typo or a failing test.
 - Shared code, package files, CI and the test harness belong to the integrator. When your task needs a change there, stop and tell the human which interface or change you need.
+- Never edit `docs/test-log.md`. Only the integrator's planning session edits it; task sessions don't, the integrator's own included.
 
 ## One task, one branch, one worktree
 
@@ -41,6 +42,6 @@ Do these steps in order, each one only after the previous one succeeded:
 2. `git fetch origin && git merge origin/main`, resolving conflicts in your own files only.
 3. Run `npm test` and the task's acceptance tests.
 4. Push the branch: `git push -u origin task/<N>-<slug>`.
-5. Open the pull request, not as a draft, from `.github/pull_request_template.md`, with `Closes #<N>`.
+5. Open the pull request, not as a draft, from `.github/pull_request_template.md`, with `Closes #<N>`. Under the heading "Workflow notes", write what you observed about the workflow during the task: rules that blocked you, conflicts, missing interfaces, unclear instructions, time lost. Write only what you observed, or "none". The integrator copies these notes into `docs/test-log.md` when it merges.
 
 Then stop. Report the pull request number and the full head SHA, and do nothing more.
