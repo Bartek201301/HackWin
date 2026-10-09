@@ -1,0 +1,28 @@
+# Tests of the HackWin CLI, on every pull request and every push to main.
+# The job "test" is the required check on main.
+# Until the foundation task (1.3a) adds package.json there is nothing to
+# test, and the job says so. Task 1.3a replaces this file with the real
+# steps and removes the condition.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: No package yet
+        if: hashFiles('package.json') == ''
+        run: echo "No package.json on this commit. Nothing to test until task 1.3a adds the package."
+
+      - name: Install and test
+        if: hashFiles('package.json') != ''
+        run: npm ci && npm test
