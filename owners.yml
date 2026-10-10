@@ -1,0 +1,47 @@
+# Ownership map of the HackWin build: path globs to ownership roles,
+# in the format of docs/HackWin-build-phase-0-1.md section 6.2.
+#
+# - A path matches at most one role. The globs below do not overlap.
+# - A path that matches no role belongs to the integrator, the shared role:
+#   package files, root configuration, AGENTS.md, CLAUDE.md, README.md,
+#   LICENSE and every document under docs/ except docs/verification.md.
+# - The layout and the reasons behind it are in docs/build/plan.md.
+
+schema: 1
+roles:
+  integrator:
+    shared: true
+    paths:
+      - "bin/**"
+      - "src/cli/**"
+      - "src/core/**"
+      - "test/cli/**"
+      - "test/core/**"
+      - "test/harness/**"
+      - "test/integration/**"
+      - "docs/build/**"
+      - ".github/**"
+  lane-a:
+    paths:
+      - "src/commands/setup/**"
+      - "src/commands/join/**"
+      - "src/internal/**"
+      - "src/generate/**"
+      - "test/commands/setup/**"
+      - "test/commands/join/**"
+      - "test/internal/**"
+      - "test/generate/**"
+  lane-b:
+    paths:
+      - "src/commands/take/**"
+      - "src/commands/ship/**"
+      - "test/commands/take/**"
+      - "test/commands/ship/**"
+      - "docs/verification.md"
+  lane-c:
+    paths:
+      - "src/commands/status/**"
+      - "src/commands/gate/**"
+      - "test/commands/status/**"
+      - "test/commands/gate/**"
+open: []
