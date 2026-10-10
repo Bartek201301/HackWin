@@ -1,0 +1,4 @@
+# Markdown keeps its compact tables; Prettier would pad every column.
+*.md
+package-lock.json
+node_modules/
