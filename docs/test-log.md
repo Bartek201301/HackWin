@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-10 · Phase 1 · Step 1.1, the build workflow (PR #30)
+
+- Setup: the integrator's planning session (Claude Code) in the main checkout of `HackWin`; the task worktree `task/1-build-workflow`; the `gh` login `Bartek201301`.
+- What happened:
+  - Issues #1 to #29 were created in the planned order, so no reference needed a correction.
+  - Protection of main was applied and read back.
+  - PR #30 got four more commits after it was opened: the human's test log, the integrator's log entries, the batching of log updates on `log/next`, and the setup review. The review set the deadlines and the decisions on the open questions, and added the rule that checking a PR against its task's role is a build rule only. It also edited 28 issue bodies, each with one "Scope change:" comment.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed; the only files outside the integrator's paths were 16 `.gitkeep` files of lane directories, the documented exception of 1.1. The merge test had no npm commands to run, because no `package.json` exists yet; the inspection checks passed. `test` passed on the head, main had not moved, and the merge was pinned to the head SHA. The remote branch and both worktrees were removed.
+- Problems: none in the workflow. Tool observations:
+  - `gh label list --search role:` listed one of the four new labels; `gh label list` listed all four.
+  - `timeout` does not exist on this macOS machine; checks were watched with `gh pr checks --watch` in the foreground.
+  - A `gh pr checks --watch` started seconds after a push reported "no checks reported"; the run appeared on the next call.
+  - Two script errors of the integrator, both caught before any wrong write. A dash check with a doubled backslash tested the wrong characters and stopped the plan edit before it was written. zsh's `echo` expanded the `\n` escapes in `gh` JSON and broke `jq`; the check was redone in Python.
+  - `hackwin-test-p0` no longer exists under that name; GitHub resolves it to `hackwin-sandbox`, same repository id.
+- Measured:
+  - PR open 23 h 55 min (2026-10-09 18:00:30 to 2026-10-10 17:55:51 UTC), including the human's review.
+  - 5 commits, 4 PR runs of `test` (6 to 8 s each, from start to finish), 0 conflicts.
+  - `test` on main after the merge: 7 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/30; head `237e8cb`; merge commit `42eaead`; runs `38073564736` (last PR run) and `38073732901` (main).
+
 ### 2026-10-09 · Phase 0 · The manual PR recipe on hackwin-sandbox (PR #1)
 
 - Setup: `hackwin-sandbox`, created from the template; PR #1 from `foundation/node-scaffold`, the project of the next entry; the PR recipe of the template's `docs/hackwin/manual-workflow.md`, section 7.
