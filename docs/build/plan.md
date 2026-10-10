@@ -203,7 +203,7 @@ The human answered the open questions of the setup on 10 October 2026. Each issu
 | 1 | Deadlines | Wave 1 (1.2, 1.3a to 1.3d): `2026-10-17T23:59:00+02:00`. Wave 2 (1.3e and the lanes): `2026-11-01T23:59:00+01:00`. Wave 3 (integration): `2026-11-06T23:59:00+01:00`. 1.1 has none; PR #30 closes it | #2 to #29 |
 | 2 | Accounts | `builder1` is `test-bot-builder`. `builder2` is a teammate's GitHub login, used only as a name in team configurations with invitations off, so it never receives anything; every test in which `builder2` acts runs against the fake GitHub. `solo` is the Lead's account | #6, #13 |
 | 3 | Machine account credential | The harness reads `test-bot-builder`'s token from `HACKWIN_TEST_BUILDER_TOKEN`, which the human sets locally; 1.3a records the name in `docs/build/contracts.md`. CI of this repository holds no credential and runs only the offline suite. Tests on fixture repositories run locally | #3, #6 |
-| 4 | Repositories for tests | No repository is ever deleted, and the `delete_repo` scope is never requested. Each lane has a fixture repository, `hackwin-fixture-a`, `hackwin-fixture-b` and `hackwin-fixture-c`, plus one private fixture repository for the cases where GitHub refuses protection; the integration tasks use the lane fixtures. Before a test run the harness resets a fixture: close issues and pull requests, delete labels and rules, reset `main` to a recorded commit. Automated tests never touch `hackwin-sandbox`; it is for the human's live tests | #2, #6, #7, #13, #26 to #29 |
+| 4 | Repositories for tests | No repository is ever deleted, and the `delete_repo` scope is never requested. Each lane has a fixture repository, `hackwin-fixture-a`, `hackwin-fixture-b` and `hackwin-fixture-c`, plus the private `hackwin-fixture-private` for the cases where GitHub refuses protection; the integration tasks use the lane fixtures. Before a test run the harness resets a fixture: close issues and pull requests, delete labels and rules, reset `main` to the recorded commit (table below). Automated tests never touch `hackwin-sandbox`; it is for the human's live tests | #2, #6, #7, #13, #26 to #29 |
 | 5 | Versions before release 0.1.0 | `.tgz` packages from `npm pack`, attached to GitHub pre-releases of this repository and installed by URL. The major and minor numbers name the phase, so Phase 1 is `0.1`. Builds are `0.1.0-pre.<n>`. For AC77 the same code is also packed as `0.1.1-pre.<n>`, a bug fix of the same phase with a different patch number, and as `0.2.0-pre.<n>`, another phase. CM12 compares the major and minor numbers for the phase and semver precedence for older and newer, so `0.1.0-pre.<n>` < `0.1.1-pre.<n>` < `0.1.1`, and no npm release from step 1.8 on shares a version with a pre-release. The integrator creates a pre-release when the human asks. 1.3a records the scheme in `docs/build/contracts.md` | #3, #4, #9, #26, #29 |
 | 6 | Package name | `hackwin`. It was free on npm on 9 October 2026, and `npm view hackwin` still returned 404 on 10 October 2026. The install command is `npm install -g hackwin@<version>`, or `npm install -g` with the URL of the `.tgz` for a pre-release | #3, #4 |
 | 7 | Cases where GitHub refuses | The private fixture repository gives "no protection" and, if step 1.2 confirms it, "no push protection". A case that no real repository can produce is tested against the fake GitHub; step 1.2 decides which | #2, #13, #27 |
@@ -214,7 +214,15 @@ The human answered the open questions of the setup on 10 October 2026. Each issu
 
 The answers to the setup review add one more rule: checking a pull request against the role of its task is a rule of this build only (section 2; issues #8, #9 and #22).
 
+**Fixture repositories.** The integrator created them on 10 October 2026 as test infrastructure. It pushed the history of `hackwin-sandbox` up to its `main` after PR #1, which holds the template and the Node, Vite, Tailwind and TypeScript project. It then invited `test-bot-builder` to each with write access.
+
+| Repository | Visibility | Used by | `main` and reset commit |
+| --- | --- | --- | --- |
+| `hackwin-fixture-a` | Public | Lane A; the integration tasks | `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` |
+| `hackwin-fixture-b` | Public | Lane B; the experiments of 1.2 that change settings | `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` |
+| `hackwin-fixture-c` | Public | Lane C; the integration tasks | `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` |
+| `hackwin-fixture-private` | Private | The cases where GitHub refuses protection (AC2, and AC80 if 1.2 confirms it), in 1.4f and 1.7b; the experiments of 1.2 that change settings | `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` |
+
 **Still open.**
 
-1. **`builder2`'s login.** The answer names it only as a teammate's GitHub login, and the harness's team configurations need the login itself. (#6)
-2. **Fixture repositories.** Who creates `hackwin-fixture-a`, `-b`, `-c` and the private one; what each contains; and which commit of each the harness resets `main` to. 1.2 needs `hackwin-fixture-b` or the private repository for its experiments, and 1.3d needs all four. (#2, #6)
+1. **`builder2`'s login.** Both answers named it only by a placeholder ("a teammate's GitHub login", then `<login>`), and the harness's team configurations need the login itself. (#6)
