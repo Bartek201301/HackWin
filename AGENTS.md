@@ -34,6 +34,11 @@ Use English for code, comments, commits, issues and pull requests. Answer the hu
 
 Never read, print or copy a secret or token: no `.env` file other than `.env.example`, no `gh auth token`, no credential store, and no token value in code, tests, logs, commits, issues or pull requests. Tests get GitHub accounts only through the test harness.
 
+## GitHub repositories
+
+- Never change `hackwin-sandbox`; it is for the human's live tests. Tests use the fixture repositories, only through the test harness.
+- Never delete a repository, and never request the `delete_repo` scope.
+
 ## Finishing a task
 
 Do these steps in order, each one only after the previous one succeeded:

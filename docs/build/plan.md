@@ -57,7 +57,7 @@ Four owners never edit the same file. Each command lives in its own directory, a
 - Tests are found by glob, so a lane adds tests only under its own test directories.
 - Step 1.1 created the empty directories of the layout with a `.gitkeep` file. A role may delete the one in its own directory once the directory holds a real file.
 - The `open` list is empty: `README.md` is the release README and belongs to the integrator in this build.
-- All pull requests of this build may come from one GitHub account, so a pull request is checked against the role of its task, not against its author's login.
+- **A rule of this build only.** All pull requests of this build may come from one GitHub account, so the integrator checks a pull request against the role of its task (section 8, step 3). The product does not do this: HackWin checks scope against the roles that the pull request's author holds (G11, 8.4), and the `pre-commit` hook checks against the roles of the committing member (E1). No lane builds the task-role rule into the product; issues #8, #9 and #22 say so.
 
 ## 3. Interfaces that keep the lanes apart
 
@@ -81,7 +81,7 @@ Each row is a place where two owners would otherwise edit the same file, and the
 | Last main commit per worktree and the summary of changes on main | B (`take` prompt), A (`SessionStart`) | `src/core/state`, `src/core/changes` | 1.3c |
 | Worktree paths, removal of merged worktrees, `core.hooksPath` repair | A (`join`), B (`take`, `ship`) | `src/core/worktrees` | 1.3c |
 | Install, check, tests, format check, generated file check | A (CI, `join`, PostToolUse), B (`take`, `ship`), C (Gate stage 7) | `src/core/project` | 1.3c |
-| Fixtures, fake GitHub, sandbox, accounts | A, B, C | `test/harness` | 1.3d |
+| Fixtures, fake GitHub, fixture repositories, accounts | A, B, C | `test/harness` | 1.3d |
 | Protection state | A (`setup` reads its rules back), C (Gate header, status issue) | `src/core/protection` | 1.3e |
 
 Three things stay inside one lane and need no shared file: the generated file manifest and its generators (lane A, built in order by 1.4a to 1.4d), the status issue format (lane C: the Gate writes it, `status` reads it through the parser in `src/commands/gate`), and the prompt (lane B).
@@ -108,7 +108,7 @@ Coverage of the 54 criteria of Phase 1: lane A closes 8 (AC1 to AC6, AC18, AC55)
 
 ## 5. Tasks
 
-Waves: 1 is 1.1, 1.2 and the foundation 1.3a to 1.3d; 2 is 1.3e and the lanes; 3 is the integration. Brief sections are those of `docs/HackWin-build-phase-0-1.md`. Every task's deadline is open (question 1 of section 9).
+Waves: 1 is 1.1, 1.2 and the foundation 1.3a to 1.3d; 2 is 1.3e and the lanes; 3 is the integration. Brief sections are those of `docs/HackWin-build-phase-0-1.md`. Deadlines (section 9, decision 1): wave 1 `2026-10-17T23:59:00+02:00`, wave 2 `2026-11-01T23:59:00+01:00`, wave 3 `2026-11-06T23:59:00+01:00`; 1.1 has none.
 
 | Step | Issue | Task | Owner | Owned paths | Depends on | Brief sections | Closes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -153,12 +153,19 @@ Waves: 1 is 1.1, 1.2 and the foundation 1.3a to 1.3d; 2 is 1.3e and the lanes; 3
    - Integrator: 1.3e after 1.2, before 1.4f and 1.6a need it.
 4. **Wave 3.** 1.7a to 1.7d in parallel; their test directories differ.
 5. **Step 1.8**, human: release 0.1.0 with the results of `docs/verification.md` and checklist 20.5.
+6. **Manual check per release**, human, for 0.1.0 and every bug fix release. Automated tests never start a real Claude Code session (section 9, decision 9), so each release is checked once in a real Claude Code session with default permissions, and once with bypass permissions on:
+   - an edit outside the role scope is blocked before the file changes;
+   - `gh pr merge`, a merge through `gh api` and a push to main are refused;
+   - after an edit only that file is formatted;
+   - the session start summary appears;
+   - `/take`, `/ship`, `/status` and `/gate` behave as in the terminal.
+   These are AC14, AC55, AC58 and AC63. The result goes into `docs/test-log.md`.
 
 ## 7. Working on a task
 
 1. Check that every issue in `depends_on` is closed and that no open pull request changes a file inside the task's paths (`gh pr list --state open`, then `gh pr diff <PR> --name-only`).
 2. In the main checkout, create the worktree as `AGENTS.md` says.
-3. Start a fresh session in the worktree with: "Work on issue #<N>. Read it with `gh issue view <N> --comments` and follow AGENTS.md."
+3. Start a fresh session in the worktree with: "Work on issue #<N> in the worktree <absolute worktree path>, on the branch task/<N>-<slug>. Read the issue with `gh issue view <N> --comments`, including every comment that starts with "Scope change:", and follow AGENTS.md."
 4. The session finishes as `AGENTS.md` says and stops with the pull request number and the full head SHA.
 
 ## 8. Merging
@@ -169,7 +176,7 @@ Only the integrator merges, one pull request at a time, and only when the human 
 | --- | --- | --- |
 | 1 | Fetch | `git fetch origin && git fetch origin "+pull/<PR>/head:pr/<PR>"`, then note both full SHAs with `git rev-parse origin/main pr/<PR>` |
 | 2 | Task link | The branch starts with `task/`, the body says `Closes #<N>`, and issue N is open |
-| 3 | Ownership | Every file of `git diff --name-only origin/main...pr/<PR>` lies inside the paths of the task's role in `owners.yml`. A file outside the task's own paths but inside the role is named in the merge report |
+| 3 | Ownership | Every file of `git diff --name-only origin/main...pr/<PR>` lies inside the paths of the task's role in `owners.yml` (a rule of this build only, section 2). A file outside the task's own paths but inside the role is named in the merge report |
 | 4 | Secrets | No added line matches a secret pattern and no env file other than `.env.example` is added |
 | 5 | Conflicts | `git merge-tree --write-tree origin/main pr/<PR>` exits 0 |
 | 6 | Merge test | In a scratch worktree `../HackWin.worktrees/pr-<PR>`: the pull request merged with the newest main, then `npm ci && npm test && npm run test:ac -- <ids of the task>` |
@@ -187,18 +194,27 @@ Only the integrator merges, one pull request at a time, and only when the human 
 
 A failed step leaves one comment on the pull request with the step, the reason and the next action. A fix never lands on main directly: a conflict is resolved on the branch, and a problem that two pull requests cause together is fixed by a separate small task of the owning role.
 
-## 9. Open questions
+## 9. Decisions on the open questions
 
-Nothing below is guessed in the plan or the issues. Each answer changes the issues named.
+The human answered the open questions of the setup on 10 October 2026. Each issue named below got its body changed and one "Scope change:" comment.
 
-1. **Deadlines.** Every task block requires an ISO 8601 deadline (8.1), and no schedule exists for this build. All issues have `deadline: ""`.
-2. **Second builder account.** Section 14 tests with one Lead and two builder accounts plus one solo account. The sandbox has one machine account, `test-bot-builder`. Which account is `builder2`, and is `solo` the Lead's account? (1.3d, AC53, AC63, AC66)
-3. **Machine account credential.** How does the harness get `test-bot-builder`'s credential (an environment variable set by the human, or a second `gh` login), and may CI of this repository hold any sandbox credential? The plan assumes not: CI runs the offline suite, and sandbox tests run locally. (1.3d)
-4. **Fresh sandbox.** AC1 needs "a fresh public sandbox repository". May the harness reset `hackwin-sandbox` (delete labels, issues, pull requests, rules; reset `main`), or create and delete throwaway repositories, which needs the `delete_repo` scope? Is one sandbox with a machine-wide lock enough for three lanes, or does each lane get its own? (1.3d, 1.4f)
-5. **CLI on the sandbox before publication.** The generated workflow installs the pinned CLI version, but nothing is on npm before step 1.8. Where does the sandbox's CI get a version: a pre-release on npm, a tarball, a git URL, GitHub Packages? AC77 needs two patch versions of the same phase. (1.4b, 1.7a, 1.7b, 1.7d)
-6. **npm package name.** It stays a placeholder until 20.5 [D6]. Which placeholder goes into `package.json` and the install command of CM12? (1.3a, 1.3b)
-7. **Repositories where GitHub refuses.** AC2, AC70 and AC80 need repositories where GitHub refuses all protection, refuses only the update restriction, and refuses push protection. Which repositories, or does step 1.2 show that some of these cases cannot be produced, so that they are tested only against the fake GitHub? (1.4f, 1.7b)
-8. **Test ids.** A named acceptance test that does not exist must fail (T5, AC15). For a file that is checkable. For a test id with an arbitrary `commands.test`, the specification does not say how existence is proven. (1.3c, 1.5d)
-9. **Claude Code in automated tests.** AC14, AC55, AC58 and the deny part of AC63 involve Claude Code sessions. Do the tests run real headless Claude Code sessions, which cost tokens and need a login, or do they feed recorded hook events to the handlers and run each wrapper's command line? (1.4c, 1.7b, 1.7c)
-10. **Step 1.0.** The Node and Tailwind project is merged on the sandbox's `main` (PR #1, merge commit `bf2af03`), and `test-bot-builder` has write access. Is `test-bot-builder` the machine account of step 1.0?
-11. **Node version.** The specification requires Node (A1) but names no minimum version. Task 1.3a chooses one and records it in `docs/build/contracts.md`; confirm it before lanes start.
+| # | Question | Decision | Issues changed |
+| --- | --- | --- | --- |
+| 1 | Deadlines | Wave 1 (1.2, 1.3a to 1.3d): `2026-10-17T23:59:00+02:00`. Wave 2 (1.3e and the lanes): `2026-11-01T23:59:00+01:00`. Wave 3 (integration): `2026-11-06T23:59:00+01:00`. 1.1 has none; PR #30 closes it | #2 to #29 |
+| 2 | Accounts | `builder1` is `test-bot-builder`. `builder2` is a teammate's GitHub login, used only as a name in team configurations with invitations off, so it never receives anything; every test in which `builder2` acts runs against the fake GitHub. `solo` is the Lead's account | #6, #13 |
+| 3 | Machine account credential | The harness reads `test-bot-builder`'s token from `HACKWIN_TEST_BUILDER_TOKEN`, which the human sets locally; 1.3a records the name in `docs/build/contracts.md`. CI of this repository holds no credential and runs only the offline suite. Tests on fixture repositories run locally | #3, #6 |
+| 4 | Repositories for tests | No repository is ever deleted, and the `delete_repo` scope is never requested. Each lane has a fixture repository, `hackwin-fixture-a`, `hackwin-fixture-b` and `hackwin-fixture-c`, plus one private fixture repository for the cases where GitHub refuses protection; the integration tasks use the lane fixtures. Before a test run the harness resets a fixture: close issues and pull requests, delete labels and rules, reset `main` to a recorded commit. Automated tests never touch `hackwin-sandbox`; it is for the human's live tests | #2, #6, #7, #13, #26 to #29 |
+| 5 | Versions before release 0.1.0 | `.tgz` packages from `npm pack`, attached to GitHub pre-releases of this repository and installed by URL. The major and minor numbers name the phase, so Phase 1 is `0.1`. Builds are `0.1.0-pre.<n>`. For AC77 the same code is also packed as `0.1.1-pre.<n>`, a bug fix of the same phase with a different patch number, and as `0.2.0-pre.<n>`, another phase. CM12 compares the major and minor numbers for the phase and semver precedence for older and newer, so `0.1.0-pre.<n>` < `0.1.1-pre.<n>` < `0.1.1`, and no npm release from step 1.8 on shares a version with a pre-release. The integrator creates a pre-release when the human asks. 1.3a records the scheme in `docs/build/contracts.md` | #3, #4, #9, #26, #29 |
+| 6 | Package name | `hackwin`. It was free on npm on 9 October 2026, and `npm view hackwin` still returned 404 on 10 October 2026. The install command is `npm install -g hackwin@<version>`, or `npm install -g` with the URL of the `.tgz` for a pre-release | #3, #4 |
+| 7 | Cases where GitHub refuses | The private fixture repository gives "no protection" and, if step 1.2 confirms it, "no push protection". A case that no real repository can produce is tested against the fake GitHub; step 1.2 decides which | #2, #13, #27 |
+| 8 | Acceptance tests that do not exist | In v1 every `acceptance_tests` entry of a task block is a file path, and an entry that is not an existing file fails. The test ids in the issues of this build (`AC11`, `1.3a/registry`) are a convention of the build, run with `npm run test:ac` | #3, #5, #18 |
+| 9 | Claude Code in automated tests | Tests feed recorded hook events to the handlers and run each wrapper's command line; no test starts a real headless Claude Code session. A manual check per release covers a real Claude Code session, also with bypass permissions on (section 6) | #10, #27, #28 |
+| 10 | Machine account | `test-bot-builder` is the machine account of step 1.0 | #6 |
+| 11 | Node version | The minimum is Node 22. The test workflow runs on Node 22 and 24; one job `test` that fails unless both runs succeeded stays the required check | #3, #11, #12 |
+
+The answers to the setup review add one more rule: checking a pull request against the role of its task is a rule of this build only (section 2; issues #8, #9 and #22).
+
+**Still open.**
+
+1. **`builder2`'s login.** The answer names it only as a teammate's GitHub login, and the harness's team configurations need the login itself. (#6)
+2. **Fixture repositories.** Who creates `hackwin-fixture-a`, `-b`, `-c` and the private one; what each contains; and which commit of each the harness resets `main` to. 1.2 needs `hackwin-fixture-b` or the private repository for its experiments, and 1.3d needs all four. (#2, #6)
