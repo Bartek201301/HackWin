@@ -176,9 +176,14 @@ Only the integrator merges, one pull request at a time, and only when the human 
 | 7 | CI | `gh pr checks <PR> --watch` until the check `test` succeeds on this head |
 | 8 | Freshness | `origin/main` is still the SHA tested in step 6; otherwise repeat from step 5 |
 | 9 | Merge | `gh pr merge <PR> --merge --match-head-commit <full head SHA>`, then delete the remote branch and the scratch worktree |
-| 10 | Test log | Add the pull request's "Workflow notes" to `docs/test-log.md` as an entry in the format the file describes, newest first, writing only what was observed or measured |
+| 10 | Test log | Add the pull request's "Workflow notes" to `docs/test-log.md` on the branch `log/next`, as an entry in the format the file describes, newest first, writing only what was observed or measured |
 
-**The test log.** Only the integrator's planning session edits `docs/test-log.md`. Main is protected, so each update is its own pull request from a branch `log/pr-<PR>` off the new `origin/main` that changes only that file. The integrator merges it right after the pull request it records, with steps 1, 7, 8 and 9; it has no task issue, so step 2 does not apply.
+**The test log.** Only the integrator's planning session edits `docs/test-log.md`, and it batches the updates:
+
+1. Pending entries collect on one branch, `log/next`, in the worktree `../HackWin.worktrees/log-next`. When the branch does not exist, the integrator creates it from the current `origin/main`. Each entry is one commit, pushed to `log/next` at once.
+2. At the end of each working session, or when the human says "close the day", the integrator merges `origin/main` into `log/next` (never a rebase) and opens one pull request from it. That pull request changes only `docs/test-log.md`.
+3. The integrator merges it with steps 1, 7, 8 and 9. It has no task issue, so step 2 does not apply.
+4. Then `log/next` and its worktree are deleted; the next entry starts the branch again from the new `origin/main`.
 
 A failed step leaves one comment on the pull request with the step, the reason and the next action. A fix never lands on main directly: a conflict is resolved on the branch, and a problem that two pull requests cause together is fixed by a separate small task of the owning role.
 
