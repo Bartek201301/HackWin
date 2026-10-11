@@ -17,6 +17,34 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-11 · Phase 1 · Step 1.2, platform verification (PR #34, issue #2)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/2-platform-verification`, created by the integrator from `42eaead`; the `gh` login `Bartek201301`; experiments on `hackwin-fixture-b` and `hackwin-fixture-private` with the human's agreement; the integrator's planning session in the main checkout for the merge.
+- What happened:
+  - First round, 2026-10-10: documentation, local experiments L1 to L3 and GitHub experiments E1 to E4 from 23:44 to 23:49 UTC; one commit, `04a8714`, and PR #34 opened at 23:57:58 UTC.
+  - After the Lead's review, 2026-10-11: experiment E5 (a required check pinned to GitHub Actions, and `--admin`) from 21:32 to 21:34 UTC on `hackwin-fixture-b`, and L4 (a macOS notification while the human watched); a second commit, `e02e53c`, and a merge of `origin/main` (`a85f159`).
+  - The Lead's second review approved the head and asked for the merge and for scope changes. The request arrived inside pasted text, so the integrator asked for and got a confirmation first.
+  - Merged with the procedure of the plan, section 8:
+    - Steps 1 to 5 passed; the only file was `docs/verification.md`, inside lane B's paths.
+    - Step 6: the head already contained main `218091d`, so the merged tree was the head's. `npm ci` and `npm test` passed, 66 of 66. `npm run test:ac` was skipped on the Lead's instruction, because issue #2 has inspection criteria only and no test ids. The integrator's own reading of the document matched both inspection criteria.
+    - Main had not moved, and the merge was pinned to the head SHA. The remote branch and both worktrees were removed.
+  - After the merge, nine "Scope change:" comments went to #7, #10, #13, #16, #17, #21, #23, #27 and #28; no issue body changed.
+  - Read back at the log entry: `hackwin-fixture-b` has `main` at `bf2af03`, no ruleset and only the branch `main`. Its issue and PR numbers 1 to 7 are taken: PRs #1 and #4 merged into deleted scratch branches, PRs #2, #5, #6 and #7 and issue #3 closed.
+- Problems, from the PR's "Workflow notes":
+  - `docs/build/contracts.md`, named under "Read first", did not exist during the first commit, because 1.3a (#3) was not merged yet. The task did not need it.
+  - `package.json` did not exist at the first push, so `npm test` first ran after `origin/main` was merged for the second commit.
+  - The refusal of a merge by a builder's account (row 6) could not use `test-bot-builder`, because accounts come only through the harness (1.3d, #6), which does not exist yet. The Lead's account with the bypass removed stood in; AC63 covers the builder.
+  - In the first round, two experiment steps went beyond the list the human agreed to, on the same fixture and undone: the update restriction ruleset was switched to `disabled` and back, and after 65,537 characters was accepted, 25 more body edits on issue #3 found the body limit.
+  - The Lead's token has no `workflow` scope, so E5 could not add a workflow that produces a `hackwin` check. It pinned the fixture's existing Actions job `check` instead, and used `[skip ci]` for the PR that needed no Actions run.
+  - GitHub cannot remove the experiments' PRs and issue on `hackwin-fixture-b`, so the harness (1.3d) cannot assume that numbers there start at 1.
+  - `npm run test:ac` fails without an id, so a task whose acceptance criteria are all inspections cannot run it. The Lead decided that merge step 6 then skips it; recorded for the next plan change.
+- Measured:
+  - PR open 22 h 15 min (2026-10-10 23:57:58 to 2026-10-11 22:13:17 UTC), including two reviews of the Lead and experiment E5.
+  - 3 commits (one a merge of `origin/main`), 2 PR runs of `test` (7 s on `04a8714`, before `package.json` existed; 26 s on `a85f159`), 0 conflicts.
+  - Experiments on GitHub, as `docs/verification.md` records them: E1 to E4 from 23:44 to 23:49 UTC, E5 from its setup at 21:32:02 to its read back at 21:33:49 UTC. Local merge test: `npm test` 5.14 s.
+  - The run on main after the merge: 28 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/34; head `a85f159`; merge commit `afc3b6c`; runs `38178346372` (last PR run) and `38179547413` (main); `docs/verification.md`, sections 6 (experiment log) and 4 (open questions).
+
 ### 2026-10-11 · Phase 1 · Step 1.3a, the foundation (PR #33, issue #3)
 
 - Setup: one builder session (Claude Code) in the worktree `task/3-foundation-cli-skeleton`, created by the integrator from `42eaead`; the integrator's planning session in the main checkout for the merge; local Node 25.8.1, and Node 22.23.3 through `npx -p node@22`.
