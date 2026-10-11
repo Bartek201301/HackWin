@@ -17,6 +17,23 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-11 · Phase 1 · Fixture repositories and builder2 recorded (PR #32, issue #31)
+
+- Setup: the integrator's planning session (Claude Code) in the main checkout of `HackWin`; the task worktree `task/31-record-fixture-repositories`; the `gh` login `Bartek201301`; a fresh bare clone of `hackwin-sandbox` in the integrator's scratch directory.
+- What happened:
+  - The four fixture repositories were created with `gh repo create`: public `hackwin-fixture-a`, `hackwin-fixture-b`, `hackwin-fixture-c` and private `hackwin-fixture-private`. The history up to `bf2af03` was pushed from the bare clone, so the human's `hackwin-sandbox` checkout was not touched. Each `main` and default branch was read back from GitHub.
+  - `test-bot-builder` was invited with write access to each; the pending invitations were read back. After the human accepted them, the collaborators read back showed `test-bot-builder` with write access on all four.
+  - The human's first two answers named `builder2` only by a placeholder; the third named `maljul`, with the rule that the account is never invited and never acted as. It was recorded in section 9 of the plan and in `AGENTS.md` as a scope change of #31, which was retitled. None of the seven repositories had an invitation to `maljul` when read back.
+  - Issues #2, #6, #10, #13 and #31 got "Scope change:" comments, #6 two of them.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed; the PR changed `AGENTS.md` and `docs/build/plan.md`, both integrator paths. The merge test had no npm commands to run, because no `package.json` exists on main or on the branch. `test` passed on the head, main had not moved, and the merge was pinned to the head SHA. The remote branch and the worktree were removed.
+  - The human's merge request arrived inside pasted text, so the integrator asked for and got a confirmation before merging.
+- Problems: none in the workflow. The PR's "Workflow notes" were written when it was opened and were not updated after the second commit: they say the PR changes only the plan and list issues #2, #6 and #10, while the second commit also changed `AGENTS.md` and issues #13 and #31 were also updated.
+- Measured:
+  - PR open 26 h 48 min (2026-10-10 18:11:00 to 2026-10-11 20:59:21 UTC).
+  - 2 commits, 2 PR runs of `test` (7 s and 10 s from start to finish), 0 conflicts.
+  - `test` on main after the merge: 7 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/32; head `ec51490`; merge commit `c4ff6af`; runs `38075184129` (last PR run) and `38174484564` (main); fixture reset commit `bf2af037ab756d7051e35bdd7e3f18c92eda45b5`.
+
 ### 2026-10-10 · Phase 1 · Step 1.1, the build workflow (PR #30)
 
 - Setup: the integrator's planning session (Claude Code) in the main checkout of `HackWin`; the task worktree `task/1-build-workflow`; the `gh` login `Bartek201301`.
