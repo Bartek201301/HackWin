@@ -9,6 +9,7 @@ import { COMMANDS, HOOK_NAMES, PLUMBING, resolveCommand } from '../../src/cli/re
 import { main } from '../../src/cli/main.js'
 import { UsageError } from '../../src/core/runtime/errors.js'
 import { createRepoWithOrigin, createScratch } from '../core/git/temp-repo.js'
+import { createConfiguredRepo, fakeGh } from '../core/config/fixtures.js'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const bin = join(root, 'bin', 'hackwin.js')
@@ -99,7 +100,7 @@ describe('1.3a/registry: the command registry', () => {
   })
 
   test('a known command whose module does not exist yet exits 2 and names it', async () => {
-    const repo = createRepoWithOrigin()
+    const repo = createConfiguredRepo()
     cleanups.push(repo.cleanup)
     const empty = createScratch()
     cleanups.push(empty.cleanup)
@@ -111,6 +112,7 @@ describe('1.3a/registry: the command registry', () => {
         stdout: sink(),
         stderr,
         moduleRoot: empty.dir,
+        ghExecutor: fakeGh(),
       })
       expect(code, entry.name).toBe(2)
       expect(stderr.text).toBe(
@@ -120,7 +122,7 @@ describe('1.3a/registry: the command registry', () => {
   })
 
   test('modules load lazily: a broken module of another command does not matter', async () => {
-    const repo = createRepoWithOrigin()
+    const repo = createConfiguredRepo()
     cleanups.push(repo.cleanup)
     const modules = createScratch()
     cleanups.push(modules.cleanup)
@@ -136,6 +138,7 @@ describe('1.3a/registry: the command registry', () => {
       stdout,
       stderr: sink(),
       moduleRoot: modules.dir,
+      ghExecutor: fakeGh(),
     })
     expect(code).toBe(0)
     expect(stdout.text).toBe('status ran\n')

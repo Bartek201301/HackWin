@@ -3,7 +3,8 @@ import { Readable } from 'node:stream'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { main } from '../../src/cli/main.js'
-import { createRepoWithOrigin, createScratch } from '../core/git/temp-repo.js'
+import { createScratch } from '../core/git/temp-repo.js'
+import { createConfiguredRepo, fakeGh, hackwinObject } from '../core/config/fixtures.js'
 
 const runtime = pathToFileURL(
   new URL('../../src/core/runtime/index.js', import.meta.url).pathname,
@@ -61,15 +62,19 @@ export async function run(ctx) {
 }
 `
 
-/** @type {ReturnType<typeof createRepoWithOrigin>} */
+/** @type {ReturnType<typeof createConfiguredRepo>} */
 let repo
 /** @type {ReturnType<typeof createScratch>} */
 let modules
 
 beforeAll(() => {
-  repo = createRepoWithOrigin()
+  const hackwin = hackwinObject()
+  hackwin.team.members[1].github = 'test-bot-builder'
+  repo = createConfiguredRepo({ hackwin })
   modules = createScratch()
   modules.write(join(modules.dir, 'src/commands/take/index.js'), takeModule)
+  // A plumbing command runs without the configuration, so its context can be read anywhere.
+  modules.write(join(modules.dir, 'src/internal/hook/pre-push.js'), takeModule)
 })
 
 afterAll(() => {
@@ -102,6 +107,7 @@ async function run(argv, options = {}) {
     stdout,
     stderr,
     moduleRoot: modules.dir,
+    ghExecutor: fakeGh('lead'),
     ...options,
   })
   return { code, stdout: stdout.text, stderr: stderr.text }
@@ -249,7 +255,8 @@ describe('1.3a/runner: exit codes, short output and --json', () => {
       'origin',
       'https://github.com/Bartek201301/hackwin-fixture-a.git',
     )
-    const result = await run(['take', 'context', '--json'], { cwd: clone })
+    // No fetch: a plumbing command skips the configuration.
+    const result = await run(['internal', 'hook', 'pre-push', 'context', '--json'], { cwd: clone })
     expect(JSON.parse(result.stdout).data.repo).toBe('Bartek201301/hackwin-fixture-a')
   })
 
