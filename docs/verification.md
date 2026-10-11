@@ -4,12 +4,12 @@
 | --- | --- |
 | Task | 1.2, issue #2 |
 | Specification | `docs/HackWin-build-phase-0-1.md` section 5.6 (18 rows), under the authority of `docs/HackWin-PRD.md`; plan `docs/build/plan.md` |
-| Checked | 2026-10-10 (all times UTC): documentation read, local experiments, GitHub experiments from 23:44 to 23:49 |
+| Checked | All times UTC. 2026-10-10: documentation read, local experiments L1 to L3, GitHub experiments E1 to E4 from 23:44 to 23:49. 2026-10-11, after the Lead's review of PR #34: documentation read for rows 5, 6 and 14, read-only calls, experiment E5 from 21:32 to 21:34, local experiment L4 at 21:52 |
 | Machine | macOS 26.6.2 (arm64), Claude Code 2.1.296, gh 2.88.1, git 2.53.0, Node 25.8.1; Codex not installed (`codex: command not found`) |
 | GitHub account | `Bartek201301`, a personal account in no organization (`gh api user/orgs` is empty). The token's scopes are `gist`, `read:org`, `repo`; they do not show the plan, and GitHub's answers on the private fixture ("Upgrade to GitHub Pro ...") show it is not on Pro |
-| Repositories | Settings were changed only on `hackwin-fixture-b` (public) and `hackwin-fixture-private` (private), with the human's agreement in the session, and undone (section 6). Both had `main` at `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` before and after. `hackwin-sandbox` was only read |
+| Repositories | Settings were changed only on `hackwin-fixture-b` (public) and `hackwin-fixture-private` (private), with the human's agreement in the session, and undone (section 6). Both had `main` at `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` before and after. E5 ran on `hackwin-fixture-b` only. `hackwin-sandbox` was only read |
 
-Verdicts: **holds**, **partly holds**, **does not hold**, **unknown**. The chosen behavior is the capability itself or the fallback that 5.6 names. Evidence is a page of the current official documentation with the date it was read, or an experiment of section 6 (E1 to E4 on GitHub, L1 to L3 on this machine, R for read-only calls).
+Verdicts: **holds**, **partly holds**, **does not hold**, **unknown**. The chosen behavior is the capability itself or the fallback that 5.6 names. Evidence is a page of the current official documentation with the date it was read, or an experiment of section 6 (E1 to E5 on GitHub, L1 to L4 on this machine, R for read-only calls). A statement that rests on documentation alone says so.
 
 ## 1. Summary
 
@@ -24,14 +24,15 @@ Verdicts: **holds**, **partly holds**, **does not hold**, **unknown**. The chose
 
 **Findings that change a task without a fallback.**
 
-- Rows 6 and 14: while the update restriction is active, GitHub reports every PR into the branch as `BLOCKED`, for the Lead too, so `gh pr merge --merge --match-head-commit <SHA>` is refused by `gh` before any API call. With `--admin` the Lead's merge passes the update restriction and still meets every rule of the rules for everyone (E1). This affects 1.6d (#23), the Gate's merge, and 1.7b (#27), AC63.
-- Row 6: on a personal repository the bypass actor is the repository admin role, `{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}` (E1). This affects 1.4f (#13), which writes it, and 1.3e (#7), which reads it.
-- Row 10: `gh issue edit` (GraphQL) refuses an issue body above 262,144 UTF-8 bytes, and GitHub documents no limit (E4). This affects 1.6b (#21).
+- Rows 6 and 14: while the update restriction is active, GitHub reports every PR into the branch as `BLOCKED`, for the Lead too, so `gh pr merge --merge --match-head-commit <SHA>` is refused by `gh` before any API call. With `--admin` the Lead's merge passes the update restriction and still meets every rule of the rules for everyone. `--admin` was refused when the required check was missing, failing, still in progress, or set by another app than the one it is pinned to, and when the SHA was wrong (E1, E5). This affects 1.6d (#23), the Gate's merge, and 1.7b (#27), AC63.
+- Row 5: a status posted by hand through the API satisfies a required check that names only its context (E1). Pinned to the GitHub Actions app (`integration_id` 15368), the same check refused a hand-posted status of its name and accepted the check that GitHub Actions produced (E5). The chosen behavior pins the required check. This affects 1.4f (#13), which writes the rule, 1.3e (#7), which reads it back, and 1.7b (#27).
+- Row 6: on a personal repository the bypass actor is the repository admin role, `{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}` (E1, E5). This affects 1.4f (#13), which writes it, and 1.3e (#7), which reads it.
+- Row 10: the Lead decided that the CLI keeps an issue body at or below 65,536 characters (JavaScript string length), below every measured limit. `gh issue edit` (GraphQL) refused bodies above 262,144 UTF-8 bytes, and GitHub documents no limit (E4). This affects 1.6b (#21).
 - Row 9: whether a body edit notifies is unknown; a mention added by an edit is documented to notify. 1.6b (#21) keeps `@` mentions out of the status issue body.
 - Row 2: deny patterns cover the usual spellings of a merge through `gh api`, not every spelling; the gap of 10.6 stays as written. This affects 1.4c (#10).
 - Added row: the Codex start command is `codex --cd <worktree> "<prompt>"`. This affects 1.5b (#16), AC72.
 
-Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5, 8, 12, 13, 15 and 16. Row 11 partly holds and keeps the defaults of 6.3.
+Rows 1, 3, 8, 12, 13, 15 and 16 hold as 5.6 states them, and the capability is used without change. Row 11 partly holds and keeps the defaults of 6.3.
 
 ## 2. Rows at a glance
 
@@ -41,12 +42,12 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
 | 2 | Claude Code hooks and Bash deny rules, also for a merge through `gh api` | Partly holds | Capability; the 10.6 gap stays | 1.4c (#10), 1.7b (#27) |
 | 3 | Claude Code CLI starts with a working directory and an initial prompt | Holds | Capability: `claude "<prompt>"` with the worktree as process directory | 1.5b (#16) |
 | 4 | A running session continues in another working directory | Partly holds | Fallback: the terminal command is printed | 1.4c (#10), 1.5b (#16), 1.5c (#17), 1.7c (#28) |
-| 5 | Branch rules on a public personal repository that bind the owner | Holds | Capability: a ruleset without bypass | 1.3e (#7), 1.4f (#13), 1.7b (#27) |
+| 5 | Branch rules on a public personal repository that bind the owner | Holds | Capability: a ruleset without bypass, its required check pinned to GitHub Actions | 1.3e (#7), 1.4f (#13), 1.7b (#27) |
 | 6 | Update restriction to the Lead's account | Holds | Capability: a ruleset of its own with the admin role as bypass | 1.3e (#7), 1.4f (#13), 1.6a (#20), 1.6b (#21), 1.6d (#23), 1.7b (#27) |
 | 7 | Secret scanning push protection | Partly holds | Capability where offered; fallback elsewhere | 1.3d (#6), 1.4f (#13), 1.7b (#27) |
 | 8 | Pinning an issue from the command line | Holds | Capability: `gh issue pin` | 1.6b (#21) |
 | 9 | Editing an issue body sends no notification | Unknown | Capability as specified (the fallback is "none needed") | 1.6b (#21) |
-| 10 | Largest issue body | Holds (measured, not documented) | Capability: at most 262,144 UTF-8 bytes | 1.6b (#21) |
+| 10 | Largest issue body | Holds (measured, not documented) | Capability: at most 65,536 characters (the Lead's decision) | 1.6b (#21) |
 | 11 | Limits on write requests | Partly holds | Capability with the defaults of 6.3 | 1.6b (#21), 1.6c (#22), 1.6d (#23) |
 | 12 | Inviting a collaborator from the command line | Holds | Capability: `gh api -X PUT .../collaborators/<login>` | 1.4f (#13) |
 | 13 | GitHub offers `.github/ISSUE_TEMPLATE/` files | Holds | Capability | 1.4d (#11) |
@@ -110,7 +111,12 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
   - E1 on `hackwin-fixture-b` (public, personal account): a ruleset with a PR required, the check `hackwin` required, force pushes and deletion blocked and an empty bypass list was accepted and read back. It refused the owner's `git push` (`GH013: Repository rule violations found ... Changes must be made through a pull request. ... Required status check "hackwin" is expected.`), the owner's commit through the contents API (HTTP 409), and the owner's merges without the `hackwin` status, also with `--admin`.
   - Reading back (E1): `GET /repos/{owner}/{repo}/rulesets/{id}` returns the rules, `bypass_actors` and `current_user_can_bypass`; `GET /repos/{owner}/{repo}/rules/branches/{branch}` returns the rules that apply to a branch, each with its `ruleset_id`. On a branch without classic protection, `GET .../branches/main/protection` answers 404 "Branch not protected" (R).
   - The read back of the pull request rule carried a parameter that was not sent, `require_extra_approval_for_unattributed_changes: true`. Its effect was not examined.
-- **Chosen behavior:** the capability: the rules for everyone as a repository ruleset with an empty bypass list (full protection, A32).
+  - Who may satisfy the required check. Documentation alone (https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets, read 2026-10-11): "Any person or integration with write permissions to a repository can set the state of any status check in the repository". A required status check rule can name "an app as the expected source of status updates"; "If the status is set by any other person or integration, merging won't be allowed." The same page says the app "must have recently submitted a check run". The REST field is `integration_id`, "The optional integration ID that this status check must originate from" (https://docs.github.com/en/rest/repos/rules, read 2026-10-11).
+  - The value for GitHub Actions. No page of GitHub's documentation names it: a search of the docs for "15368" found nothing (R, 2026-10-11). The documented endpoint "Get an app" (`GET /apps/{app_slug}`, https://docs.github.com/en/rest/apps/apps, read 2026-10-11) returned `{"id": 15368, "slug": "github-actions", "name": "GitHub Actions"}`. The check runs of the fixture's `check` job carry `app.id` 15368 (R). In E5 GitHub accepted a ruleset with `{"context": "check", "integration_id": 15368}` and read it back unchanged.
+  - E1: a required check that names only its context (`hackwin`) was satisfied by a status that the Lead posted by hand through `POST /repos/{owner}/{repo}/statuses/{sha}`, and the merge then succeeded.
+  - E5: the required check `check`, pinned to `integration_id` 15368, refused a hand-posted `check` success on a commit without any Actions run: "Required status check "check" was not set by the expected GitHub app.", although the PR's status rollup showed `SUCCESS`. It accepted the `check` run that GitHub Actions produced, and that PR merged. It also refused a failed Actions run ("is failing") and one still in progress ("is in progress").
+  - E5 also shows that pinning proves which app reported the check, not what the check ran. On two PRs the PR's own change to the `check` script of `package.json` decided the outcome of the Actions run: `exit 1` failed it, and `sleep 900` kept it in progress.
+- **Chosen behavior:** the capability: the rules for everyone as a repository ruleset with an empty bypass list (full protection, A32). Its required check `hackwin` is pinned to the GitHub Actions app: `{"context": "hackwin", "integration_id": 15368}`.
 - **Tasks:** 1.3e (#7), 1.4f (#13), 1.7b (#27); 1.6a (#20) and 1.6b (#21) through 1.3e.
 
 ### Row 6. A rule that lets only the Lead's account update the default branch of a public repository owned by a personal account
@@ -118,9 +124,9 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
 - **Verdict:** holds. Questions 1 to 3 were answered by experiment, question 4 by documentation only.
 - **1. Does the rule exist for this repository type?** Yes. E1 created, on `hackwin-fixture-b`, a ruleset with the single rule `update` (REST name of "Restrict updates") and the bypass actor `{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}`. GitHub accepted it, and the read back gave `current_user_can_bypass: "always"` for the owner. The sent parameter `update_allows_fetch_and_merge: false` read back as `parameters: null`. Documentation (https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets, read 2026-10-10): with "Restrict updates", "only users with bypass permissions can push to branches or tags whose name matches the pattern you specify." In a personal repository the owner is the only admin; collaborators get write access (https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/repository-access-and-collaboration/permission-levels-for-a-personal-account-repository, read 2026-10-10). The organization admin cannot be a bypass actor there (https://docs.github.com/en/rest/repos/rules, read 2026-10-10).
 - **2. Does it also refuse a merge made through the API?** Yes. In E1 the bypass list was emptied, so that the Lead's account stood in for a builder, and PR #2 had a green `hackwin` status. REST `PUT /repos/{owner}/{repo}/pulls/2/merge` with the head SHA answered HTTP 405 "Repository rule violations found ... Cannot update this protected ref." GraphQL `mergePullRequest` through `gh pr merge --admin` gave the same message. A builder's own account was not used here; AC63 tests that through the harness.
-- **3. Does the bypass leave the PR and check requirements in force for the Lead?** Yes, with the two sets as separate rulesets. In E1 the Lead was on the bypass list of the update restriction. The rules for everyone still refused the Lead's direct push, commit through the API and merges without the `hackwin` check, also with `--admin` ("Required status check "hackwin" is expected."). Documentation (about-rulesets, read 2026-10-10): rules of rulesets that target the same branch "are aggregated". One side effect: while the update restriction is active, GitHub reports the PR as `BLOCKED` for the Lead too. The same PR was `CLEAN` with that ruleset disabled and `BLOCKED` with it active. So `gh pr merge` without `--admin` is refused by `gh` itself, and with `--admin` and the full head SHA the Lead's merge succeeded (row 14).
+- **3. Does the bypass leave the PR and check requirements in force for the Lead?** Yes, with the two sets as separate rulesets. In E1 the Lead was on the bypass list of the update restriction. The rules for everyone still refused the Lead's direct push, commit through the API and merges without the `hackwin` check, also with `--admin` ("Required status check "hackwin" is expected."). Documentation (about-rulesets, read 2026-10-10): rules of rulesets that target the same branch "are aggregated". One side effect: while the update restriction is active, GitHub reports the PR as `BLOCKED` for the Lead too. The same PR was `CLEAN` with that ruleset disabled and `BLOCKED` with it active. So `gh pr merge` without `--admin` is refused by `gh` itself, and with `--admin` and the full head SHA the Lead's merge succeeded (row 14). E5 repeated this setup with the required check pinned to GitHub Actions. With the Lead again on the update restriction's bypass list, `gh pr merge --admin --match-head-commit <full SHA>` was refused in three cases: when the required check had run and failed ("Required status check "check" is failing."), while it was still in progress ("... is in progress."), and when its only success was a status posted by hand ("... was not set by the expected GitHub app."). It merged the PR whose Actions check had passed.
 - **4. Does the rule exist for a public repository owned by an organization on GitHub Free?** Yes, by documentation only: rulesets are available "in public repositories with GitHub Free and GitHub Free for organizations" (about-rulesets, read 2026-10-10), and an organization's bypass lists also accept teams and organization admins (https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/creating-rulesets-for-a-repository, read 2026-10-10). Not tested: the account belongs to no organization.
-- **Chosen behavior:** the capability, as 7.1 step 11 and A32 describe: a ruleset of its own with the rule `update` and the repository admin role (`actor_id` 5) as its only bypass actor, beside the rules for everyone without bypass. The protection state is `full-restricted`. The Gate merges with `--admin` (row 14).
+- **Chosen behavior:** the capability, as 7.1 step 11 and A32 describe: a ruleset of its own with the rule `update` and the repository admin role (`actor_id` 5) as its only bypass actor, beside the rules for everyone without bypass (row 5). The protection state is `full-restricted`. The Gate merges with `--admin` (row 14).
 - **Tasks:** 1.3e (#7), 1.4f (#13), 1.6a (#20), 1.6b (#21), 1.6d (#23), 1.7b (#27).
 
 ### Row 7. GitHub secret scanning push protection
@@ -158,7 +164,8 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
 - **Verdict:** unknown.
 - **Evidence:**
   - The documentation does not say whether a body edit notifies watchers or participants. https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax, read 2026-10-10: "People will also receive a notification if you edit a comment to mention their username or team name." The REST reference https://docs.github.com/en/rest/issues/issues, read 2026-10-10, marks "Create an issue" with "This endpoint triggers notifications" and has no such note on "Update an issue".
-  - Not tested: it needs the notifications of a second account, and this task used none.
+  - E4 cannot show it either way. No account watches `hackwin-fixture-b`: `gh api repos/Bartek201301/hackwin-fixture-b/subscribers` returned `[]` and `subscribers_count` is 0. Issue #3 has one participant, its author `Bartek201301`, and no comment, so `test-bot-builder` was neither a watcher nor a participant (R, 2026-10-11). The Lead's review reported the same empty subscriber list on 2026-10-11.
+  - Not tested: it needs the notifications of a second account that watches the repository or takes part in the issue.
 - **Chosen behavior:** the capability as specified (G25): the Gate edits the body and never comments. The fallback of 5.6, "None needed", changes nothing. The body holds no `@` mention, because a mention added by an edit is documented to notify, at least in a comment.
 - **Tasks:** 1.6b (#21).
 
@@ -169,7 +176,8 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
   - https://docs.github.com/en/rest/issues/issues, read 2026-10-10, describes `body` only as "The contents of the issue." Community posts quote "Body is too long (maximum is 65536 characters)" (https://github.com/orgs/community/discussions/27190); that limit did not apply in E4.
   - E4, GraphQL `updateIssue`, the call `gh issue edit` makes: 262,144 ASCII characters and 131,072 times "é" (262,144 bytes) were accepted. 262,145 ASCII characters and 131,073 times "é" (262,146 bytes) were refused with "GraphQL: Body is too long (updateIssue)". The limit counts UTF-8 bytes.
   - E4, REST `PATCH /repos/{owner}/{repo}/issues/{n}`: every size tried was accepted and read back whole. These were 65,536, 65,537, 131,072, 262,144, 262,145, 524,288 and 1,048,576 ASCII characters, 65,536 times "é", and 40,000 times U+1F600 (80,000 UTF-16 units). Larger sizes were not tried.
-- **Chosen behavior:** the capability: the Gate keeps the body at or below 262,144 UTF-8 bytes, the smaller measured limit, and drops the oldest digest lines of merged PRs first (9.6). Because the limit is undocumented, a refusal with "Body is too long" is handled the same way, as the 5.6 fallback says.
+  - Only edits were measured. Creating an issue with a large body was not measured.
+- **Chosen behavior:** the Lead's decision for 1.6b. The CLI keeps an issue body at or below 65,536 characters, counted as JavaScript string length (UTF-16 code units). That is the limit the community post reports, and it is below every measured limit. A UTF-16 code unit takes at most 3 UTF-8 bytes, so such a body has at most 196,608 bytes, below the 262,144 bytes of the GraphQL edit. The oldest digest lines of merged PRs are dropped first (9.6). A refusal with "Body is too long" is handled the same way, as the 5.6 fallback says.
 - **Tasks:** 1.6b (#21).
 
 ### Row 11. GitHub's limits on write requests
@@ -210,6 +218,7 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
   - `gh pr merge --help` (2.88.1): "--match-head-commit SHA   Commit SHA that the pull request head must match to allow merge"; "--admin   Use administrator privileges to merge a pull request that does not meet requirements". gh calls GraphQL `mergePullRequest` with `expectedHeadOid` ("OID that the pull request head ref must match to allow merge", https://docs.github.com/en/graphql/reference/pulls, read 2026-10-10).
   - E1: a wrong full SHA gave "Head branch was modified. Review and try the merge again." A 7 character SHA gave "Could not coerce value "d5914a8" to GitObjectID". The full SHA merged PR #1 (merge commit `e62e06665b94273bcb74893e241f6f9cf3837f78`).
   - E1, with the update restriction active: without `--admin`, `gh` refused before any API call with "Pull request ... is not mergeable: the base branch policy prohibits the merge." and exit 1, although every check was green and the Lead was on the bypass list. GitHub reported the PR as `BLOCKED` while that ruleset was active and `CLEAN` while it was disabled. With `--admin` the Lead's merge passed the update restriction. `--admin` lifted no rule of the rules for everyone: without the `hackwin` status the merge was still refused.
+  - E5, with the update restriction active, the Lead on its bypass list, and the required check `check` pinned to GitHub Actions: `gh pr merge <PR> --merge --admin --match-head-commit <full SHA>` was refused with "Required status check "check" is failing." after a failed Actions run. It was refused with "... is in progress." while the run was in progress, and with "... was not set by the expected GitHub app." for a hand-posted success. It merged PR #4, whose Actions check had passed (merge commit `f52db37a1a3169984e0a37c1fafb9b748fa026e8`).
 - **Chosen behavior:** the capability: `gh pr merge <PR> --merge --match-head-commit <full SHA>`, with `--admin` added in the protection state `full-restricted`.
 - **Tasks:** 1.6d (#23), 1.7a (#26), 1.7b (#27).
 
@@ -244,9 +253,9 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
 
 ### Row 18. An operating system notification raised by a terminal process (macOS, Linux, Windows through WSL)
 
-- **Verdict:** partly holds. It holds on macOS and on Linux with a notification server, by documentation; on macOS the command also succeeded. Nothing built in exists on Windows through WSL.
+- **Verdict:** partly holds. It holds on macOS by experiment: the notification reached Notification Center, though no banner showed. On Linux with a notification server it holds by documentation. Nothing built in exists on Windows through WSL.
 - **Evidence:**
-  - macOS: `display notification` of Standard Additions (https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html, read 2026-10-10): "Notifications are shown as alerts or banners, depending on the user's settings". L3: `osascript -e 'display notification "<text>" with title "HackWin verification"'` exited 0. Whether the notification appeared on screen is not confirmed: the human was not watching.
+  - macOS: `display notification` of Standard Additions (https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/DisplayNotifications.html, read 2026-10-10): "Notifications are shown as alerts or banners, depending on the user's settings". L3: `osascript -e 'display notification "<text>" with title "HackWin verification"'` exited 0, while the human was not watching. L4 ran the same command while the human watched, told beforehand to look for a banner at the top right and in Notification Center. It exited 0, and the human answered "Only in Notif. Center": no banner, but the notification is listed in Notification Center. Why no banner showed was not examined.
   - Linux: `notify-send {summary} [body]` sends "desktop notifications to the user via a notification daemon" (https://manpages.ubuntu.com/manpages/noble/man1/notify-send.1.html, read 2026-10-10). It needs a notification server on the session bus (Desktop Notifications Specification, https://specifications.freedesktop.org/notification/latest/basic-design.html). Not tested.
   - Windows through WSL: no built-in, documented path from WSL. Windows' `ToastNotificationManager` requires a desktop app with a Start shortcut and an AppUserModelID (https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotificationmanager, read 2026-10-10). `wsl-notify-send` and BurntToast are third-party tools. Not tested.
 - **Chosen behavior:** the capability on macOS (`osascript -e 'display notification ...'`) and on Linux (`notify-send` when present and successful). On Windows through WSL, and wherever the command is missing or fails, the fallback of 5.6: the Gate rings the terminal bell in its own terminal.
@@ -267,14 +276,15 @@ Every other row holds as 5.6 states it, and the capability is used: rows 1, 3, 5
 
 Each is left open because it was neither documented nor observed.
 
-1. Row 9: does an edit of an issue body notify watchers? Answering it needs the notifications of a second account.
-2. Row 10: the REST limit for an issue body above 1,048,576 characters was not probed.
+1. Row 9: does an edit of an issue body notify watchers or participants? No account watched `hackwin-fixture-b` and no second account took part in issue #3 (R), so E4 could not show it. Answering it needs a second account that watches the repository or takes part in the issue.
+2. Row 10: the REST limit for an issue body above 1,048,576 characters was not probed, and the limit for creating an issue was not measured. Neither changes the chosen behavior of 65,536 characters.
 3. Row 7: is push protection on by default for a new public repository of a personal account? The changelog and the current page differ, and the origin of the `enabled` state on the fixtures was not recorded.
 4. Row 5: what does `require_extra_approval_for_unattributed_changes: true` do? GitHub added it to the pull request rule on its own.
-5. Row 6: a merge through REST by the Lead as bypass actor was not tried; only GraphQL with `--admin` was.
-6. Row 18: did the macOS notification of L3 appear on screen?
-7. Row 2: does a `*` at the end of a deny pattern also match empty text?
-8. Rows 17 and 18 on Linux and WSL, row 6 question 4 (no organization), row 16 (no failed run) and row A (no Codex) were not tested.
+5. Row 5: does GitHub accept `integration_id` 15368 in a ruleset on a repository where GitHub Actions has not run yet, as at `setup` step 11? The documentation says the app "must have recently submitted a check run". On `hackwin-fixture-b` it had run before E5.
+6. Rows 6 and 14: a merge through REST by the Lead as bypass actor was not tried; only GraphQL with `--admin` was, in E1 and E5.
+7. Row 18: why did L4 show no banner on macOS?
+8. Row 2: does a `*` at the end of a deny pattern also match empty text?
+9. Rows 17 and 18 on Linux and WSL, row 6 question 4 (no organization), row 16 (no failed run) and row A (no Codex) were not tested.
 
 ## 5. Cases in which GitHub must refuse
 
@@ -294,6 +304,12 @@ Each is left open because it was neither documented nor observed.
 - `<B>`: `GET rulesets` gave `[]`; `GET branches/main/protection` gave 404 "Branch not protected"; `security_and_analysis` showed secret scanning and push protection `enabled`. Collaborators were `Bartek201301` (admin) and `test-bot-builder` (write), with no pending invitation. GraphQL `issueTemplates` returned "HackWin task".
 - `<P>`: `GET rulesets` and `GET branches/main/protection` both gave 403 "Upgrade to GitHub Pro or make this repository public to enable this feature."; `security_and_analysis` was `null`. Collaborators were the same as on `<B>`.
 - `Bartek201301/hackwin-sandbox`: `security_and_analysis` showed secret scanning and push protection `enabled`. Nothing else was read or changed.
+- 2026-10-11:
+  - `gh api apps/github-actions` returned `{"id": 15368, "name": "GitHub Actions", "owner": "github", "slug": "github-actions"}`.
+  - `gh api repos/<B>/commits/bf2af037ab756d7051e35bdd7e3f18c92eda45b5/check-runs` showed the run `check`, conclusion `success`, with `app.id` 15368 and slug `github-actions`.
+  - The search API of GitHub's documentation (`https://docs.github.com/api/search/v1?version=dotcom&language=en&query=15368`) found 0 pages.
+  - `gh api repos/<B>/subscribers` returned `[]`, and `subscribers_count` is 0.
+  - GraphQL `issue(number: 3) { participants author comments }` on `<B>` returned one participant, `Bartek201301`, the author, and 0 comments.
 
 ### E1. Rulesets and the update restriction on `<B>`, 23:44 to 23:47 UTC
 
@@ -359,8 +375,45 @@ Nothing changed: the read back stayed `null`, no ruleset exists, and `main` is `
 
 Undone: the issue is unpinned, its body is one line again, and it is closed; GitHub keeps the issue.
 
+### E5. A required check pinned to GitHub Actions, and `--admin`, on `<B>`, 2026-10-11, 21:32 to 21:34 UTC
+
+The human approved this experiment after the Lead's review of PR #34, on `<B>` only and under the rules of E1. The token has no `workflow` scope, so no workflow producing a `hackwin` check could be added. The experiment pinned the fixture's existing Actions job `check` instead (`.github/workflows/check.yml`, on every `pull_request`; it runs `npm ci`, `npm run check` and `git diff --exit-code`).
+
+Setup at 21:32:02.
+- Branches `verify-1-2-base`, `-s`, `-f`, `-p` and `-h`, all at `bf2af03`. One commit each through the contents API:
+  - S `2bbd87f866770ba996f865222f322416cc926fd3` adds `verify-1-2/s.txt`.
+  - F `af3e0de2dc7d1233b25a8456efb6e20ff1b16c92` sets the `check` script of `package.json` to `exit 1`.
+  - P `880b43ea580834ef2a50350eb8030b971b118c2c` sets it to `sleep 900`.
+  - H `21c29e08d0c0ec95524e963de8fc8b305a1d822a` adds `verify-1-2/h.txt`, with a commit message containing `[skip ci]`.
+- Two rulesets on `refs/heads/verify-1-2-base`:
+  - R1, id 24895261, the rules for everyone of E1, except that the required check is `{"context": "check", "integration_id": 15368}`; `bypass_actors: []`.
+  - R2, id 24895262, `update` with the admin role as bypass actor, as in E1.
+- PRs into `verify-1-2-base`: #4 (S), #5 (F), #6 (P) and #7 (H).
+
+| Step | Command | Result |
+| --- | --- | --- |
+| T0 | `gh api repos/<B>/rules/branches/verify-1-2-base`; `gh api repos/<B>/rulesets/<id>` | `required_status_checks` read back as `[{"context": "check", "integration_id": 15368}]`. `current_user_can_bypass`: R1 `never`, R2 `always` |
+| T1 | Poll `gh api repos/<B>/commits/<sha>/check-runs` until done, 21:32:47 | S: `check` `completed/success`; F: `completed/failure`; P: `in_progress` |
+| T2 | GraphQL `statusCheckRollup` of #6, then `gh pr merge 6 -R <B> --merge --admin --match-head-commit <full SHA>` | Rollup `PENDING`, one check run `check` `IN_PROGRESS` from app 15368, `mergeStateStatus: BLOCKED`. Merge: "GraphQL: Repository rule violations found ... Required status check "check" is in progress. (mergePullRequest)", exit 1 |
+| T3 | `gh api repos/<B>/commits/<H>/check-runs`; `gh run list -R <B> --commit <H>` | 0 check runs, 0 workflow runs |
+| T4 | `gh api -X POST repos/<B>/statuses/<H> -f state=success -f context=check` | Status created by `Bartek201301`. Rollup of #7: `SUCCESS`, one status context `check` `SUCCESS`; `mergeStateStatus: BLOCKED` |
+| T5 | `gh pr merge 7 -R <B> --merge --admin --match-head-commit <full SHA>` | "GraphQL: Repository rule violations found ... Required status check "check" was not set by the expected GitHub app. (mergePullRequest)", exit 1 |
+| T6 | Rollup of #5, then `gh pr merge 5 -R <B> --merge --admin --match-head-commit <full SHA>` | Rollup `FAILURE`, check run `check` `FAILURE` from app 15368. Merge: "GraphQL: Repository rule violations found ... Required status check "check" is failing. (mergePullRequest)", exit 1 |
+| T7 | Rollup of #4, then `gh pr merge 4 -R <B> --merge --admin --match-head-commit <full SHA>` | Rollup `SUCCESS`, check run `check` `SUCCESS` from app 15368, `mergeStateStatus: BLOCKED`. Merge: exit 0; PR #4 merged at 21:33:26 by `Bartek201301`, merge commit `f52db37a1a3169984e0a37c1fafb9b748fa026e8` |
+
+No merge succeeded that the rules should have refused.
+
+Undone by 21:33:49:
+- The run of #6 (38176797928) cancelled with `gh run cancel`.
+- PRs #5, #6 and #7 closed with a comment.
+- R1 and R2 deleted.
+- The five branches deleted.
+
+Read back at 21:33:49: `main` at `bf2af037ab756d7051e35bdd7e3f18c92eda45b5`, `GET rulesets` gave 0, push protection `enabled`, the only branch is `main`, no issue pinned. GitHub keeps what cannot be removed: PR #4 merged into the deleted branch, PRs #5 to #7 closed, the hand-posted status on the unreachable commit H, and the Actions runs of S (success), F (failure) and P (cancelled).
+
 ### L. Local experiments, 2026-10-10
 
 - **L1** (row 15): a scratch repository in the session's scratchpad with branches `x` and `y` changing the same line of `f.txt`, and `main` adding `g.txt`. `git merge-tree --write-tree main x` printed one tree OID and exited 0. `git merge-tree --write-tree x y` printed the tree OID, the stage 1, 2 and 3 lines of `f.txt`, and "CONFLICT (content): Merge conflict in f.txt", and exited 1. With `--name-only` it printed `f.txt` and exited 1. `git status --short` stayed empty.
 - **L2** (row 17): `tail -f /dev/null &` as the watched process, then `caffeinate -i -w <its pid> &`. `pmset -g assertions` listed `pid <caffeinate pid>(caffeinate): ... PreventUserIdleSystemSleep named: "caffeinate command-line tool"`. After the watched process was killed, `caffeinate` exited 0 and its assertion was gone.
 - **L3** (row 18): `osascript -e 'display notification "HackWin 1.2 test notification: ..." with title "HackWin verification"'` exited 0. The human could not say whether it appeared.
+- **L4** (row 18), 2026-10-11 21:52:26 UTC. The human was first told to look for a banner titled "HackWin verification" with the text "HackWin 1.2 test notification (second run)", at the top right of the screen, and else in Notification Center, which opens from the date and time in the menu bar. The human was also told that a Focus mode may hold the banner back. After the human answered "Ready, send it", `osascript -e 'display notification "HackWin 1.2 test notification (second run)" with title "HackWin verification"'` exited 0. Asked whether it appeared, the human answered "Only in Notif. Center", the option described as "No banner, but it is listed in Notification Center".
