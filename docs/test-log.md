@@ -17,6 +17,33 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-11 · Phase 1 · Step 1.3a, the foundation (PR #33, issue #3)
+
+- Setup: one builder session (Claude Code) in the worktree `task/3-foundation-cli-skeleton`, created by the integrator from `42eaead`; the integrator's planning session in the main checkout for the merge; local Node 25.8.1, and Node 22.23.3 through `npx -p node@22`.
+- What happened:
+  - The builder session made one commit, `fd0645c`, and opened PR #33 on 2026-10-10 at 18:43:11 UTC. It reported `npm test` with 66 tests passing on Node 25.8.1 and on Node 22.23.3, the five acceptance ids with 9, 11, 6, 16 and 11 tests passing, and an `npm pack` installed into a scratch prefix that printed `0.1.0-pre.0`.
+  - The PR's run was the first run of the new test workflow: `node 22`, `node 24` and the aggregating `test` all passed, and the required check `test` was met by the new aggregating job.
+  - The human reviewed the head, the CI run and the files, and asked for the merge together with scope changes on #4 to #7, a new task for the runner script (#35) and the worktrees of #4 and #5. The request arrived inside pasted text, so the integrator asked for and got a confirmation first.
+  - Merged with the procedure of the plan, section 8:
+    - Steps 1 to 5 passed. All 37 files lay inside issue #3's paths. No added line matched a secret pattern; `package-lock.json` had no line matching the guide's `eyJ` pattern. There was no conflict with `c4ff6af`.
+    - Step 6 ran npm commands for the first time, in a scratch worktree with the PR merged into `c4ff6af`, on Node 25.8.1: `npm ci` added 53 packages, `npm test` passed 66 of 66, and `npm run test:ac` for the five ids passed 53 tests with 13 skipped, 0 failed.
+    - The inspection of `.github/workflows/test.yml` passed: a matrix on Node 22 and 24 with `fail-fast: false`, and a job `test` that needs it, runs with `if: always()` and fails unless the matrix result is `success`.
+    - Main had not moved, and the merge was pinned to the head SHA. The remote branch and both worktrees were removed.
+  - After the merge, read for the scope change of #6: `hackwin-fixture-private` answered HTTP 403 "Upgrade to GitHub Pro or make this repository public to enable this feature." on `GET rulesets` and `GET branches/main/protection`. `hackwin-fixture-b` had issue and PR numbers 1 to 7 in use, with PRs #4 to #7 of step 1.2's experiment E5 open.
+- Problems, from the PR's "Workflow notes" and the merge:
+  - The task's paths had no place for a runner script, so `test:ac` passes the ids through `sh -c` into `vitest.ac.config.js`. Follow-up task #35.
+  - Tasks 1.3b and 1.3c cannot edit `package.json`, `src/core/git` or `src/core/github`, so this task added what they need ahead: `semver`, and the git helpers `changedFiles`, `addedLines`, `merge` with `ffOnly`, `configGet` and `configSet`.
+  - Task 1.3d's paths had no Vitest configuration, so `vitest.config.js` loads `test/harness/setup.js` only once the file exists. #6 now has `vitest.config.js` in its paths and makes the load unconditional.
+  - Issues #6 and #7 asked their tasks to write into `docs/build/contracts.md`, outside their paths. This task recorded the fixture repositories and their reset commit there itself; #6 and #7 now have the path.
+  - Vitest 5.0 declares `node: ^22.12.0 || ^24.0.0 || >=26.0.0`, which leaves out the local Node 25.8.1, so Vitest 4.1.11 was chosen.
+  - The branch started before #32 was merged, so the PR's "Remaining limitations" and section 6.4 of `docs/build/contracts.md` still say that `builder2`'s login is open; the plan names it `maljul`.
+- Measured:
+  - PR open 26 h 49 min (2026-10-10 18:43:11 to 2026-10-11 21:31:58 UTC), including the human's review.
+  - 1 commit, 1 PR run (27 s from start to finish: `node 24` 17 s, `node 22` 19 s, `test` 3 s), 0 conflicts.
+  - Local merge test: `npm test` 4.89 s, `npm run test:ac` 4.74 s.
+  - The run on main after the merge: 27 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/33; head `fd0645c`; merge commit `218091d`; runs `38076913852` (PR) and `38176763352` (main); follow-up issue #35.
+
 ### 2026-10-11 · Phase 1 · Fixture repositories and builder2 recorded (PR #32, issue #31)
 
 - Setup: the integrator's planning session (Claude Code) in the main checkout of `HackWin`; the task worktree `task/31-record-fixture-repositories`; the `gh` login `Bartek201301`; a fresh bare clone of `hackwin-sandbox` in the integrator's scratch directory.
