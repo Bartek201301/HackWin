@@ -17,6 +17,25 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-11 · Phase 1 · Step 1.3c, local state, worktrees, project commands (PR #36, issue #5)
+
+- Setup: one builder session (Claude Code) in the worktree `task/5-foundation-state-worktrees`, created by the integrator from `218091d` after the merge of #33, beside the session of 1.3b (#4); the integrator's planning session in the main checkout for the merge.
+- What happened:
+  - The session made one commit, `71e78f2` (2026-10-11 22:17:04 UTC), merged `origin/main` without a conflict (`3351429`; main had moved by #34) and opened PR #36 at 22:18:05 UTC.
+  - The Lead reviewed the head, the CI run, the files and spot-checked the acceptance tests, and asked for the merge and a follow-up task. The request arrived inside pasted text, so the integrator asked for and got a confirmation first.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 8 files, all inside issue #5's paths; no secret pattern in the added lines; no conflict. Step 6: the head already contained main `afc3b6c`. `npm ci` and `npm test` passed 104 of 104 on Node 25.8.1, and `npm run test:ac` for the eight ids of issue #5 passed 35 tests (7, 5, 4, 3, 4, 3, 5 and 4). Main had not moved, and the merge was pinned to the head SHA. The remote branch and both worktrees were removed.
+  - Follow-up task #37 opened, to start once #4 is merged.
+- Problems, from the PR's "Workflow notes":
+  - `gh issue view 5 --comments`, the command of the plan's first message (section 7, step 3), printed only the comments and not the issue body in the non-interactive session; the session read the body with `gh issue view 5 --json body`. The Lead reported reproducing it with gh 2.88.1. The integrator observed the same with gh 2.88.1 in its own non-interactive shell: 24 lines with the two "Scope change:" comments and no line of the body, while `gh issue view 5` printed the body. From now on the first message names both commands; the plan follows with the next plan change.
+  - 1.3b (#4) ran in parallel and was not merged, so `parseBranch` and `Config` were missing. The session added a private branch parser, `taskIssueOf`, and a local type, `ProjectConfig`, although the scope change of #5 says not to add a second version of a helper. Follow-up #37 replaces both.
+  - `docs/build/contracts.md` lies outside the task's paths, so the decisions the session made where the contracts are silent are listed in the PR description only. #37 records four of them.
+- Measured:
+  - PR open 8 min 40 s (2026-10-11 22:18:05 to 22:26:45 UTC), including the Lead's review.
+  - 2 commits (one a merge of `origin/main`), 1 PR run (26 s: `node 24` 18 s, `node 22` 17 s, `test` 4 s), 0 conflicts.
+  - Local merge test: `npm test` 6.23 s, `npm run test:ac` 2.29 s.
+  - The run on main after the merge: 31 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/36; head `3351429`; merge commit `8ee2d9c`; runs `38179872394` (PR) and `38180451660` (main); follow-up issue #37.
+
 ### 2026-10-11 · Phase 1 · Step 1.2, platform verification (PR #34, issue #2)
 
 - Setup: one builder session of lane B (Claude Code) in the worktree `task/2-platform-verification`, created by the integrator from `42eaead`; the `gh` login `Bartek201301`; experiments on `hackwin-fixture-b` and `hackwin-fixture-private` with the human's agreement; the integrator's planning session in the main checkout for the merge.
