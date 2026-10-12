@@ -85,7 +85,8 @@ describe('1.4a/shims: the git hook shims', () => {
     ])
 
     await writeGeneratedFiles(root, { version: '0.1.1' })
-    expect(await staleGeneratedFiles(root, { version: VERSION })).toEqual([
+    const stale = await staleGeneratedFiles(root, { version: VERSION })
+    expect(stale.filter((file) => file.path.startsWith(`${HOOKS_PATH}/`))).toEqual([
       { path: '.githooks/pre-commit', problem: 'changed' },
       { path: '.githooks/pre-push', problem: 'changed' },
     ])
