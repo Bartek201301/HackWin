@@ -17,6 +17,31 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-12 · Phase 1 · Step 1.3d, the test harness with the machine account (PR #40, issue #6)
+
+- Setup: one builder session (Claude Code) in the worktree `task/6-foundation-test-harness`, created by the integrator from `536c133` after the merge of #38, beside the session of #37; restarted by the human with `HACKWIN_TEST_BUILDER_TOKEN` set. The integrator's planning session in the main checkout for the merge, without that variable.
+- What happened:
+  - The session made two commits and one merge of `origin/main`, and opened PR #40 at 11:29:53 UTC. After the Lead's review at `0115127`, a last commit, `5a04be2`, kept the Node fixture as one text file, `test/harness/node-project.yml`, instead of a working copy with the template's `CLAUDE.md`, `AGENTS.md`, `.claude/` and `.agents/` inside this repository.
+  - The PR reports the live runs of the session: on `hackwin-fixture-a` and `hackwin-fixture-private`, two resets each, a scenario as the Lead and a credential run as `test-bot-builder`; `hackwin-fixture-b` and `-c` untouched; the token occurred 0 times in the output and the run logs.
+  - The Lead reviewed the head, the CI run and the files, checked that no agent file is tracked under `test/harness` and that the recorded tree equals that of `bf2af03`, and asked for the merge, a docs task and a wave 2 proposal. The request arrived inside pasted text, so the integrator asked for and got a confirmation first.
+  - Merged with the procedure of the plan, section 8:
+    - Steps 1 to 5 passed: 21 files, all inside issue #6's paths (`test/harness/**`, `vitest.config.js`); no conflict. In step 4 only two added lines contained `eyJ`, both in `test/harness/node-project.yml`: line 2587, a `sha512` integrity hash of the fixture's `package-lock.json`, which matches the pattern, and line 487, the guide's pattern text. No agent file is tracked under `test/harness`. GitHub gives `dd1e605a2bd588e38de2fa5dacc034996f16d5f5` as the tree of `bf2af03`, the tree the file records.
+    - Step 6: the head already contained main `ef15bb4`. `npm ci` and `npm test` passed 234 of 234 on Node 25.8.1. `npm run test:ac` passed `1.3d/fixture` (4) and `1.3d/fake-github` (10). The live ids `1.3d/fixture-repo` and `1.3d/no-credential-output` were not run, because the integrator's shell has no `HACKWIN_TEST_BUILDER_TOKEN`; the merge relied on the session's live run, as the Lead's review did.
+    - Main had not moved, and the merge was pinned to the head SHA. The `gh pr view` after the merge failed with "TLS handshake timeout", which skipped the deletion of the remote branch in the same command chain; it was deleted afterwards. Both worktrees were removed.
+  - Docs task #41 opened; its `gh issue create` answered HTTP 504, but the issue existed when listed, so it was not created twice.
+- Problems, from the PR's "Workflow notes":
+  - `HACKWIN_TEST_BUILDER_TOKEN` was not set in the first session, so the two live acceptance tests could not run there; the human restarted the session with it set.
+  - Before the human set the rule to reach GitHub only through the harness, the session read the four fixture repositories and the login `hackwin-test-builder3` directly with `gh api`, read only; all later calls went through the harness.
+  - The human's review before the push changed two decisions: guard every name-only login, and leave `main` as the only branch after a reset.
+  - The Lead's review at `0115127` found the fixture's agent files inside this repository; the Claude Code documentation the PR cites says such files load for a session that opens a file in their directory. Fixed by the single text file and a test that fails on such names under `test/harness`.
+  - `origin/main` moved during the task (#39); the merge had no conflict.
+- Measured:
+  - PR open 1 h 1 min (2026-10-12 11:29:53 to 12:31:17 UTC), including the Lead's review and one fix.
+  - 4 commits (one a merge of `origin/main`), 2 PR runs (39 s on `0115127`, 38 s on `5a04be2`), 0 conflicts.
+  - Local merge test: `npm test` 11.44 s.
+  - The run on main after the merge: 41 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/40; head `5a04be2`; merge commit `0468baa`; runs `38244452664` (last PR run) and `38249551778` (main); docs task #41.
+
 ### 2026-10-12 · Phase 1 · Foundation follow-up: parseBranch, Config and the decisions of #36 and #38 (PR #39, issue #37)
 
 - Setup: one builder session (Claude Code) in the worktree `task/37-foundation-follow-up`, created by the integrator from `536c133` after the merge of #38, beside the session of 1.3d (#6); the first message named `gh issue view 37` and `gh issue view 37 --comments`. The integrator's planning session in the main checkout for the merge.
