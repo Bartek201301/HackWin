@@ -12,18 +12,11 @@ import { createGit } from '../git/index.js'
 import { ConfigError } from '../runtime/errors.js'
 import { execShell, quoteShellArg } from '../runtime/exec.js'
 
+/** @import { Config } from '../config/index.js' */
 /** @import { Git } from '../git/index.js' */
 
 /** The timeout of a project command when the caller names none: 20 minutes, as `gate.step_timeout_minutes` (6.3). */
 export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
-
-/**
- * The parts of the configuration (the `Config` of src/core/config) that this module reads.
- * @typedef {object} ProjectConfig
- * @property {object} hackwin The parsed hackwin.yml.
- * @property {Partial<Record<'install' | 'check' | 'test' | 'format' | 'generate', string | null>>} hackwin.commands
- * @property {{ manifests?: string[] }} [hackwin.paths]
- */
 
 /**
  * The result of one project command.
@@ -40,7 +33,7 @@ export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
 /**
  * @typedef {object} RunOptions
  * @property {string} cwd The top-level directory of the checkout or worktree to run in.
- * @property {ProjectConfig} config
+ * @property {Config} config
  * @property {number} [timeoutMs] PROJECT_TIMEOUT_MS by default.
  * @property {string} [logFile] Receives the whole output; its directory is created.
  */
@@ -99,7 +92,7 @@ export async function runAcceptanceTests({ cwd, config, files, timeoutMs, logFil
  * each file before and after. Every file the formatter changed is unformatted; its original
  * content is restored, so the check never changes the checkout. A file that no longer exists,
  * such as a deleted one, is not checked.
- * @param {{ cwd: string, config: ProjectConfig, files: string[] }} options
+ * @param {{ cwd: string, config: Config, files: string[] }} options
  * @returns {Promise<{ ok: boolean, unformatted: string[], run: ProjectRun | null }>}
  */
 export async function formatCheck({ cwd, config, files }) {
@@ -133,7 +126,7 @@ export async function formatCheck({ cwd, config, files }) {
  * The generated file check (E10): runs `commands.generate` and fails when it changes a tracked
  * file. Changes that were in the checkout before the run do not count. Every tracked file the
  * command changed is restored. `ok` without a run when `commands.generate` is null.
- * @param {{ cwd: string, config: ProjectConfig, git: Git }} options `git` may run in any worktree
+ * @param {{ cwd: string, config: Config, git: Git }} options `git` may run in any worktree
  *   of the clone; the check runs in `cwd`.
  * @returns {Promise<{ ok: boolean, changed: string[], run: ProjectRun | null }>}
  */
@@ -178,7 +171,7 @@ export async function generatedFileCheck({ cwd, config, git }) {
 
 /**
  * A required command of hackwin.yml. A missing one is a ConfigError naming its key.
- * @param {ProjectConfig} config
+ * @param {Config} config
  * @param {'install' | 'check' | 'test' | 'format'} name
  * @returns {string}
  */
