@@ -1,9 +1,11 @@
 // The guard in front of every executor that reaches real GitHub. It refuses, before gh runs, a
 // call to any repository other than the scenario's fixture repository (`hackwin-sandbox` above
 // all), a repository deletion, the `delete_repo` scope, every `gh auth` command, and any call
-// that would invite, assign or mention `builder2`, a real teammate's account.
+// that would invite, assign or mention a login the harness uses only as a name (NAME_ONLY_LOGINS):
+// `builder2`, a real teammate's account, and the fourth member of a team of 4, which nobody owns
+// today but anyone may register.
 
-import { accounts } from './accounts.js'
+import { NAME_ONLY_LOGINS, accounts } from './accounts.js'
 import { SANDBOX } from './fixture-repos.js'
 
 /** @import { GhExecutor } from '../../src/core/github/index.js' */
@@ -56,8 +58,14 @@ export function refusalOf(args, call, repo) {
       return 'no repository is ever deleted by tests'
     }
   }
-  if (touchesBuilder2(args, call.input)) {
-    return `builder2 (${accounts.builder2.login}) is a real teammate's account: it is never invited, assigned or mentioned on real GitHub; scenarios in which builder2 acts run against the fake GitHub`
+  for (const login of NAME_ONLY_LOGINS) {
+    if (touchesLogin(login, args, call.input)) {
+      const who =
+        login === accounts.builder2.login
+          ? `builder2 (${login}) is a real teammate's account`
+          : `${login} is a login the harness uses only as a name`
+      return `${who}: it is never invited, assigned or mentioned on real GitHub; scenarios in which it acts run against the fake GitHub`
+    }
   }
   return null
 }
@@ -103,37 +111,47 @@ function methodOf(args) {
 }
 
 /**
- * True when a call would invite, assign or mention `builder2`.
+ * True when a call would invite, assign or mention this login: a mention in any argument or in
+ * the body, a collaborator or invitation endpoint, an assignee or reviewer flag, or an
+ * `assignees`, `reviewers`, `invitee` or `username` field of the JSON body.
+ * @param {string} login
  * @param {string[]} args
  * @param {string | undefined} input
  */
-function touchesBuilder2(args, input) {
-  const login = accounts.builder2.login.toLowerCase()
-  const mention = new RegExp(`@${login}\\b`, 'i')
-  if (args.some((arg) => mention.test(arg)) || (input !== undefined && mention.test(input)))
-    return true
-  if (args.some((arg) => new RegExp(`(collaborators|invitations)/${login}\\b`, 'i').test(arg)))
-    return true
-  const assigning = /^--(add-)?(assignee|reviewer)$/
-  if (
-    args.some(
-      (arg, index) =>
-        assigning.test(args[index - 1] ?? '') && arg.toLowerCase().split(',').includes(login),
-    )
-  ) {
+function touchesLogin(login, args, input) {
+  const name = login.toLowerCase()
+  // A login ends where the characters of GitHub logins end.
+  const end = '(?![a-z0-9-])'
+  const mention = new RegExp(`@${escapeRegExp(name)}${end}`, 'i')
+  if (args.some((arg) => mention.test(arg)) || (input !== undefined && mention.test(input))) {
     return true
   }
+  const endpoint = new RegExp(`(collaborators|invitations)/${escapeRegExp(name)}${end}`, 'i')
+  if (args.some((arg) => endpoint.test(arg))) return true
+  const assigning = /^(--(add-)?(assignee|reviewer)|-a|-r)$/
+  const named = (/** @type {string} */ arg) =>
+    arg
+      .toLowerCase()
+      .split(',')
+      .map((part) => part.trim().replace(/^@/, ''))
+      .includes(name)
+  if (args.some((arg, index) => assigning.test(args[index - 1] ?? '') && named(arg))) return true
   if (input !== undefined) {
     try {
       const body = JSON.parse(input)
       for (const key of ['assignees', 'reviewers', 'invitee', 'username']) {
         const value = body?.[key]
         const list = Array.isArray(value) ? value : [value]
-        if (list.some((entry) => String(entry ?? '').toLowerCase() === login)) return true
+        if (list.some((entry) => String(entry ?? '').toLowerCase() === name)) return true
       }
     } catch {
       // Not JSON: only the mention check applies.
     }
   }
   return false
+}
+
+/** @param {string} text */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

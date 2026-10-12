@@ -53,6 +53,19 @@ export const accounts = Object.freeze({
 })
 
 /**
+ * The fourth member of a team of 4, a name only like `builder2`. No GitHub account had this
+ * login on 12 October 2026 (HTTP 404), so anyone may register it later.
+ */
+export const BUILDER3_LOGIN = 'hackwin-test-builder3'
+
+/**
+ * Every login the harness uses only as a name: in team configurations and in the fake GitHub.
+ * No test acts as one on real GitHub, and the guard refuses any real call that would invite,
+ * assign or mention one.
+ */
+export const NAME_ONLY_LOGINS = Object.freeze([accounts.builder2.login, BUILDER3_LOGIN])
+
+/**
  * The account of this key, or an error that names the known keys.
  * @param {string} key
  * @returns {Readonly<Account>}

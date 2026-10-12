@@ -24,12 +24,12 @@ import { TOKEN_VARIABLE, accounts, redact, requireBuilderToken } from './account
 import { fixtureRepo } from './fixture-repos.js'
 import { guardExecutor } from './guard.js'
 import { acquireLock, describeHolder, harnessStateDir } from './lock.js'
-import { resetFixtureRepo } from './reset.js'
+import { problemsOf, readFixtureRepoState, resetFixtureRepo } from './reset.js'
 
 /** @import { GhExecutor, GitHub } from '../../src/core/github/index.js' */
 /** @import { Git } from '../../src/core/git/index.js' */
 /** @import { GuardedCall } from './guard.js' */
-/** @import { ResetReport } from './reset.js' */
+/** @import { FixtureRepoState, ResetReport } from './reset.js' */
 
 /** The accounts a scenario may act as on real GitHub. `solo` is the Lead's account. */
 const LIVE_ACCOUNTS = ['lead', 'solo', 'builder1']
@@ -205,6 +205,38 @@ async function runLocked(info, stateDir, scenario, options) {
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
     log(`run on ${info.name} ended; the lock is released next`)
+  }
+}
+
+/**
+ * Read the state of a fixture repository as the Lead, under its lock and through the guard,
+ * without a reset and without changing anything: for a look after a run.
+ * @param {string} name
+ * @param {Pick<FixtureRepoOptions, 'lockTimeoutMs' | 'stateDir' | 'executors'>} [options]
+ * @returns {Promise<{ state: FixtureRepoState, problems: string[], calls: GuardedCall[] }>}
+ *   `problems` lists what differs from the state a reset leaves.
+ */
+export async function inspectFixtureRepo(name, options = {}) {
+  const info = fixtureRepo(name)
+  const stateDir = options.stateDir ?? harnessStateDir()
+  const release = await acquireLock(info.name, {
+    dir: join(stateDir, 'locks'),
+    timeoutMs: options.lockTimeoutMs,
+  })
+  const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'hackwin-fixture-repo-')))
+  try {
+    /** @type {GuardedCall[]} */
+    const calls = []
+    const executor = guardExecutor(
+      options.executors?.lead ?? createGhExecutor({ env: liveEnv('lead', tempDir) }),
+      { repo: info.repo, account: 'lead', calls },
+    )
+    const github = createGitHub({ executor, repo: info.repo })
+    const state = await readFixtureRepoState(github, info)
+    return { state, problems: problemsOf(state, info), calls }
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+    release()
   }
 }
 

@@ -4,13 +4,7 @@
 
 import { stringify } from 'yaml'
 import { VERSION } from '../../src/cli/context.js'
-import { accounts } from './accounts.js'
-
-/**
- * The fourth member of a team of 4: a name only, like `builder2`. No GitHub account has this
- * login (checked on 12 October 2026), and no test acts as it outside the fake GitHub.
- */
-export const BUILDER3_LOGIN = 'hackwin-test-builder3'
+import { BUILDER3_LOGIN, accounts } from './accounts.js'
 
 /** The team sizes the fixtures offer. */
 export const TEAM_SIZES = Object.freeze([1, 3, 4])

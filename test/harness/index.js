@@ -16,17 +16,17 @@ export {
   FakeGitHubError,
   DEFAULT_FAKE_REPO,
 } from './fake-github.js'
-export { withFixtureRepo } from './fixture-repo.js'
-export { accounts, accountOf, builderToken, redact, TOKEN_VARIABLE } from './accounts.js'
+export { withFixtureRepo, inspectFixtureRepo } from './fixture-repo.js'
 export {
-  teamConfig,
-  teamMembers,
-  hackwinObject,
-  ownersObject,
-  yaml,
-  TEAM_SIZES,
+  accounts,
+  accountOf,
+  builderToken,
+  redact,
+  TOKEN_VARIABLE,
   BUILDER3_LOGIN,
-} from './team.js'
+  NAME_ONLY_LOGINS,
+} from './accounts.js'
+export { teamConfig, teamMembers, hackwinObject, ownersObject, yaml, TEAM_SIZES } from './team.js'
 export {
   FIXTURE_REPOS,
   FIXTURE_OWNER,
@@ -40,4 +40,5 @@ export {
 /** @typedef {import('./fake-github.js').FakeGitHub} FakeGitHub */
 /** @typedef {import('./fake-github.js').FakeRequest} FakeRequest */
 /** @typedef {import('./fixture-repo.js').FixtureRepoContext} FixtureRepoContext */
+/** @typedef {import('./reset.js').FixtureRepoState} FixtureRepoState */
 /** @typedef {import('./team.js').TeamConfig} TeamConfig */

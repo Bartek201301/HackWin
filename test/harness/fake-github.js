@@ -16,8 +16,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { systemClock } from '../../src/core/runtime/clock.js'
-import { accounts } from './accounts.js'
-import { BUILDER3_LOGIN } from './team.js'
+import { BUILDER3_LOGIN, accounts } from './accounts.js'
 
 /** @import { GhExecutor } from '../../src/core/github/index.js' */
 /** @import { Clock } from '../../src/core/runtime/clock.js' */
@@ -1006,7 +1005,26 @@ export function createFakeGitHub(initial = {}) {
     return rawResult({ stdout: '' })
   })
 
-  // Git references, for the branches of the state or the linked origin.
+  // Branches and git references, of the state or the linked origin.
+
+  on(`GET ${REPO}/branches`, ({ query }) => {
+    /** @type {Map<string, string>} */
+    const branches = new Map()
+    if (state.origin) {
+      const refs = originGit([
+        'for-each-ref',
+        '--format=%(refname:short) %(objectname)',
+        'refs/heads',
+      ])
+      for (const line of refs.split('\n').filter(Boolean)) {
+        const [branch, sha] = line.split(' ')
+        branches.set(branch, sha)
+      }
+    }
+    for (const [branch, sha] of Object.entries(state.branches)) branches.set(branch, sha)
+    const list = [...branches].sort(([a], [b]) => a.localeCompare(b))
+    return page(list, query).map(([name, sha]) => ({ name, commit: { sha }, protected: false }))
+  })
 
   on(`GET ${REPO}/git/ref/heads/:branch*`, ({ params }) => {
     const sha = branchSha(params.branch)

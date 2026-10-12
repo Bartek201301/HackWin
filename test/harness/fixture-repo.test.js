@@ -16,13 +16,14 @@ import {
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGitHub } from '../../src/core/github/index.js'
-import { REDACTED, TOKEN_VARIABLE, accounts, redact } from './accounts.js'
+import { NAME_ONLY_LOGINS, REDACTED, TOKEN_VARIABLE, accounts, redact } from './accounts.js'
 import { createFakeGitHub, httpError } from './fake-github.js'
 import { FIXTURE_REPOS, RESET_SHA, SANDBOX, fixtureRepo } from './fixture-repos.js'
-import { withFixtureRepo } from './fixture-repo.js'
+import { inspectFixtureRepo, withFixtureRepo } from './fixture-repo.js'
 import { guardExecutor, refusalOf } from './guard.js'
 import { acquireLock } from './lock.js'
 import { resetFixtureRepo } from './reset.js'
+import { TEAM_SIZES, teamMembers } from './team.js'
 
 /** @type {string[]} */
 const scratch = []
@@ -53,7 +54,7 @@ function fakeFixtureRepo(name, { rulesetsRefused = false, collaborators } = {}) 
     },
     visibility: info.visibility,
     nextNumber: 40,
-    branches: { main: 'c'.repeat(40), 'task/41-x': 'd'.repeat(40) },
+    branches: { main: 'c'.repeat(40), 'task/41-x': 'd'.repeat(40), 'spike/left': 'e'.repeat(40) },
     labels: ['bug', 'documentation'],
     issues: [
       { number: 41, title: 'Open task', labels: ['ready'], pinned: true },
@@ -232,33 +233,51 @@ describe('1.3d/driver: the guard in front of real GitHub', () => {
     expect(refusalOf(['auth', 'token'], {}, repo)).toMatch(/gh auth/)
   })
 
-  test('refuses to invite, assign or mention builder2', () => {
-    const login = accounts.builder2.login
-    expect(
-      refusalOf(
-        ['api', '--method', 'PUT', `repos/{owner}/{repo}/collaborators/${login}`],
-        { env },
-        repo,
-      ),
-    ).toMatch(/builder2/)
-    expect(
-      refusalOf(
-        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues', '--input', '-'],
-        { env, input: JSON.stringify({ title: 't', assignees: [login] }) },
-        repo,
-      ),
-    ).toMatch(/builder2/)
-    expect(
-      refusalOf(
-        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues/3/comments', '--input', '-'],
-        { env, input: JSON.stringify({ body: `thanks @${login}` }) },
-        repo,
-      ),
-    ).toMatch(/builder2/)
-    expect(refusalOf(['issue', 'edit', '3', '--add-assignee', login], { env }, repo)).toMatch(
-      /builder2/,
+  test('every login of a fixture team that no test may act as is a name-only login', () => {
+    expect(NAME_ONLY_LOGINS).toEqual(['maljul', 'hackwin-test-builder3'])
+    const live = [accounts.lead.login, accounts.builder1.login]
+    const named = new Set(
+      TEAM_SIZES.flatMap((size) => teamMembers(size).map((member) => member.github)),
     )
-    // A team configuration may name builder2: only an invitation, assignment or mention is refused.
+    expect([...named].filter((login) => !live.includes(login)).sort()).toEqual(
+      [...NAME_ONLY_LOGINS].sort(),
+    )
+  })
+
+  test.each(NAME_ONLY_LOGINS)('refuses to invite, assign or mention %s', (login) => {
+    const refused = new RegExp(`${login}\\b.*never invited, assigned or mentioned on real GitHub`)
+    const calls = [
+      [['api', '--method', 'PUT', `repos/{owner}/{repo}/collaborators/${login}`], {}],
+      [['api', '--method', 'PUT', `repos/{owner}/{repo}/collaborators/${login.toUpperCase()}`], {}],
+      [
+        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues', '--input', '-'],
+        { input: JSON.stringify({ title: 't', assignees: [login] }) },
+      ],
+      [
+        [
+          'api',
+          '--method',
+          'POST',
+          'repos/{owner}/{repo}/pulls/4/requested_reviewers',
+          '--input',
+          '-',
+        ],
+        { input: JSON.stringify({ reviewers: [login] }) },
+      ],
+      [
+        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues/3/comments', '--input', '-'],
+        { input: JSON.stringify({ body: `thanks @${login}.` }) },
+      ],
+      [['issue', 'edit', '3', '--add-assignee', `someone,${login}`], {}],
+      [['issue', 'create', '--title', 't', '-a', `@${login}`], {}],
+      [['pr', 'edit', '4', '--add-reviewer', login], {}],
+      [['issue', 'comment', '3', '--body', `@${login} please look`], {}],
+    ]
+    for (const [args, call] of calls) {
+      expect(refusalOf(/** @type {string[]} */ (args), { env, ...call }, repo)).toMatch(refused)
+    }
+    // A team configuration may name the login: only an invitation, assignment or mention is
+    // refused, and a longer login that starts with it is another account.
     expect(
       refusalOf(
         ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues', '--input', '-'],
@@ -268,8 +287,25 @@ describe('1.3d/driver: the guard in front of real GitHub', () => {
     ).toBeNull()
     expect(
       refusalOf(
+        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues/3/comments', '--input', '-'],
+        { env, input: JSON.stringify({ body: `thanks @${login}-other` }) },
+        repo,
+      ),
+    ).toBeNull()
+  })
+
+  test('allows the calls of a scenario that name no such login', () => {
+    expect(
+      refusalOf(
         ['api', '--method', 'GET', 'repos/{owner}/{repo}/labels?per_page=100&page=1'],
         { env },
+        repo,
+      ),
+    ).toBeNull()
+    expect(
+      refusalOf(
+        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues/3/assignees', '--input', '-'],
+        { env, input: JSON.stringify({ assignees: [accounts.builder1.login] }) },
         repo,
       ),
     ).toBeNull()
@@ -304,7 +340,7 @@ describe('1.3d/driver: the guard in front of real GitHub', () => {
 })
 
 describe('1.3d/driver: the reset of a fixture repository', () => {
-  test('closes pull requests and issues, unpins, deletes labels and rules, and resets main', async () => {
+  test('closes pull requests and issues, unpins, deletes branches, labels and rules, and resets main', async () => {
     const { fake, info, rulesets, rules } = fakeFixtureRepo('hackwin-fixture-b')
     const github = createGitHub({ executor: fake.executor, repo: info.repo })
     /** @type {string[]} */
@@ -317,6 +353,7 @@ describe('1.3d/driver: the reset of a fixture repository', () => {
       closedPullRequests: [43],
       closedIssues: [41],
       unpinnedIssues: [41],
+      deletedBranches: ['spike/left', 'task/41-x'],
       deletedLabels: ['bug', 'documentation', 'ready'],
       main: { before: 'c'.repeat(40), after: RESET_SHA },
       accepted: [],
@@ -331,17 +368,57 @@ describe('1.3d/driver: the reset of a fixture repository', () => {
     ])
     expect(fake.find(41)?.stateReason).toBe('not_planned')
     expect(fake.state.labels).toEqual([])
-    // Branches other than main stay.
-    expect(fake.state.branches['task/41-x']).toBe('d'.repeat(40))
-    expect(lines.at(-1)).toMatch(/pull requests closed #43; issues closed #41/)
+    // main is the only branch left.
+    expect(fake.state.branches).toEqual({ main: RESET_SHA })
+    expect(lines.at(-1)).toMatch(
+      /pull requests closed #43; issues closed #41; unpinned #41; branches deleted spike\/left, task\/41-x/,
+    )
 
     // A second reset finds nothing to do.
     const again = await resetFixtureRepo(github, info)
     expect(again).toMatchObject({
       closedIssues: [],
+      deletedBranches: [],
       deletedLabels: [],
       main: { before: RESET_SHA },
     })
+  })
+
+  test('a reset that does not hold fails and names what is left', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-c')
+    // GitHub keeps the branch: the deletion answers, but nothing changes.
+    fake.on('DELETE repos/{owner}/{repo}/git/refs/heads/:branch*', () => undefined)
+    await expect(
+      resetFixtureRepo(createGitHub({ executor: fake.executor, repo: info.repo }), info),
+    ).rejects.toThrow(/did not hold: branches: main, spike\/left, task\/41-x/)
+  })
+
+  test('inspectFixtureRepo reads the state under the lock without changing it', async () => {
+    const stateDir = tempDir()
+    const { fake } = fakeFixtureRepo('hackwin-fixture-b')
+    const executors = { lead: fake.as(accounts.lead.login) }
+    const dirty = await inspectFixtureRepo('hackwin-fixture-b', { stateDir, executors })
+    expect(dirty.state).toEqual({
+      repo: 'Bartek201301/hackwin-fixture-b',
+      main: 'c'.repeat(40),
+      branches: ['main', 'spike/left', 'task/41-x'],
+      openIssues: [41],
+      openPullRequests: [43],
+      labels: ['bug', 'documentation', 'ready'],
+      rulesets: ['hackwin-branch-rules'],
+      branchRules: ['main'],
+      pinnedIssues: [41],
+      accepted: [],
+    })
+    expect(dirty.problems).toHaveLength(8)
+    expect(dirty.calls.every((call) => call.refused === null)).toBe(true)
+    expect(
+      fake.calls.filter((call) => call.method !== 'GET' && call.endpoint !== 'graphql'),
+    ).toEqual([])
+    expect(
+      fake.calls.filter((call) => call.endpoint === 'graphql').map((call) => call.body.query),
+    ).toEqual([expect.not.stringContaining('mutation')])
+    expect(existsSync(join(stateDir, 'locks', 'hackwin-fixture-b.lock'))).toBe(false)
   })
 
   test('on hackwin-fixture-private an HTTP 403 on rule sets is accepted; on a public one it fails', async () => {
@@ -403,6 +480,14 @@ describe('1.3d/driver: withFixtureRepo against the fake GitHub', () => {
         await expect(repo.github('lead').api(`repos/Bartek201301/${SANDBOX}`)).rejects.toThrow(
           /refused/,
         )
+        for (const login of NAME_ONLY_LOGINS) {
+          await expect(
+            repo.github('lead').api(`repos/{owner}/{repo}/collaborators/${login}`, {
+              method: 'PUT',
+              body: { permission: 'push' },
+            }),
+          ).rejects.toThrow(/refused by the test harness: .*never invited/)
+        }
         return 'done'
       },
       { stateDir, executors },
@@ -410,6 +495,8 @@ describe('1.3d/driver: withFixtureRepo against the fake GitHub', () => {
     expect(result).toBe('done')
     expect(existsSync(lock)).toBe(false)
     expect(fake.calls.some((call) => call.args.join(' ').includes(SANDBOX))).toBe(false)
+    // The refused invitations never reached GitHub.
+    expect(fake.state.invitations).toEqual([])
     const log = readFileSync(join(stateDir, 'logs', 'hackwin-fixture-b.log'), 'utf8')
     expect(log).toMatch(
       /accounts: lead Bartek201301 \(admin\), builder1 test-bot-builder \(write\)/,

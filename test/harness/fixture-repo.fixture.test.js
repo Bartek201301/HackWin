@@ -2,13 +2,11 @@
 // fixture repository, the gh login or HACKWIN_TEST_BUILDER_TOKEN is missing.
 
 import { describe, expect, test } from 'vitest'
-import { RemoteError } from '../../src/core/runtime/errors.js'
 import { FIXTURE_OWNER, SANDBOX, accounts, withFixtureRepo } from './index.js'
 
 /** @import { FixtureRepoContext } from './index.js' */
-/** @import { GitHub } from '../../src/core/github/index.js' */
 
-/** The name of everything this test creates, so that it can find and remove it. */
+/** The name of everything this test creates; the reset removes all of it. */
 const CHECK = 'hackwin-harness-check'
 const TIMEOUT_MS = 30 * 60_000
 
@@ -16,7 +14,8 @@ const TIMEOUT_MS = 30 * 60_000
 const base64 = (text) => Buffer.from(text).toString('base64')
 
 /**
- * The state a reset leaves: nothing open, no label, no rule set, `main` at the reset commit.
+ * The state a reset leaves, read directly from GitHub: nothing open, no label, no rule set and
+ * no branch rule, `main` at the reset commit and the only branch.
  * @param {FixtureRepoContext} repo
  */
 async function expectClean(repo) {
@@ -26,24 +25,14 @@ async function expectClean(repo) {
   )
   expect(await lead.listLabels()).toEqual([])
   expect((await lead.api('repos/{owner}/{repo}/git/ref/heads/main')).object.sha).toBe(repo.resetSha)
+  expect(
+    (await lead.apiPages('repos/{owner}/{repo}/branches')).map((branch) => branch.name),
+  ).toEqual(['main'])
   if (repo.visibility === 'public') {
     expect(await lead.apiPages('repos/{owner}/{repo}/rulesets')).toEqual([])
     await expect(lead.api('repos/{owner}/{repo}/branches/main/protection')).rejects.toMatchObject({
       status: 404,
     })
-  }
-}
-
-/**
- * Delete a branch this test made; a branch that does not exist is no error.
- * @param {GitHub} github
- * @param {string} branch
- */
-async function deleteBranch(github, branch) {
-  try {
-    await github.api(`repos/{owner}/{repo}/git/refs/heads/${branch}`, { method: 'DELETE' })
-  } catch (error) {
-    if (!(error instanceof RemoteError) || ![404, 422].includes(error.status ?? 0)) throw error
   }
 }
 
@@ -56,7 +45,6 @@ describe('1.3d/fixture-repo: scenarios on the fixture repositories', () => {
         const builder = repo.github('builder1')
         expect(repo.logins.builder1).toBe(accounts.builder1.login)
         await expectClean(repo)
-        await deleteBranch(lead, CHECK)
 
         // Leave the repository dirty in every way the reset undoes.
         await lead.api(`repos/{owner}/{repo}/contents/${CHECK}.txt`, {
@@ -118,10 +106,10 @@ describe('1.3d/fixture-repo: scenarios on the fixture repositories', () => {
         expect(report.deletedLabels).toContain(CHECK)
         expect(report.deletedRulesets.map((ruleset) => ruleset.name)).toContain(CHECK)
         expect(report.deletedBranchRules).toContain('main')
+        expect(report.deletedBranches).toEqual([CHECK])
         expect(report.main.before).not.toBe(repo.resetSha)
         await expectClean(repo)
         expect((await builder.getPullRequest(pull.number))?.state).toBe('closed')
-        await deleteBranch(lead, CHECK)
 
         // A label made by the Lead, read by the machine account.
         const label = {

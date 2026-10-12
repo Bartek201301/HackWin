@@ -32,7 +32,6 @@ const summary = await withFixtureRepo(
     }
 
     // Git over HTTPS as builder1: the token goes to git's credential helper through GH_TOKEN.
-    await deleteBranch(lead, BRANCH)
     const clone = await repo.clone('builder1')
     await clone.git.run(['checkout', '--quiet', '-b', BRANCH])
     writeFileSync(join(clone.path, 'credential-check.txt'), 'checked\n')
