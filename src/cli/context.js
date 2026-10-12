@@ -10,6 +10,7 @@ import { createGit } from '../core/git/index.js'
 import { createGhExecutor, createGitHub, parseGitHubRemote } from '../core/github/index.js'
 import { detectCallerKind } from '../core/runtime/caller.js'
 
+/** @import { Config, Identity } from '../core/config/index.js' */
 /** @import { Git } from '../core/git/index.js' */
 /** @import { GhExecutor, GitHub } from '../core/github/index.js' */
 /** @import { CallerKind } from '../core/runtime/caller.js' */
@@ -34,8 +35,8 @@ import { detectCallerKind } from '../core/runtime/caller.js'
  * @property {string} version The version of the running CLI.
  * @property {NodeJS.ReadableStream} stdin For interactive input (CM11) and for readStdin.
  * @property {() => Promise<string>} readStdin All of stdin as text, read once; empty when stdin is a terminal.
- * @property {unknown} [config] From task 1.3b: hackwin.yml and owners.yml from origin/main (docs/build/contracts.md).
- * @property {unknown} [identity] From task 1.3b: the caller's login and team member (docs/build/contracts.md).
+ * @property {Config} [config] hackwin.yml and owners.yml from origin/main (CM9). Absent for `setup` on an unconfigured repository and for `hackwin internal ...`.
+ * @property {Identity} [identity] The caller's login and team member (5.4). Absent where config is.
  */
 
 /**
@@ -51,10 +52,13 @@ import { detectCallerKind } from '../core/runtime/caller.js'
 /** The root of the hackwin package. */
 export const PACKAGE_ROOT = new URL('../../', import.meta.url)
 
+const PACKAGE = JSON.parse(readFileSync(new URL('package.json', PACKAGE_ROOT), 'utf8'))
+
 /** The version of the running CLI, from package.json. */
-export const VERSION = /** @type {string} */ (
-  JSON.parse(readFileSync(new URL('package.json', PACKAGE_ROOT), 'utf8')).version
-)
+export const VERSION = /** @type {string} */ (PACKAGE.version)
+
+/** `repository.url` of package.json, for the install command of a pre-release (CM12). */
+export const REPOSITORY_URL = /** @type {string} */ (PACKAGE.repository.url)
 
 /**
  * @typedef {object} ContextInput
