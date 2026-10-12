@@ -4,6 +4,7 @@
 
 import { basename, dirname, join, resolve } from 'node:path'
 import { PreconditionError } from '../runtime/errors.js'
+import { parseBranch } from '../tasks/index.js'
 
 /** @import { Git, Worktree } from '../git/index.js' */
 /** @import { GitHub } from '../github/index.js' */
@@ -62,9 +63,10 @@ export function taskWorktreePath(mainCheckout, issue, slug) {
  */
 export async function currentTask(git) {
   const branch = await git.currentBranch()
-  const issue = taskIssueOf(branch)
-  if (branch === null || issue === null) return null
-  return { issue, branch, path: await git.topLevel() }
+  if (branch === null) return null
+  const parsed = parseBranch(branch)
+  if (parsed.kind !== 'task') return null
+  return { issue: parsed.issue, branch, path: await git.topLevel() }
 }
 
 /**
@@ -162,20 +164,10 @@ function tasksOf(worktrees) {
   const tasks = []
   for (const { bare, prunable, branch, path, locked } of worktrees) {
     if (bare || prunable || branch === null) continue
-    const issue = taskIssueOf(branch)
-    if (issue !== null) tasks.push({ issue, branch, path, locked })
+    const parsed = parseBranch(branch)
+    if (parsed.kind === 'task') tasks.push({ issue: parsed.issue, branch, path, locked })
   }
   return tasks
-}
-
-/**
- * The issue number of a `task/<N>-<slug>` branch, or null for any other branch.
- * @param {string | null} branch
- * @returns {number | null}
- */
-function taskIssueOf(branch) {
-  const match = branch === null ? null : /^task\/([1-9]\d*)(?:-|$)/.exec(branch)
-  return match ? Number(match[1]) : null
 }
 
 /**
