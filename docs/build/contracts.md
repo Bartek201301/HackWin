@@ -121,7 +121,7 @@ It returns a result or throws a typed error (section 3.4). It never calls `proce
 | `version` | string | The version of the running CLI |
 | `stdin` | stream | Interactive input (CM11, the Gate's typed commands) |
 | `readStdin()` | `Promise<string>` | All of stdin, read once; empty when stdin is a terminal |
-| `config` | `Config` | From task 1.3b: `hackwin.yml` and `owners.yml` from `origin/main` (section 4.4). Absent for `setup` on an unconfigured repository |
+| `config` | `Config` | From task 1.3b: `hackwin.yml` and `owners.yml` from `origin/main` (section 4.4). Absent for `setup` on an unconfigured repository, and for `internal hook` and `internal ci`, which load what they need themselves (section 3.6) |
 | `identity` | `Identity` | From task 1.3b: the caller's login and team member (section 4.4). Absent where `config` is |
 
 **The result** (`CommandResult`):
@@ -183,6 +183,8 @@ Any other value of `HACKWIN_CALLER` is ignored.
 2. `--version` prints the version; `--help` prints the help. Both exit 0.
 3. Build the context: the top-level directory (outside a git checkout: exit 2), the git common directory, and the GitHub repository from the URL of `origin` (`owner/name`, passed to gh as `GH_REPO`; none for a local remote).
 4. Prepare the context (`prepareContext` in `src/cli/main.js`, filled by task 1.3b): fetch and read `hackwin.yml` and `owners.yml` from `origin/main` (CM9, A17) and validate them (exit 2 naming the key); the version check (CM12); the caller's identity (5.4); the fast-forward of the main checkout (CM10). `setup` on a repository without `hackwin.yml` on `origin/main` skips this step.
+
+   The runner prepares the six user commands only. `internal hook` and `internal ci` get no prepared config, identity, version check or fast-forward, because every hook except `SessionStart` must stay offline (10.4) and in CI the caller is GitHub's token, not a member. Each internal command loads what it needs through `src/core/config` itself: a hook from the local `origin/main` without a fetch, with the member's login recorded locally by `join` (section 5.1); `internal ci` from the base branch and the proposed copy as 10.2 step 1 says, with the pull request's author. How a hook applies CM12 without the network is decided in 1.4a (#8) and 1.4c (#10), not here.
 5. Load the command's module, run it, print the result or the error, and return the exit code.
 
 `main(argv, options)` takes the process from `options` where given (`cwd`, `env`, `stdin`, `stdout`, `stderr`, `clock`, `ghExecutor`, `moduleRoot`), so tests run commands in-process.
@@ -295,6 +297,9 @@ The parsed objects keep the key names of the files (`cli_version`, `team.members
 
 The runner (section 3.6, step 4) turns `older` and `other-phase` into a `PreconditionError` that prints the install command of the pinned version, a `newer-patch` into a one-line warning, and `behind` into the warning that the checkout is behind `origin/main`.
 
+- **Task paths.** A task's paths lie inside the task's own role or on the `open` list (the block comment of 8.1, the `tasks --check` rule and AC8 of the PRD). This is stricter than "exactly one role" of 8.1 alone. A path of another role makes the task block invalid (`parseTaskBlock`, section 4.5).
+- **Glob syntax.** The globs of `owners.yml`, of the `paths` groups of `hackwin.yml` and of task paths support literal characters, backslash escapes, `?`, `*`, `**` and brace lists (`{a,b}`). Character classes, groups, extglobs and negation are a `ConfigError` naming the key, and make a task block invalid, so that matching and the overlap check read every glob the same way.
+
 ### 4.5 `src/core/tasks` (1.3b)
 
 | Export | Inputs | Output |
@@ -323,7 +328,7 @@ The runner (section 3.6, step 4) turns `older` and `other-phase` into a `Precond
 
 ### 4.7 `src/core/state` (1.3c)
 
-Local state of a clone lives in `<gitCommonDir>/hackwin/`, shared by every worktree (A6). The formats are in section 5. Writes are atomic: a temporary file, then a rename.
+Local state of a clone lives in `<gitCommonDir>/hackwin/`, shared by every worktree (A6). The formats are in section 5. Writes are atomic: a temporary file, then a rename. A missing or unreadable local record counts as no record: its read returns null.
 
 | Export | Inputs | Output |
 | --- | --- | --- |
@@ -349,15 +354,15 @@ Local state of a clone lives in `<gitCommonDir>/hackwin/`, shared by every workt
 
 ### 4.9 `src/core/project` (1.3c)
 
-Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs, logFile }`.
+Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs, logFile }`. A run without `timeoutMs` has the default timeout of 20 minutes (`PROJECT_TIMEOUT_MS`).
 
 | Export | Inputs | Output |
 | --- | --- | --- |
 | `runInstall({ cwd, config, timeoutMs, logFile })` | | `ProjectRun`, or `{ skipped: true, notice }` while no file matches `paths.manifests` (A62) |
 | `runCheck({ cwd, config, timeoutMs, logFile })` | | `ProjectRun` of `commands.check` |
-| `runAcceptanceTests({ cwd, config, files, timeoutMs, logFile })` | The task's `acceptance_tests` | `{ ok, missing: [entry], run }`. Every entry is a file path; an entry that is not an existing file fails before anything runs (T5); otherwise `commands.test` runs with the files appended |
-| `formatCheck({ cwd, config, files })` | The changed files | `{ ok, unformatted: [path], run }`: runs `commands.format` on the files and compares their content before and after, restoring the original (E14) |
-| `generatedFileCheck({ cwd, config, git })` | | `{ ok, changed: [path], run }`: runs `commands.generate` and fails when a tracked file changes (E10); `ok` when `commands.generate` is null |
+| `runAcceptanceTests({ cwd, config, files, timeoutMs, logFile })` | The task's `acceptance_tests` | `{ ok, missing: [entry], run }`. Every entry is a file path; an entry that is not an existing file fails before anything runs (T5); otherwise `commands.test` runs with the files appended. An empty list passes with nothing run: `{ ok: true, missing: [], run: null }` |
+| `formatCheck({ cwd, config, files })` | The changed files | `{ ok, unformatted: [path], run }`: runs `commands.format` on the files and compares their content before and after, restoring the original (E14). It takes no timeout and no log file: it runs with the default timeout of 20 minutes |
+| `generatedFileCheck({ cwd, config, git })` | | `{ ok, changed: [path], run }`: runs `commands.generate` and fails when it changes a tracked file (E10); `ok` when `commands.generate` is null. Only the changes that `commands.generate` made count: changes in the checkout before the run do not. It restores every tracked file it changed. It takes no timeout and no log file: it runs with the default timeout of 20 minutes |
 
 ### 4.10 `src/core/changes` (1.3c)
 
@@ -485,4 +490,4 @@ One file per worktree keeps two sessions from writing the same file. The commit 
 
 - Before a test run the harness resets a fixture repository: it closes every open issue and pull request, deletes every label, branch rule and rule set, and resets `main` to the recorded commit `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` (all four; read back from GitHub on 10 October 2026). A lock per repository keeps two sessions off the same repository.
 - No repository is ever deleted, and the `delete_repo` scope is never requested. Automated tests never touch `hackwin-sandbox`; it is for the human's live tests.
-- Accounts: `lead` is the gh login of the machine; `builder1` is `test-bot-builder`, with the token of section 6.1; `builder2` is a teammate's login, used only as a name in team configurations with invitations off, so every scenario in which it acts runs against the fake GitHub (its login is still open, plan section 9); `solo` is the Lead's account.
+- Accounts: `lead` is the gh login of the machine; `builder1` is `test-bot-builder`, with the token of section 6.1; `builder2` is `maljul`, a real teammate's account used only as a name in team configurations: it is never invited to any repository, and nobody acts as it on real GitHub, so every scenario in which it acts runs against the fake GitHub (plan section 9, decision 2; `AGENTS.md`, "GitHub repositories"); `solo` is the Lead's account.
