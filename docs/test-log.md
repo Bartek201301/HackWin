@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-12 · Phase 1 · Step 1.3e, the protection state reader (PR #42, issue #7)
+
+- Setup: one builder session (Claude Code) in the worktree `task/7-protection-state-reader`, created by the integrator from `0468baa` at the start of wave 2, with `HACKWIN_TEST_BUILDER_TOKEN` set in its terminal. The integrator's planning session for the merge, without that variable.
+- What happened:
+  - The first commit, `297e930`, and PR #42 at 13:14:34 UTC. After the Lead's review, a commit `02c73ad` added `rules.bypassable` (the rules the Lead's account can bypass, besides the update restriction's `update`), and a merge of `origin/main` followed (`8b6a467`).
+  - The Lead reviewed the head, the CI run and the five files, checked that the new field covers the review's two cases with tests and that `hackwin-fixture-b` was clean after the live runs, and asked for the merge, scope changes on #23 and #20, and the start of #41 and #20. The request arrived inside pasted text, so the integrator asked for and got a confirmation first.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 5 files inside issue #7's paths, `docs/build/contracts.md` by its scope change; no secret pattern; no conflict with `a0610d7`. Step 6, with the PR merged into `a0610d7`: `npm test` passed 345 of 345, and the offline tests of `test/core/protection/protection.test.js` passed 28 of 28. The live part of `1.3e/protection` was not run, because the integrator's shell has no `HACKWIN_TEST_BUILDER_TOKEN`; the merge relied on the session's live run, as the Lead's review did. Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: a scope change on #23 replaced the limit of `--admin` to `full-restricted` (the Gate uses `--admin` exactly when the update restriction is active, and requires `rules.bypassable` to be empty before each such merge), and one on #20 added the same check at the Gate's start. Worktrees for #41 and #20 were created at `104c2f5`.
+- Problems, from the PR's "Workflow notes":
+  - The fake GitHub of the harness answers no rule set request; the session registered the two reads in `test/core/protection/rulesets.js`, which 1.4f and 1.6a need too. Follow-up #46 moves them into the harness.
+  - `docs/verification.md` did not record how `GET .../rules/branches/main` answers. The session made two read-only `gh api` calls outside the harness before writing the code: `[]` on `hackwin-fixture-b`, HTTP 403 on `hackwin-fixture-private`.
+  - The first reset of `hackwin-fixture-b` deleted 10 labels an earlier run had left.
+  - After the review, three runs of `npm run test:ac -- 1.3e/protection` failed on the network before a fourth passed: 2 failures with no cause captured; "net/http: TLS handshake timeout" in the account check; "unexpected end of JSON input" on the reset's `DELETE` of a rule set, which left three rule sets on `hackwin-fixture-b` until the next reset deleted them. In the same minutes 2 of 3 read-only `inspectFixtureRepo` calls failed. The integrator's own `gh` calls hit "TLS handshake timeout" twice on this day as well (after the merges of #40 and #45).
+- Measured:
+  - PR open 3 h 9 min (13:14:34 to 16:23:09 UTC), including the Lead's review and one fix.
+  - 3 commits (one a merge of `origin/main`), 2 PR runs (42 s on `297e930`, 54 s on `8b6a467`), 0 conflicts.
+  - Live runs of `1.3e/protection` in the session: 3 failed on the network, then 1 passed.
+  - Local merge test: `npm test` 18.23 s. The run on main after the merge: 48 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/42; head `8b6a467`; merge commit `104c2f5`; runs `38258354126` (last PR run) and `38277024545` (main).
+
 ### 2026-10-12 · Phase 1 · Step 1.5a, take: checks and the queue (PR #45, issue #15)
 
 - Setup: one builder session of lane B (Claude Code) in the worktree `task/15-take-checks-queue`, created by the integrator from `0468baa` at the start of wave 2, beside the sessions of #7, #8 and #18. The integrator's planning session in the main checkout for the merge.
