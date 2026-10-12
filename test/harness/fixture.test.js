@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest'
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { userInfo } from 'node:os'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { VERSION } from '../../src/cli/context.js'
 import {
   loadConfig,
@@ -9,16 +10,31 @@ import {
   parseOwners,
   validateConfig,
 } from '../../src/core/config/index.js'
+import { createGit } from '../../src/core/git/index.js'
 import { isJoinComplete, readLocal } from '../../src/core/state/index.js'
 import { checkHooksPath, currentTask, taskWorktrees } from '../../src/core/worktrees/index.js'
 import {
   BUILDER3_LOGIN,
+  NODE_PROJECT_FILE,
   RESET_TREE,
   TEAM_SIZES,
   accounts,
   createFixture,
+  nodeProjectFiles,
+  packNodeProject,
   teamConfig,
+  writeNodeProject,
 } from './index.js'
+
+const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url))
+
+/**
+ * The environment without the GIT_* variables of a hook that may run the tests.
+ * @param {Record<string, string | undefined>} env
+ */
+function withoutGitVariables(env) {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith('GIT_')))
+}
 
 /**
  * The size, time and inode of the user's own git and gh configuration files. Only stat: the gh
@@ -184,6 +200,44 @@ describe('1.3d/node-project: the Node fixture', () => {
     )
     expect(existsSync(join(fixture.main, 'package-lock.json'))).toBe(true)
     fixture.cleanup()
+  })
+
+  test('lives in this repository as one text file: no tracked file below test/harness is named as agent instructions, settings or skills', async () => {
+    const repo = createGit({ cwd: REPO_ROOT, env: withoutGitVariables(process.env) })
+    const tracked = (await repo.output(['ls-files', '-z', '--', 'test/harness']))
+      .split('\0')
+      .filter(Boolean)
+    expect(tracked).toContain('test/harness/node-project.yml')
+    // The names Claude Code loads from a subdirectory once it reads a file there (CLAUDE.md,
+    // CLAUDE.local.md, AGENTS.md, .claude/ with its skills, rules and settings), and .agents/,
+    // which the template uses for the skills of other agents.
+    const agentNames = ['claude.md', 'claude.local.md', 'agents.md', '.claude', '.agents']
+    const named = tracked.filter((path) =>
+      path.split('/').some((part) => agentNames.includes(part.toLowerCase())),
+    )
+    expect(named).toEqual([])
+  })
+
+  test("is written with its CLAUDE.md, AGENTS.md, .claude/ and .agents/ into a test's own directory, and packs back to the same file", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hackwin-node-project-')))
+    try {
+      writeNodeProject(dir)
+      const files = nodeProjectFiles()
+      expect(Object.keys(files)).toHaveLength(35)
+      for (const path of [
+        'CLAUDE.md',
+        'AGENTS.md',
+        '.claude/settings.json',
+        '.agents/skills/research/SKILL.md',
+        '.env.example',
+      ]) {
+        expect(readFileSync(join(dir, path), 'utf8')).toBe(files[path])
+      }
+      expect(readFileSync(join(dir, 'CLAUDE.md'), 'utf8')).toContain('@AGENTS.md')
+      expect(packNodeProject(dir)).toBe(readFileSync(NODE_PROJECT_FILE, 'utf8'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   test('takes a team configuration on top, which matches its owners.yml roles', async () => {

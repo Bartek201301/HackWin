@@ -3,23 +3,20 @@
 // empty gh config), and scripted states built with the shared modules: files, commits, branches,
 // task worktrees, a team configuration and a joined clone with the join record.
 
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { VERSION } from '../../src/cli/context.js'
 import { createGit } from '../../src/core/git/index.js'
 import { writeLocal } from '../../src/core/state/index.js'
 import { branchName, slugOf } from '../../src/core/tasks/index.js'
 import { repairHooksPath, taskWorktreePath } from '../../src/core/worktrees/index.js'
 import { TOKEN_VARIABLE, accounts } from './accounts.js'
+import { writeNodeProject } from './node-project.js'
 import { teamConfig, yaml } from './team.js'
 
 /** @import { Git } from '../../src/core/git/index.js' */
 /** @import { TeamConfig } from './team.js' */
-
-/** The Node fixture: a copy of the tree of the fixture repositories' reset commit. */
-export const NODE_PROJECT_DIR = fileURLToPath(new URL('./node-project/', import.meta.url))
 
 /** The author of every commit a fixture makes. */
 export const FIXTURE_IDENTITY = Object.freeze({
@@ -100,7 +97,8 @@ export function writeGitConfig(home, extra = '') {
 /**
  * @typedef {object} FixtureOptions
  * @property {FileMap} [files] The files of the first commit on main; `README.md` by default.
- * @property {boolean} [nodeProject] Start main from the Node fixture; `files` are added to it.
+ * @property {boolean} [nodeProject] Start main from the Node fixture (node-project.js), the tree of
+ *   the fixture repositories' reset commit; `files` are added to it.
  * @property {1 | 3 | 4} [team] Commit hackwin.yml and owners.yml of a team of this size.
  * @property {{ hackwin: unknown, owners: unknown }} [config] Commit these instead of a team's:
  *   objects, written as YAML, or text.
@@ -308,7 +306,7 @@ export async function createFixture(options = {}) {
   try {
     await gitAt(dir).run(['init', '--quiet', '--bare', origin])
     await gitAt(dir).run(['clone', '--quiet', origin, main])
-    if (options.nodeProject) cpSync(NODE_PROJECT_DIR, main, { recursive: true })
+    if (options.nodeProject) writeNodeProject(main)
     const files = options.files ?? (options.nodeProject ? {} : { 'README.md': '# Fixture\n' })
     await commit('Initial commit', { files, push: true })
     if (options.team !== undefined || options.config !== undefined) {

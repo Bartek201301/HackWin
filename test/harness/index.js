@@ -2,13 +2,13 @@
 // the fake GitHub, the fixture repository driver and the test accounts. Lanes import it from
 // their own test files; tests reach GitHub accounts only through it.
 
+export { createFixture, cleanupFixtures, isolatedEnv, FIXTURE_IDENTITY } from './fixture.js'
 export {
-  createFixture,
-  cleanupFixtures,
-  isolatedEnv,
-  NODE_PROJECT_DIR,
-  FIXTURE_IDENTITY,
-} from './fixture.js'
+  NODE_PROJECT_FILE,
+  nodeProjectFiles,
+  writeNodeProject,
+  packNodeProject,
+} from './node-project.js'
 export {
   createFakeGitHub,
   httpError,
