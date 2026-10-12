@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
@@ -10,8 +9,8 @@ const harnessSetup = fileURLToPath(new URL('./test/harness/setup.js', import.met
 export const testConfig = {
   include: ['test/**/*.test.js'],
   exclude: ['**/node_modules/**', 'test/**/*.fixture.test.js'],
-  // Owned by task 1.3d; loaded before every test file once it exists.
-  setupFiles: existsSync(harnessSetup) ? [harnessSetup] : [],
+  // The test harness (task 1.3d), loaded before every test file.
+  setupFiles: [harnessSetup],
   testTimeout: 30_000,
   hookTimeout: 30_000,
 }
