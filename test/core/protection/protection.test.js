@@ -7,6 +7,7 @@ import {
   ADMIN_BYPASS,
   FULL_RULES,
   NO_RULES,
+  ONE_APPROVAL,
   PINNED_CHECK,
   branchRulesBody,
   serveRulesets,
@@ -32,6 +33,17 @@ function leadWith(rulesets, { offered, defaultBranch } = {}) {
 function branchRulesWithout(type) {
   const body = branchRulesBody()
   return { ...body, rules: body.rules.filter((rule) => rule.type !== type) }
+}
+
+/**
+ * The four rules of the rules for everyone as entries of `bypassable`.
+ * @param {string} ruleset
+ */
+function rulesForEveryoneIn(ruleset) {
+  return ['pull_request', 'required_status_checks', 'non_fast_forward', 'deletion'].map((type) => ({
+    type,
+    ruleset,
+  }))
 }
 
 describe('1.3e/protection: the protection state read from GitHub', () => {
@@ -77,7 +89,7 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     ])
   })
 
-  test('the rules for everyone and the update restriction read full-restricted', async () => {
+  test('the rules for everyone and the update restriction read full-restricted, with no other rule the Lead can bypass', async () => {
     const { github } = leadWith([branchRulesBody(), updateRestrictionBody()])
     expect(await readProtection(github, { branch: 'main' })).toEqual({
       state: 'full-restricted',
@@ -146,11 +158,15 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     const { github } = leadWith([withBypass])
     expect(await readProtection(github, { branch: 'main' })).toEqual({
       state: 'soft',
-      rules: { ...FULL_RULES, appliesToAdmins: false },
+      rules: {
+        ...FULL_RULES,
+        appliesToAdmins: false,
+        bypassable: rulesForEveryoneIn('hackwin-branch-rules'),
+      },
     })
   })
 
-  test('all rules in one rule set with the admin role as bypass actor: the update restriction without the rules for everyone', async () => {
+  test('all rules in one rule set with the admin role as bypass actor: the update restriction without the rules for everyone, and every other rule bypassable', async () => {
     const body = branchRulesBody()
     const combined = {
       ...body,
@@ -160,7 +176,12 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     const { github } = leadWith([combined])
     expect(await readProtection(github, { branch: 'main' })).toEqual({
       state: 'soft',
-      rules: { ...FULL_RULES, appliesToAdmins: false, updateRestricted: true },
+      rules: {
+        ...FULL_RULES,
+        appliesToAdmins: false,
+        updateRestricted: true,
+        bypassable: rulesForEveryoneIn('hackwin-branch-rules'),
+      },
     })
   })
 
@@ -171,13 +192,17 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
       rules: branchRulesBody().rules.filter((rule) => rule.type === 'required_status_checks'),
     }
     const { github } = leadWith([branchRulesWithout('required_status_checks'), checkWithBypass])
-    expect(await readProtection(github, { branch: 'main' })).toMatchObject({
+    expect(await readProtection(github, { branch: 'main' })).toEqual({
       state: 'soft',
-      rules: { ...FULL_RULES, appliesToAdmins: false },
+      rules: {
+        ...FULL_RULES,
+        appliesToAdmins: false,
+        bypassable: [{ type: 'required_status_checks', ruleset: 'checks' }],
+      },
     })
   })
 
-  test('the rules for everyone spread over several rule sets without bypass actors read full', async () => {
+  test('the rules for everyone spread over several rule sets without bypass actors read full; a further rule set with a bypass actor is listed as bypassable', async () => {
     const checks = {
       ...branchRulesBody({ name: 'checks' }),
       rules: branchRulesBody().rules.filter((rule) => rule.type === 'required_status_checks'),
@@ -189,7 +214,36 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     ])
     expect(await readProtection(github, { branch: 'main' })).toEqual({
       state: 'full',
-      rules: FULL_RULES,
+      rules: { ...FULL_RULES, bypassable: rulesForEveryoneIn('duplicate') },
+    })
+  })
+
+  test('a second rule set with a bypass actor beside the update restriction: full-restricted, with its rule listed as bypassable', async () => {
+    const extra = { ...updateRestrictionBody({ name: 'extra-approval' }), rules: [ONE_APPROVAL] }
+    const { github } = leadWith([branchRulesBody(), updateRestrictionBody(), extra])
+    expect(await readProtection(github, { branch: 'main' })).toEqual({
+      state: 'full-restricted',
+      rules: {
+        ...FULL_RULES,
+        updateRestricted: true,
+        bypassable: [{ type: 'pull_request', ruleset: 'extra-approval' }],
+      },
+    })
+  })
+
+  test('a rule beside update in the update restriction rule set is listed as bypassable', async () => {
+    const restriction = updateRestrictionBody()
+    const { github } = leadWith([
+      branchRulesBody(),
+      { ...restriction, rules: [...restriction.rules, ONE_APPROVAL] },
+    ])
+    expect(await readProtection(github, { branch: 'main' })).toEqual({
+      state: 'full-restricted',
+      rules: {
+        ...FULL_RULES,
+        updateRestricted: true,
+        bypassable: [{ type: 'pull_request', ruleset: 'hackwin-update-restriction' }],
+      },
     })
   })
 
@@ -207,6 +261,8 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     })
   })
 
+  const UPDATE_BYPASSABLE = [{ type: 'update', ruleset: 'hackwin-update-restriction' }]
+
   test.each([
     [
       'the write role is a bypass actor too',
@@ -216,17 +272,30 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
           { actor_id: 4, actor_type: 'RepositoryRole', bypass_mode: 'always' },
         ],
       },
+      UPDATE_BYPASSABLE,
     ],
-    ['the rule set has no bypass actor, so nobody may update the branch', { bypass_actors: [] }],
-    ['the reading account cannot bypass it', { current_user_can_bypass: 'never' }],
-    ['GitHub does not return its bypass actors', { bypass_actors: undefined }],
-  ])('an update rule is not the update restriction when %s: full', async (_, change) => {
-    const { github } = leadWith([branchRulesBody(), { ...updateRestrictionBody(), ...change }])
-    expect(await readProtection(github, { branch: 'main' })).toEqual({
-      state: 'full',
-      rules: FULL_RULES,
-    })
-  })
+    [
+      'the rule set has no bypass actor, so nobody may update the branch',
+      { bypass_actors: [] },
+      [],
+    ],
+    ['the reading account cannot bypass it', { current_user_can_bypass: 'never' }, []],
+    ['GitHub does not return its bypass actors', { bypass_actors: undefined }, []],
+    [
+      'GitHub does not return whether the reading account can bypass it',
+      { current_user_can_bypass: undefined },
+      UPDATE_BYPASSABLE,
+    ],
+  ])(
+    'an update rule is not the update restriction when %s: full',
+    async (_, change, bypassable) => {
+      const { github } = leadWith([branchRulesBody(), { ...updateRestrictionBody(), ...change }])
+      expect(await readProtection(github, { branch: 'main' })).toEqual({
+        state: 'full',
+        rules: { ...FULL_RULES, bypassable },
+      })
+    },
+  )
 
   test('the update restriction with bypass through pull requests only still restricts updates to the Lead', async () => {
     const { github } = leadWith([

@@ -5,13 +5,22 @@
 import { describe, expect, test } from 'vitest'
 import { readProtection } from '../../../src/core/protection/index.js'
 import { withFixtureRepo } from '../../harness/index.js'
-import { FULL_RULES, NO_RULES, branchRulesBody, updateRestrictionBody } from './rulesets.js'
+import {
+  FULL_RULES,
+  NO_RULES,
+  ONE_APPROVAL,
+  branchRulesBody,
+  updateRestrictionBody,
+} from './rulesets.js'
 
 const TIMEOUT_MS = 30 * 60_000
 
+/** A rule set the test adds beside the two of setup; the reset deletes it. */
+const EXTRA = 'hackwin-reader-extra'
+
 describe('1.3e/protection: the protection state of a fixture repository', () => {
   test(
-    'a public fixture repository reads soft, then full with the rules for everyone, then full-restricted with the update restriction',
+    'a public fixture repository reads soft, then full with the rules for everyone, then full-restricted with the update restriction, and lists the other rules the Lead can bypass',
     async () => {
       await withFixtureRepo('hackwin-fixture-b', async (repo) => {
         const lead = repo.github('lead')
@@ -24,7 +33,7 @@ describe('1.3e/protection: the protection state of a fixture repository', () => 
           })
           expect(await readProtection(lead)).toEqual({ state: 'full', rules: FULL_RULES })
 
-          await lead.api('repos/{owner}/{repo}/rulesets', {
+          const restriction = await lead.api('repos/{owner}/{repo}/rulesets', {
             method: 'POST',
             body: updateRestrictionBody(),
           })
@@ -32,6 +41,37 @@ describe('1.3e/protection: the protection state of a fixture repository', () => 
             state: 'full-restricted',
             rules: { ...FULL_RULES, updateRestricted: true },
           })
+
+          // A second rule set with the admin role as bypass actor: the Lead can bypass its rule.
+          await lead.api('repos/{owner}/{repo}/rulesets', {
+            method: 'POST',
+            body: { ...updateRestrictionBody({ name: EXTRA }), rules: [ONE_APPROVAL] },
+          })
+          expect(await readProtection(lead)).toEqual({
+            state: 'full-restricted',
+            rules: {
+              ...FULL_RULES,
+              updateRestricted: true,
+              bypassable: [{ type: 'pull_request', ruleset: EXTRA }],
+            },
+          })
+
+          // A rule beside update in the update restriction's own rule set.
+          const body = updateRestrictionBody()
+          await lead.api(`repos/{owner}/{repo}/rulesets/${restriction.id}`, {
+            method: 'PUT',
+            body: { ...body, rules: [...body.rules, ONE_APPROVAL] },
+          })
+          const { state, rules } = await readProtection(lead)
+          expect(state).toBe('full-restricted')
+          expect(rules.updateRestricted).toBe(true)
+          expect(rules.bypassable).toHaveLength(2)
+          expect(rules.bypassable).toEqual(
+            expect.arrayContaining([
+              { type: 'pull_request', ruleset: EXTRA },
+              { type: 'pull_request', ruleset: 'hackwin-update-restriction' },
+            ]),
+          )
         } finally {
           await repo.reset()
         }

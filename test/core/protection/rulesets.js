@@ -43,6 +43,7 @@ export const NO_RULES = Object.freeze({
   deletionBlocked: false,
   appliesToAdmins: false,
   updateRestricted: false,
+  bypassable: [],
 })
 
 /** The details of the rules for everyone as setup creates them, without the update restriction. */
@@ -55,6 +56,19 @@ export const FULL_RULES = Object.freeze({
   deletionBlocked: true,
   appliesToAdmins: true,
   updateRestricted: false,
+  bypassable: [],
+})
+
+/** A pull request rule with one required approval, which a bypass would lift. */
+export const ONE_APPROVAL = Object.freeze({
+  type: 'pull_request',
+  parameters: {
+    required_approving_review_count: 1,
+    dismiss_stale_reviews_on_push: false,
+    require_code_owner_review: false,
+    require_last_push_approval: false,
+    required_review_thread_resolution: false,
+  },
 })
 
 const ON_DEFAULT_BRANCH = { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }
@@ -111,8 +125,8 @@ export function updateRestrictionBody({ name = 'hackwin-update-restriction' } = 
 
 /**
  * Answer the reader's requests in the fake GitHub from a list of rule sets. A rule set may set
- * `current_user_can_bypass` itself; otherwise it is `always` for an admin of the repository when
- * the admin role is a bypass actor, and `never` for everyone else. A rule set whose
+ * `current_user_can_bypass` itself, as undefined to leave it out; otherwise it is `always` for an
+ * admin of the repository when the admin role is a bypass actor, and `never` for everyone else. A rule set whose
  * `bypass_actors` is undefined is returned without them. With `offered: false` both requests
  * answer as GitHub does on a repository without rule sets.
  * @param {FakeGitHub} fake
@@ -166,8 +180,11 @@ export function serveRulesets(fake, initial = [], { offered = true } = {}) {
     return {
       ...ruleset,
       current_user_can_bypass:
-        ruleset.current_user_can_bypass ??
-        (adminBypass && state.collaborators[login] === 'admin' ? 'always' : 'never'),
+        'current_user_can_bypass' in ruleset
+          ? ruleset.current_user_can_bypass
+          : adminBypass && state.collaborators[login] === 'admin'
+            ? 'always'
+            : 'never',
     }
   })
 

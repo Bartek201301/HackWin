@@ -374,7 +374,7 @@ Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs,
 
 | Export | Inputs | Output |
 | --- | --- | --- |
-| `readProtection(github, { branch })` | The Lead's client; the branch, the repository's default branch when not given | `{ state, rules }`, `state` one of section 5.4. `rules`: `pullRequestRequired`, `requiredChecks`, `checkRequired`, `checkPinned`, `forcePushBlocked`, `deletionBlocked`, `appliesToAdmins`, `updateRestricted`. `requiredChecks` is `[{ context, integrationId }]`, with `integrationId` null for a check that names no app; the others are booleans. A `RemoteError` (exit 3) when GitHub fails, except the refusal of section 5.4, which reads `soft` |
+| `readProtection(github, { branch })` | The Lead's client; the branch, the repository's default branch when not given | `{ state, rules }`, `state` one of section 5.4. `rules`: `pullRequestRequired`, `requiredChecks`, `checkRequired`, `checkPinned`, `forcePushBlocked`, `deletionBlocked`, `appliesToAdmins`, `updateRestricted`, `bypassable`. `requiredChecks` is `[{ context, integrationId }]`, with `integrationId` null for a check that names no app; `bypassable` is `[{ type, ruleset }]`, the rule and the name of its rule set; the others are booleans. A `RemoteError` (exit 3) when GitHub fails, except the refusal of section 5.4, which reads `soft` |
 | `PROTECTION_STATES`, `REQUIRED_CHECK`, `ACTIONS_APP_ID`, `ADMIN_ROLE_ID` | | `['full-restricted', 'full', 'soft']`; `hackwin`; `15368`; `5`: the values of the rule sets of section 5.4 |
 
 How the reader decides, according to `docs/verification.md` rows 5 and 6:
@@ -384,6 +384,7 @@ How the reader decides, according to `docs/verification.md` rows 5 and 6:
 - `appliesToAdmins`: each of those four rules that is in force comes from at least one rule set without bypass actors, so it binds every account, the owner included. False when none is in force. A rule set whose `bypass_actors` GitHub does not return counts as having bypass actors.
 - `updateRestricted`: a rule `update` is in force from a rule set whose only bypass actors are the repository admin role (`RepositoryRole`, `actor_id` 5), and its `current_user_can_bypass` for the reading account is not `never`.
 - `checkPinned`: a required check `hackwin` with `integrationId` 15368 is in force. It is only reported: until the next PRD revision it does not change the state (issue #7).
+- `bypassable`: every rule in force that the reading account can bypass, its rule set's `current_user_can_bypass` being other than `never` or not returned, except the rule `update` of the update restriction. A rule other than `update` inside the update restriction's own rule set is listed. Empty when the Lead's account can skip no rule on the branch but the update restriction. It does not change the state. In `full-restricted` the Gate reads this field, never the rule sets, to decide whether it may merge with `--admin` (#23).
 
 Tests that call `readProtection` against the fake GitHub, which answers no rule set request, register both reads with `serveRulesets(fake, rulesets, { offered })` of `test/core/protection/rulesets.js`. The same file has the bodies of the two rule sets of section 5.4.
 

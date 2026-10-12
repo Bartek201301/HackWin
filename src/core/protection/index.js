@@ -54,6 +54,18 @@ const NOT_OFFERED = /make this repository public to enable this feature/i
  *   none of them is in force.
  * @property {boolean} updateRestricted The update restriction of D2: a rule `update` whose rule
  *   set has only the repository admin role as bypass actor, and the reading account can bypass it.
+ * @property {BypassableRule[]} bypassable Every rule in force that the reading account can bypass,
+ *   except the rule `update` of the update restriction; another rule inside the update
+ *   restriction's own rule set is listed. Empty when the update restriction is the only rule the
+ *   account can skip. The Gate reads this field, not the rule sets (#23).
+ */
+
+/**
+ * A rule in force that the reading account can bypass: its rule set's `current_user_can_bypass` is
+ * not `never`, or GitHub does not return it.
+ * @typedef {object} BypassableRule
+ * @property {string} type The rule, for example `pull_request`.
+ * @property {string} ruleset The name of its rule set.
  */
 
 /**
@@ -65,7 +77,8 @@ const NOT_OFFERED = /make this repository public to enable this feature/i
 
 /**
  * Read the protection state of a branch from GitHub. Called with the Lead's client: a rule set
- * whose bypass list GitHub does not return counts as having bypass actors.
+ * whose bypass list GitHub does not return counts as having bypass actors, and one whose
+ * `current_user_can_bypass` it does not return counts as one the Lead can bypass.
  * @param {GitHub} github
  * @param {{ branch?: string }} [options] The default branch of the repository when not given.
  * @returns {Promise<Protection>} A RemoteError (exit 3) when GitHub fails.
@@ -164,6 +177,10 @@ function protectionOf(rules) {
       inForce.length > 0 &&
       inForce.every((group) => group.some((rule) => bindsEveryone(rule.ruleset))),
     updateRestricted: ofType('update').some((rule) => restrictsToAdmins(rule.ruleset)),
+    bypassable: rules
+      .filter((rule) => rule.ruleset.current_user_can_bypass !== 'never')
+      .filter((rule) => !(rule.type === 'update' && restrictsToAdmins(rule.ruleset)))
+      .map((rule) => ({ type: rule.type, ruleset: String(rule.ruleset.name ?? rule.ruleset.id) })),
   }
   const full =
     details.pullRequestRequired &&
