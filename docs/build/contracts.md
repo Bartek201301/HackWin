@@ -274,7 +274,7 @@ Labels, assignees and comments of a pull request use the issue helpers with its 
 
 **Errors.** A failed call is a `RemoteError` (exit 3) with the HTTP status when gh printed one; gh exit code 4 or a request to run `gh auth login` is a `PreconditionError` (exit 2). `nullWhenNotFound(lookup)` turns a 404 into null.
 
-**Calls of one lane.** A call that only one lane makes goes through `ctx.github.run` or `ctx.github.api` from inside that lane's directory: branch rules, rule sets, push protection and invitations (lane A); the pinned merge `gh pr merge <PR> --merge --match-head-commit <full SHA>`, branch deletion, issue pinning, check runs and CI reruns (lane C).
+**Calls of one lane.** A call that only one lane makes goes through `ctx.github.run` or `ctx.github.api` from inside that lane's directory: branch rules, rule sets, push protection and invitations (lane A; reading the protection state goes through section 4.11); the pinned merge `gh pr merge <PR> --merge --match-head-commit <full SHA>`, branch deletion, issue pinning, check runs and CI reruns (lane C).
 
 ### 4.4 `src/core/config` (1.3b)
 
@@ -374,7 +374,18 @@ Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs,
 
 | Export | Inputs | Output |
 | --- | --- | --- |
-| `readProtection(github, { branch })` | The Lead's client; the default branch | `{ state, rules: { pullRequestRequired, requiredChecks, forcePushBlocked, deletionBlocked, appliesToAdmins, updateRestricted } }`, `state` one of section 5.4, according to `docs/verification.md` |
+| `readProtection(github, { branch })` | The Lead's client; the branch, the repository's default branch when not given | `{ state, rules }`, `state` one of section 5.4. `rules`: `pullRequestRequired`, `requiredChecks`, `checkRequired`, `checkPinned`, `forcePushBlocked`, `deletionBlocked`, `appliesToAdmins`, `updateRestricted`. `requiredChecks` is `[{ context, integrationId }]`, with `integrationId` null for a check that names no app; the others are booleans. A `RemoteError` (exit 3) when GitHub fails, except the refusal of section 5.4, which reads `soft` |
+| `PROTECTION_STATES`, `REQUIRED_CHECK`, `ACTIONS_APP_ID`, `ADMIN_ROLE_ID` | | `['full-restricted', 'full', 'soft']`; `hackwin`; `15368`; `5`: the values of the rule sets of section 5.4 |
+
+How the reader decides, according to `docs/verification.md` rows 5 and 6:
+
+- A rule is in force when GitHub lists it for the branch: `GET repos/{owner}/{repo}/rules/branches/<branch>` returns the rules of the active rule sets, each with its `ruleset_id`. The reader then reads each of those rule sets with `GET repos/{owner}/{repo}/rulesets/<id>` for `bypass_actors` and `current_user_can_bypass`. It goes by the rules and the bypass lists, not by the names of the rule sets. Classic branch protection is not read.
+- `pullRequestRequired`, `checkRequired` (the check `hackwin`), `forcePushBlocked` and `deletionBlocked`: the rules `pull_request`, `required_status_checks` naming `hackwin`, `non_fast_forward` and `deletion` are in force, from any rule set.
+- `appliesToAdmins`: each of those four rules that is in force comes from at least one rule set without bypass actors, so it binds every account, the owner included. False when none is in force. A rule set whose `bypass_actors` GitHub does not return counts as having bypass actors.
+- `updateRestricted`: a rule `update` is in force from a rule set whose only bypass actors are the repository admin role (`RepositoryRole`, `actor_id` 5), and its `current_user_can_bypass` for the reading account is not `never`.
+- `checkPinned`: a required check `hackwin` with `integrationId` 15368 is in force. It is only reported: until the next PRD revision it does not change the state (issue #7).
+
+Tests that call `readProtection` against the fake GitHub, which answers no rule set request, register both reads with `serveRulesets(fake, rulesets, { offered })` of `test/core/protection/rulesets.js`. The same file has the bodies of the two rule sets of section 5.4.
 
 ### 4.12 `test/harness` (1.3d)
 
@@ -447,7 +458,20 @@ One file per worktree keeps two sessions from writing the same file. The commit 
 | `full` | The rules for everyone, without the update restriction |
 | `soft` | No protection from GitHub; the soft blocks of 10.6 |
 
-`setup` creates the rules for everyone as the rule set `hackwin-branch-rules` and the update restriction as its own rule set `hackwin-update-restriction` (A32). Task 1.3e changes these names in this file if `docs/verification.md` shows another mechanism.
+`setup` creates the rules for everyone as the rule set `hackwin-branch-rules` and the update restriction as its own rule set `hackwin-update-restriction` (A32). `docs/verification.md` (rows 5 and 6) confirmed this mechanism, so the names stay. Both rule sets target the default branch (`conditions.ref_name.include: ["~DEFAULT_BRANCH"]`) with `enforcement: active`:
+
+| Rule set | Rules | `bypass_actors` |
+| --- | --- | --- |
+| `hackwin-branch-rules` | `pull_request` with 0 required approvals; `required_status_checks` with `[{"context": "hackwin", "integration_id": 15368}]` and `strict_required_status_checks_policy: false`; `non_fast_forward`; `deletion` | `[]` |
+| `hackwin-update-restriction` | `update` with `update_allows_fetch_and_merge: false` | `[{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]` |
+
+The reader (section 4.11) computes the state from the rules in force, not from these names:
+
+| State | When |
+| --- | --- |
+| `full-restricted` | The conditions of `full`, and `updateRestricted` |
+| `full` | `pullRequestRequired`, `checkRequired`, `forcePushBlocked`, `deletionBlocked` and `appliesToAdmins` |
+| `soft` | Anything less. Also where GitHub offers no rule sets: on `hackwin-fixture-private`, a private repository of a personal account without GitHub Pro, `GET .../rules/branches/main` answered HTTP 403 "Upgrade to GitHub Pro or make this repository public to enable this feature." (12 October 2026). The reader reads an HTTP 403 whose message contains "make this repository public to enable this feature" as `soft` |
 
 ### 5.5 Pull request body and task link
 
