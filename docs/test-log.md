@@ -17,6 +17,46 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-12 · Phase 1 · Step 1.5a, take: checks and the queue (PR #45, issue #15)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/15-take-checks-queue`, created by the integrator from `0468baa` at the start of wave 2, beside the sessions of #7, #8 and #18. The integrator's planning session in the main checkout for the merge.
+- What happened:
+  - One commit, `cc0398f` (13:25:35 UTC); PR #45 opened at 13:26:37 UTC; main had not moved.
+  - The Lead asked for the merges of #44, #43 and #45 in that order, in pasted text; the integrator asked for and got a confirmation first. #45 was the third.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 6 files inside issue #15's paths, the two `.gitkeep` files of its directories removed; no secret pattern; no conflict with `a265588`, main after #44 and #43. Step 6, with the PR merged into `a265588`: `npm test` passed 317 of 317, and `npm run test:ac` passed AC12 (6), AC13 (5), AC53 (1) and AC65/take (2). Main had not moved, and the merge was pinned to the head SHA. The `gh pr view` after the merge failed with "TLS handshake timeout"; the cleanup commands that followed ran.
+- Problems, from the PR's "Workflow notes":
+  - Missing interface: check 4 needs `createMatcher` and `samplePath`, which `src/core/config/index.js` does not export. The human decided to import them from `src/core/config/glob.js` directly; `holderOf` is not exported either, so `take` finds the holder of a role itself. Follow-up #46.
+  - Unclear instruction: 7.7 has "issue N is an open task" as a precondition (exit 2) and "the task is open" in check 2 (exit 1); the session chose exit 2 for a closed issue.
+- Measured: PR open 16 min 41 s (13:26:37 to 13:43:18 UTC); 1 commit, 1 PR run (39 s), 0 conflicts; local merge test `npm test` 19.90 s; the run on main after the merge 53 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/45; head `cc0398f`; merge commit `a0610d7`; runs `38255731525` (PR) and `38257680242` (main).
+
+### 2026-10-12 · Phase 1 · Step 1.5d, ship: merge main and local checks (PR #43, issue #18)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/18-ship-merge-checks`, created by the integrator from `0468baa` at the start of wave 2. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `1bc56f8` (13:19:43 UTC); PR #43 opened at 13:20:44 UTC; main had not moved.
+  - The second of the three merges. Steps 1 to 5 passed: 7 files inside issue #18's paths, the two `.gitkeep` files removed; no secret pattern; no conflict with `cca0d36`, main after #44. Step 6, with the PR merged into `cca0d36`: `npm test` passed 285 of 285, and `npm run test:ac` passed AC15 (6), AC17 (2) and AC54/ship (1). Main had not moved, and the merge was pinned to the head SHA.
+  - The Lead's review found that the check record #43 writes matches what the `pre-push` hook of #44 reads (contracts 5.2).
+- Problems, from the PR's "Workflow notes":
+  - The contracts and the brief name no local place for the logs of `ship`'s steps, while 7.9 says a failed step names its log. The session wrote them under the temporary directory, `$TMPDIR/hackwin-ship/`. Follow-up #46 chooses a place.
+  - `formatCheck` and `generatedFileCheck` take no log file (contracts 4.9), so steps 5 and 6 print only the tail.
+  - Two tests first failed because `fixture.publish` on a pushed task branch starts from the remote branch, so `ship` fast-forwarded instead of merging; a few minutes lost, no harness change needed.
+- Measured: PR open 21 min 43 s (13:20:44 to 13:42:27 UTC); 1 commit, 1 PR run (52 s), 0 conflicts; local merge test `npm test` 20.14 s; the run on main after the merge 58 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/43; head `1bc56f8`; merge commit `a265588`; runs `38255038505` (PR) and `38257579617` (main).
+
+### 2026-10-12 · Phase 1 · Step 1.4a, git hooks: pre-commit and pre-push (PR #44, issue #8)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/8-git-hooks`, created by the integrator from `0468baa` at the start of wave 2. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `6707437` (13:21:31 UTC); PR #44 opened at 13:22:52 UTC; main had not moved.
+  - The first of the three merges. Steps 1 to 5 passed: 15 files inside issue #8's paths, the two `.gitkeep` files removed; no secret pattern; no conflict. Step 6: the head already contained main `0468baa`. `npm test` passed 267 of 267, and `npm run test:ac` passed AC18 (2), AC54/hooks (2), AC2/pre-push (1), AC47/commit (1), AC80/commit (1) and 1.4a/shims (4). Main had not moved, and the merge was pinned to the head SHA.
+  - After the three merges, scope changes went to #11 (the bootstrap commit and push with the member hooks off, because the hooks of #44 block both on the default branch) and #10 (the Claude Code hooks apply CM12 as the git hooks do), and follow-up #46 was opened.
+- Problems, from the PR's "Workflow notes":
+  - `mainRef` and the raw-version fallback of `loadCheckedConfig` in `src/cli/main.js` are not exported. The hook keeps its own copy of `mainRef` and imports `pinnedVersionOf` and `HACKWIN_FILE` from `src/core/config/load.js` instead of the module index. Follow-up #46.
+  - The harness fixture's commits run git without a `hackwin` command on PATH, so the hook tests write their own wrapper in `test/internal/hook/hook-fixture.js`.
+- Measured: PR open 16 min 47 s (13:22:52 to 13:39:39 UTC); 1 commit, 1 PR run (49 s), 0 conflicts; local merge test `npm test` 17.11 s; the run on main after the merge 45 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/44; head `6707437`; merge commit `cca0d36`; runs `38255292216` (PR) and `38257247949` (main).
+
 ### 2026-10-12 · Phase 1 · Step 1.3d, the test harness with the machine account (PR #40, issue #6)
 
 - Setup: one builder session (Claude Code) in the worktree `task/6-foundation-test-harness`, created by the integrator from `536c133` after the merge of #38, beside the session of #37; restarted by the human with `HACKWIN_TEST_BUILDER_TOKEN` set. The integrator's planning session in the main checkout for the merge, without that variable.
