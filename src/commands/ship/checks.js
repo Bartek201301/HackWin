@@ -1,6 +1,7 @@
 // Steps 3 to 9 of `ship` (7.9): the checks of the branch's own changes against the merged main,
 // in a fixed order, then the green check record of the commit they ran on. They use only local
-// data and the task issue that step 1 read.
+// data and the task issue that step 1 read. A commit that already has its green check record
+// is not checked again: a rerun after a failure in steps 10 to 14 goes on with the record.
 
 import { join } from 'node:path'
 import { scopeCheck } from '../../core/config/index.js'
@@ -12,7 +13,7 @@ import {
 } from '../../core/project/index.js'
 import { quoteShellArg } from '../../core/runtime/exec.js'
 import { formatFinding, scanDiff } from '../../core/secrets/index.js'
-import { statePaths, writeCheckRecord } from '../../core/state/index.js'
+import { isGreen, readCheckRecord, statePaths, writeCheckRecord } from '../../core/state/index.js'
 import {
   STEPS,
   are,
@@ -38,7 +39,37 @@ import {
  * @property {string[]} outsideTask Changed paths inside the author's roles but outside the
  *   task's paths: a warning only (A15).
  * @property {string} record The file of the green check record.
+ * @property {string} recordedAt When the checks passed: the `created_at` of the record.
+ * @property {boolean} reused True when the checks did not run again because the head commit
+ *   already had its green check record.
  */
+
+/**
+ * The green check record of the head commit for this task, written by an earlier `ship` whose
+ * later steps failed. The checks then do not run again for the same commit (7.9, failure
+ * behavior). A record of the same commit for another task does not count: its acceptance tests
+ * were others.
+ * @param {CommandContext} ctx
+ * @param {TaskWorktree} worktree
+ * @param {Synced} synced
+ * @returns {Promise<Checked | null>} Null when the head commit has no green record of this task.
+ */
+export async function recordedChecks(ctx, worktree, synced) {
+  const { head, task } = synced
+  const record = await readCheckRecord(ctx.gitCommonDir, head)
+  if (record === null || !isGreen(record, head)) return null
+  if (record.issue !== task.number || record.branch !== worktree.branch) return null
+  ctx.out.line(
+    `steps 3 to 9, checks: passed for ${head} at ${record.created_at}, so they do not run again`,
+  )
+  return {
+    checks: record.checks,
+    outsideTask: [],
+    record: join(statePaths(ctx.gitCommonDir).checks, `${head}.json`),
+    recordedAt: record.created_at,
+    reused: true,
+  }
+}
 
 /**
  * Steps 3 to 9. Each failed step exits 1 and names itself; nothing is written then.
@@ -222,16 +253,17 @@ export async function runChecks(ctx, worktree, synced) {
       resolve: { command: 'hackwin ship', dir: cwd },
     })
   }
+  const recordedAt = ctx.clock.now().toISOString()
   await writeCheckRecord(ctx.gitCommonDir, {
     sha: head,
     branch: worktree.branch,
     issue: task.number,
-    created_at: ctx.clock.now().toISOString(),
+    created_at: recordedAt,
     cli_version: ctx.version,
     checks,
   })
   const record = join(statePaths(ctx.gitCommonDir).checks, `${head}.json`)
   progress(ctx, STEPS.record, `written for ${head}`)
 
-  return { checks, outsideTask: scope.outsideTask, record }
+  return { checks, outsideTask: scope.outsideTask, record, recordedAt, reused: false }
 }

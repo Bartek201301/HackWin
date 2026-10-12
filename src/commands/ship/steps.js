@@ -1,11 +1,12 @@
 // The steps of `hackwin ship` (7.9) and how they report. A step runs only when every earlier step
-// succeeded. A failed step from 2 on exits 1: it names the step, its rule and its log, prints the
-// last lines of the log, and nothing is pushed.
+// succeeded. A failed step from 2 to 9 exits 1: it names the step, its rule and its log, prints
+// the last lines of the log, and nothing is pushed. A failed step from 10 to 14 exits 3, and a
+// rerun continues at it (CM3).
 
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { BlockedError } from '../../core/runtime/errors.js'
+import { BlockedError, RemoteError } from '../../core/runtime/errors.js'
 
 /** @import { CommandContext } from '../../cli/context.js' */
 /** @import { ProjectRun } from '../../core/project/index.js' */
@@ -55,6 +56,22 @@ export const STEPS = Object.freeze({
   record: step(9, 'check record', 'the green check record is for the commit that was checked (E4)'),
 })
 
+/** Steps 10 to 14 of 7.9: the steps that publish the checked commit. Step 12 is Phase 3. */
+export const PUBLISH_STEPS = Object.freeze({
+  push: step(10, 'push', 'the branch is pushed only after its checks passed, never forced (E4)'),
+  pull: step(
+    11,
+    'pull request',
+    'one open pull request per task, not a draft, that closes the task (T1, 8.4)',
+  ),
+  report: step(
+    13,
+    'report',
+    'the issue gets one report per pull request and head commit (T10, CM3)',
+  ),
+  label: step(14, 'label', 'the task is in-review while its pull request waits for the Gate (8.3)'),
+})
+
 /** How many lines of a failed command's log a block prints. */
 const TAIL_LINES = 20
 
@@ -90,6 +107,32 @@ export function fail(ctx, step, message, { objects, resolve: how, run = null }) 
     resolve: how,
     details: { step: step.number, title: step.title, log, tail },
   })
+}
+
+/**
+ * Run a step of 10 to 14. A GitHub or network failure in it exits 3 and names the step; a rerun
+ * of `ship` continues at that step without running the checks of the same commit again.
+ * @template T
+ * @param {Step} step
+ * @param {string} dir The task worktree, where `ship` runs again.
+ * @param {() => Promise<T>} action
+ * @returns {Promise<T>}
+ */
+export async function publishing(step, dir, action) {
+  try {
+    return await action()
+  } catch (error) {
+    if (!(error instanceof RemoteError)) throw error
+    throw new RemoteError(
+      `step ${step.number}, ${step.title}: ${error.message}; run ship again: it continues at this step and does not run the checks of the same commit again`,
+      {
+        status: error.status,
+        tail: /** @type {string[]} */ (error.details?.tail ?? []),
+        resolve: { command: 'hackwin ship', dir },
+        cause: error,
+      },
+    )
+  }
 }
 
 /**

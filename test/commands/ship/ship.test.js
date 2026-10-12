@@ -1,171 +1,25 @@
 import { describe, expect, test } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
-import { main } from '../../../src/cli/main.js'
-import { quoteShellArg } from '../../../src/core/runtime/exec.js'
 import { readCheckRecord, statePaths } from '../../../src/core/state/index.js'
+import { accounts, httpError } from '../../harness/index.js'
 import {
-  accounts,
-  createFakeGitHub,
-  createFixture,
-  hackwinObject,
-  httpError,
-  ownersObject,
-  yaml,
-} from '../../harness/index.js'
+  BRANCH,
+  ISSUE,
+  NODE,
+  TEST_FILE,
+  WORK,
+  remoteBranch,
+  scene,
+  ship,
+  stepsOf,
+} from './scene.js'
 
-const ISSUE = 12
-const TITLE = 'Counter reset'
-const BRANCH = 'task/12-counter-reset'
-const TEST_FILE = 'src/features/counter/reset.test.mjs'
-const NODE = quoteShellArg(process.execPath)
-
-// Stand-ins for the project's commands, committed on main under tools/ (a shared path).
-const TOOLS = {
-  // Fails when a file under src/ contains BROKEN.
-  'tools/check.mjs': `
-    import { readdirSync, readFileSync } from 'node:fs'
-    const broken = readdirSync('src', { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile())
-      .map((entry) => entry.parentPath + '/' + entry.name)
-      .filter((file) => readFileSync(file, 'utf8').includes('BROKEN'))
-    for (const file of broken) console.log('broken: ' + file)
-    console.log(broken.length === 0 ? 'check passed' : 'check failed')
-    process.exit(broken.length === 0 ? 0 : 1)
-  `,
-  // Runs the named test files: a file that contains FAIL fails.
-  'tools/test.mjs': `
-    import { readFileSync } from 'node:fs'
-    let failed = 0
-    for (const file of process.argv.slice(2)) {
-      const ok = !readFileSync(file, 'utf8').includes('FAIL')
-      if (!ok) failed += 1
-      console.log((ok ? 'PASS ' : 'FAIL ') + file)
-    }
-    console.log(failed + ' failed')
-    process.exit(failed > 0 ? 1 : 0)
-  `,
-  // Formats the named files: removes trailing spaces.
-  'tools/format.mjs': `
-    import { readFileSync, writeFileSync } from 'node:fs'
-    for (const file of process.argv.slice(2)) {
-      writeFileSync(file, readFileSync(file, 'utf8').replace(/[ \\t]+$/gm, ''))
-    }
-  `,
-  // Writes how many files src/features/counter holds into src/shared/counter-files.txt.
-  'tools/generate.mjs': `
-    import { readdirSync, writeFileSync } from 'node:fs'
-    const count = readdirSync('src/features/counter').length
-    writeFileSync('src/shared/counter-files.txt', count + '\\n')
-  `,
-}
-
-const MAIN_FILES = {
-  'README.md': '# Fixture\n',
-  ...TOOLS,
-  'src/shared/index.js': 'export const shared = 1\n',
-  'src/shared/counter-files.txt': '1\n',
-  'src/features/counter/index.js': 'export const count = 0\n',
-  'src/features/todos/index.js': 'export const todos = []\n',
-  'src/features/greeting/index.js': "export const greeting = 'hello'\n",
-}
-
-/** The work of the task: inside its paths, formatted, with a passing acceptance test. */
-const WORK = {
-  'src/features/counter/reset.js': 'export const reset = () => 0\n',
-  [TEST_FILE]: 'PASS\n',
-}
-
-/**
- * The task block of issue 12, in the form of 8.1.
- * @param {{ paths?: string[], acceptance_tests?: string[] }} [block]
- */
-function taskBody({ paths = ['src/features/counter/**'], acceptance_tests = [TEST_FILE] } = {}) {
-  const fields = {
-    kind: 'task',
-    role: 'counter',
-    wave: 2,
-    paths,
-    depends_on: [],
-    acceptance_tests,
-    deadline: '2026-10-25T12:00:00+02:00',
-  }
-  return `\`\`\`yaml\n# hackwin:task\n${yaml(fields)}\`\`\`\n\n## Problem\nReset the counter.\n`
-}
-
-/**
- * A team of 3 on the stand-in project, a joined main checkout, the task issue on a fake GitHub
- * and the worktree of the task with one commit of `work`, pushed unless `push` is false.
- * builder1 holds `counter` and `todos`, builder2 holds `greeting`, the Lead `shared`.
- * @param {object} [options]
- * @param {Record<string, string>} [options.work]
- * @param {boolean} [options.push]
- * @param {Parameters<typeof taskBody>[0]} [options.block]
- * @param {string[]} [options.labels]
- * @param {string | null} [options.generate]
- */
-async function scene({
-  work = WORK,
-  push = true,
-  block,
-  labels = ['in-progress', 'role:counter'],
-  generate = null,
-} = {}) {
-  const hackwin = hackwinObject(3)
-  hackwin.commands = {
-    ...hackwin.commands,
-    install: 'true',
-    check: `${NODE} tools/check.mjs`,
-    test: `${NODE} tools/test.mjs`,
-    format: `${NODE} tools/format.mjs`,
-    generate: generate === null ? null : `${NODE} ${generate}`,
-    lockfile_regen: 'true',
-  }
-  const fixture = await createFixture({
-    files: MAIN_FILES,
-    config: { hackwin, owners: ownersObject() },
-  })
-  const joined = await fixture.join(fixture.main, { login: accounts.builder1.login })
-  const fake = createFakeGitHub({
-    issues: [{ number: ISSUE, title: TITLE, body: taskBody(block), labels }],
-  })
-  const worktree = await fixture.worktree({ issue: ISSUE, title: TITLE, files: work, push })
-  const env = { ...fixture.env, TMPDIR: join(fixture.dir, 'tmp') }
-  return { fixture, fake, worktree, env, commonDir: joined.commonDir }
-}
-
-/**
- * Run `hackwin ship` in-process as builder1.
- * @param {Awaited<ReturnType<typeof scene>>} s
- * @param {{ cwd?: string, json?: boolean }} [options]
- */
-async function ship(s, { cwd = s.worktree.path, json = false } = {}) {
-  let stdout = ''
-  let stderr = ''
-  const code = await main(json ? ['ship', '--json'] : ['ship'], {
-    cwd,
-    env: s.env,
-    stdin: Readable.from([]),
-    stdout: { write: (text) => (stdout += text) },
-    stderr: { write: (text) => (stderr += text) },
-    ghExecutor: s.fake.as(accounts.builder1.login),
-  })
-  return { code, stdout, stderr }
-}
-
-/**
- * The commit a branch of the origin points to, or null.
- * @param {Awaited<ReturnType<typeof scene>>} s
- * @param {string} [branch]
- */
-function remoteBranch(s, branch = BRANCH) {
-  return s.fixture.gitAt(s.fixture.origin).tryRevParse(`refs/heads/${branch}`)
-}
+/** @import { Scene } from './scene.js' */
 
 /**
  * Expect a blocked ship: exit 1, the remote branch where it was, no check record for HEAD.
- * @param {Awaited<ReturnType<typeof scene>>} s
+ * @param {Scene} s
  * @param {{ code: number, stderr: string }} result
  * @param {string | null} remoteBefore
  * @param {number} step
@@ -324,14 +178,13 @@ describe('1.5d/ship: merge main and local checks', () => {
     for (const commit of [own, remote, main]) {
       expect(await s.worktree.git.isAncestor(commit, head)).toBe(true)
     }
-    expect(await remoteBranch(s)).toBe(remote)
 
-    const steps = [...result.stdout.matchAll(/^step (\d+), /gm)].map((match) => Number(match[1]))
-    expect(steps).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(stepsOf(result.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
     expect(result.stdout).toContain(`merged the commits of origin/${BRANCH} that the branch lacked`)
     expect(result.stdout).toContain('step 2, merge main: merged origin/main')
-    expect(result.stdout).toContain(`every check passed for ${head} on ${BRANCH}`)
-    expect(result.stdout).toContain('nothing was pushed')
+    expect(result.stdout).toContain(`step 9, check record: written for ${head}`)
+    expect(result.stdout).toContain(`step 10, push: pushed ${head} to origin/${BRANCH}`)
+    expect(await remoteBranch(s)).toBe(head)
 
     const record = await readCheckRecord(s.commonDir, head)
     expect(record).toMatchObject({ schema: 1, sha: head, branch: BRANCH, issue: ISSUE })
@@ -351,12 +204,25 @@ describe('1.5d/ship: merge main and local checks', () => {
     const result = await ship(s, { json: true })
     expect(result.code, result.stderr).toBe(0)
     const json = JSON.parse(result.stdout)
+    const head = await s.worktree.git.revParse('HEAD')
     expect(json).toMatchObject({
       command: 'ship',
       ok: true,
-      data: { issue: ISSUE, branch: BRANCH, merged: { remote: 'absent' }, pushed: false },
+      data: {
+        issue: ISSUE,
+        branch: BRANCH,
+        head,
+        merged: { remote: 'absent' },
+        checksReused: false,
+        pushed: true,
+        pullRequest: { action: 'opened' },
+        report: { created: true },
+      },
     })
-    expect(await remoteBranch(s)).toBeNull()
+    expect(json.lines.at(-1)).toBe(
+      `PR #${json.data.pullRequest.number} opened at ${head}. Do not merge. Stop.`,
+    )
+    expect(await remoteBranch(s)).toBe(head)
   })
 
   test('a changed file inside the roles but outside the task paths only warns (A15)', async () => {

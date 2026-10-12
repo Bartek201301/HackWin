@@ -1,15 +1,19 @@
 // `hackwin ship` (7.9): run inside a task worktree once the work is committed. It merges the
 // remote branch and the default branch into the branch, never rebasing, runs every local check
-// in a fixed order and writes the green check record of the head commit. A step runs only when
-// every earlier step succeeded, so nothing goes on after a failed check (F3).
+// in a fixed order and writes the green check record of the head commit. Then it pushes the
+// branch, opens or updates the pull request of the task, reports on the issue, sets the issue
+// in-review and ends with the stop line. A step runs only when every earlier step succeeded, so
+// nothing goes on after a failed check (F3).
 //
-// Steps 1 to 9 are built; the push, the pull request, the report and the labels (steps 10 to 15)
-// are not, so this version pushes nothing.
+// A rerun continues where an earlier `ship` stopped (CM3): the checks do not run again for a
+// commit that has its green check record, and the later steps find the pull request and the
+// report that the earlier run left.
 
 import { BlockedError, PreconditionError } from '../../core/runtime/errors.js'
 import { parseBranch } from '../../core/tasks/index.js'
 import { currentTask, mainCheckout, taskWorktrees } from '../../core/worktrees/index.js'
-import { runChecks } from './checks.js'
+import { recordedChecks, runChecks } from './checks.js'
+import { publish } from './publish.js'
 import { listOf, plural } from './steps.js'
 import { syncBranch } from './sync.js'
 
@@ -25,16 +29,12 @@ export async function run(ctx) {
   const worktree = await requireTaskWorktree(ctx)
   await requireCleanTree(ctx, worktree)
   const synced = await syncBranch(ctx, worktree)
-  const checked = await runChecks(ctx, worktree, synced)
-  const names = checked.checks.map((check) =>
-    check.result === 'skipped' ? `${check.name} (skipped)` : check.name,
-  )
+  const checked =
+    (await recordedChecks(ctx, worktree, synced)) ?? (await runChecks(ctx, worktree, synced))
+  const published = await publish(ctx, worktree, synced, checked)
+  const { pull } = published.pull
   return {
-    lines: [
-      `every check passed for ${synced.head} on ${worktree.branch}: ${names.join(', ')}`,
-      `check record: ${checked.record}`,
-      'nothing was pushed: the push and the pull request (ship steps 10 to 15) are not built yet',
-    ],
+    lines: [`pull request: ${pull.url}`, published.stopLine],
     data: {
       issue: synced.task.number,
       branch: worktree.branch,
@@ -44,9 +44,22 @@ export async function run(ctx) {
       merged: { remote: synced.remote, main: synced.main },
       hooksRepaired: synced.hooksRepaired,
       checks: checked.checks,
+      checksReused: checked.reused,
       outsideTask: checked.outsideTask,
       record: checked.record,
-      pushed: false,
+      pushed: published.pushed,
+      pullRequest: {
+        number: pull.number,
+        url: pull.url,
+        action: published.pull.action,
+        changes: published.pull.changes,
+      },
+      report: {
+        id: published.report.comment.id,
+        url: published.report.comment.url,
+        created: published.report.created,
+      },
+      labels: published.labels,
     },
   }
 }
