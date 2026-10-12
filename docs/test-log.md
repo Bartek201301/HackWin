@@ -17,6 +17,29 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-12 · Phase 1 · Step 1.3b, configuration, ownership, tasks, secret scan, version check (PR #38, issue #4)
+
+- Setup: one builder session (Claude Code) in the worktree `task/4-foundation-configuration-tasks`, created by the integrator from `218091d` after the merge of #33, beside the session of 1.3c (#5); the integrator's planning session in the main checkout for the merge.
+- What happened:
+  - The session made one commit, `63e0271` (2026-10-11 22:31:44 UTC), merged `origin/main` without a conflict (`16bd91c`; main had moved by #36) and opened PR #38 at 22:32:56 UTC.
+  - The Lead reviewed the head, the CI run and the files, spot-checked the tests of `1.3b/secrets-lockfile` and `1.3b/task-block`, and accepted the three choices the PR asked about. The request to merge arrived inside pasted text, so the integrator asked for and got a confirmation first.
+  - Merged with the procedure of the plan, section 8:
+    - Steps 1 to 5 passed: 26 files, all inside issue #4's paths; no conflict. In step 4 the secret patterns matched five added lines, all of them the scanner's own regular expressions in `src/core/secrets/index.js` or synthetic values in `test/core/secrets/secrets.test.js`, which the tests assemble at run time; no env file was added.
+    - Step 6: the head already contained main `8ee2d9c`. `npm ci` and `npm test` passed 197 of 197 on Node 25.8.1, and `npm run test:ac` for the eleven ids of issue #4 passed 76 tests.
+    - Main had not moved, and the merge was pinned to the head SHA. The remote branch and both worktrees were removed.
+  - After the merge: the decisions of #38 and the `builder2` correction went to #37 as a scope change; `docs/build/contracts.md` left the paths of #6, so that #6 and #37 share no path; both issue bodies were updated and #37 was retitled. Worktrees for #6 and #37 were created at `536c133`.
+- Problems, from the PR's "Workflow notes":
+  - `gh issue view 4 --comments` printed only the three comments, not the issue body; the session read the body with `gh issue view 4 --json`. The human pointed this out during the task; a comparison with `gh issue view 4` changed nothing.
+  - 1.3a's tests `test/cli/runner.test.js` and `test/cli/registry.test.js` assumed an empty `prepareContext`; without changes they would fail on an unconfigured repository and call the real `gh`. The session moved them to a configured fixture with a fake `gh`, inside its own paths.
+  - The contract made `ctx.identity` present for every prepared command, which does not work for the plumbing commands: hooks must stay offline and the caller in CI is not a member. The runner now prepares the six user commands only; #37 records it in the contracts.
+  - `test/core/config/fixtures.js` is a small fixture helper written because the harness (1.3d) was not merged.
+- Measured:
+  - PR open 11 h 53 min (2026-10-11 22:32:56 to 2026-10-12 10:26:18 UTC), including the Lead's review.
+  - 2 commits (one a merge of `origin/main`), 1 PR run (34 s: `node 24` 24 s, `node 22` 27 s, `test` 3 s), 0 conflicts.
+  - Local merge test: `npm test` 9.35 s, `npm run test:ac` 5.75 s.
+  - The run on main after the merge: 38 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/38; head `16bd91c`; merge commit `536c133`; runs `38180863915` (PR) and `38236320356` (main).
+
 ### 2026-10-11 · Phase 1 · Step 1.3c, local state, worktrees, project commands (PR #36, issue #5)
 
 - Setup: one builder session (Claude Code) in the worktree `task/5-foundation-state-worktrees`, created by the integrator from `218091d` after the merge of #33, beside the session of 1.3b (#4); the integrator's planning session in the main checkout for the merge.
