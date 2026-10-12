@@ -1,0 +1,10 @@
+# hackwin:begin
+CLAUDE.local.md
+.env.local
+.env.*.local
+hackwin-report.md
+hackwin-report.json
+# hackwin:end
+
+node_modules/
+dist/
