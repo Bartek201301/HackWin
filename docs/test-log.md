@@ -17,6 +17,27 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-12 · Phase 1 · Foundation follow-up: parseBranch, Config and the decisions of #36 and #38 (PR #39, issue #37)
+
+- Setup: one builder session (Claude Code) in the worktree `task/37-foundation-follow-up`, created by the integrator from `536c133` after the merge of #38, beside the session of 1.3d (#6); the first message named `gh issue view 37` and `gh issue view 37 --comments`. The integrator's planning session in the main checkout for the merge.
+- What happened:
+  - The session made one commit, `1a951b9` (10:50:37 UTC), and opened PR #39 at 10:51:25 UTC; main had not moved.
+  - The Lead reviewed the head, the CI run and the three files, found no test changed and the contracts entries matching item 3 and the scope change, and accepted the two deviations the PR describes. The merge request was typed directly, so no confirmation was needed.
+  - Merged with the procedure of the plan, section 8:
+    - Steps 1 to 5 passed: `docs/build/contracts.md`, `src/core/project/index.js` and `src/core/worktrees/index.js`, all inside issue #37's paths; no secret pattern; no conflict.
+    - Step 6: the head already contained main `536c133`. `npm ci` and `npm test` passed 197 of 197 on Node 25.8.1, and `npm run test:ac` for the five ids of issue #37 passed 20 tests. Inspection: no `taskIssueOf` and no `ProjectConfig` remain; `src/core/worktrees` imports `parseBranch`, `src/core/project` imports the type `Config`, and section 6.4 names `builder2` as `maljul`.
+    - Main had not moved, and the merge was pinned to the head SHA. The remote branch and both worktrees were removed.
+- Problems, from the PR's "Workflow notes" and "Remaining limitations":
+  - `gh issue view 37 --comments` again printed only the comment, not the body. The first message named both commands, so no time was lost.
+  - `parseBranch` and the removed `taskIssueOf` differ on branch names that `branchName` never makes: `task/0` and `task/0-x` now give issue 0, `task/05-x` gives issue 5, and `task/5-a/b` gives no task. The issue said both "its behavior does not change" and "stop when `parseBranch` does not fit", so the session asked the human instead of choosing; the human chose `parseBranch`. No test covers these names.
+  - Unsupported glob syntax is a `ConfigError` in `owners.yml` and the `paths` groups, but makes a task block invalid in `parseTaskBlock`; the contracts record both, as 1.3b's code does.
+- Measured:
+  - PR open 11 min 6 s (10:51:25 to 11:02:31 UTC), including the Lead's review.
+  - 1 commit, 1 PR run (38 s: `node 24` 23 s, `node 22` 30 s, `test` 4 s), 0 conflicts.
+  - Local merge test: `npm test` 11.62 s.
+  - The run on main after the merge: 39 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/39; head `1a951b9`; merge commit `ef15bb4`; runs `38238935495` (PR) and `38240108915` (main).
+
 ### 2026-10-12 · Phase 1 · Step 1.3b, configuration, ownership, tasks, secret scan, version check (PR #38, issue #4)
 
 - Setup: one builder session (Claude Code) in the worktree `task/4-foundation-configuration-tasks`, created by the integrator from `218091d` after the merge of #33, beside the session of 1.3c (#5); the integrator's planning session in the main checkout for the merge.
