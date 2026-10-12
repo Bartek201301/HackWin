@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { Readable } from 'node:stream'
-import { main } from '../../../src/cli/main.js'
 import {
   accounts,
   createFakeGitHub,
@@ -8,104 +6,13 @@ import {
   hackwinObject,
   yaml,
 } from '../../harness/index.js'
+import { blockBody, pull, take, task } from './helpers.js'
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
-/** @typedef {import('../../harness/index.js').FakeGitHub} FakeGitHub */
 
 const LEAD = accounts.lead.login
 const BUILDER1 = accounts.builder1.login // counter, todos
 const BUILDER2 = accounts.builder2.login // greeting
-
-const DEADLINE = '2026-10-25T12:00:00+02:00'
-
-/**
- * The body of a task issue written by hand from the template (8.1).
- * @param {{ role: string, paths: string[], depends_on?: number[], wave?: number | null, deadline?: string }} block
- */
-function taskBody({ role, paths, depends_on = [], wave = 1, deadline = DEADLINE }) {
-  const data = { kind: 'task', role, ...(wave === null ? {} : { wave }), paths, depends_on }
-  return blockBody(
-    yaml({ ...data, acceptance_tests: ['test/features.test.js'], deadline }).trimEnd(),
-  )
-}
-
-/** @param {string} yamlText The block without the marker line. */
-function blockBody(yamlText) {
-  return [
-    '```yaml',
-    '# hackwin:task',
-    yamlText,
-    '```',
-    '',
-    '## Problem',
-    'Something is missing.',
-    '',
-    '## Expected result',
-    'It exists.',
-    '',
-    '## Acceptance criteria',
-    '- It works.',
-    '',
-    '## Out of scope',
-    '- Everything else.',
-  ].join('\n')
-}
-
-/**
- * A task issue for the fake GitHub.
- * @param {number} number
- * @param {Parameters<typeof taskBody>[0] & { title?: string, labels?: string[], assignees?: string[], state?: 'open' | 'closed' }} options
- */
-function task(number, { title, labels = ['ready'], assignees = [], state, ...block }) {
-  return {
-    number,
-    title: title ?? `Task ${number}`,
-    body: taskBody(block),
-    labels,
-    assignees,
-    ...(state ? { state } : {}),
-  }
-}
-
-/**
- * An open pull request that changes these files.
- * @param {number} number
- * @param {Array<string | { path: string, previousPath: string }>} files
- */
-function pull(number, files) {
-  return {
-    number,
-    title: `Pull request ${number}`,
-    head: `task/${number - 1}-other`,
-    files: files.map((file) =>
-      typeof file === 'string'
-        ? { path: file, status: 'modified', previousPath: null }
-        : { path: file.path, status: 'renamed', previousPath: file.previousPath },
-    ),
-  }
-}
-
-/**
- * Run `hackwin take` in-process in a checkout, as this login, against the fake GitHub.
- * @param {Fixture} fixture
- * @param {string} cwd
- * @param {FakeGitHub} fake
- * @param {string} login
- * @param {string[]} [args]
- */
-async function take(fixture, cwd, fake, login, args = []) {
-  let stdout = ''
-  let stderr = ''
-  const code = await main(['take', ...args], {
-    cwd,
-    env: fixture.env,
-    stdin: Readable.from([]),
-    stdout: { write: (chunk) => (stdout += chunk) },
-    stderr: { write: (chunk) => (stderr += chunk) },
-    ghExecutor: fake.as(login),
-  })
-  return { code, stdout, stderr }
-}
 
 /** @type {Fixture} */
 let fixture
@@ -263,11 +170,14 @@ describe('AC13: take without a number picks the first takeable task of the queue
     })
     const result = await take(fixture, clones.builder1, fake, BUILDER1)
     expect(result.code).toBe(0)
-    expect(result.stdout.trimEnd().split('\n')).toEqual([
+    expect(result.stdout.trimEnd().split('\n').slice(0, 4)).toEqual([
       'skipped #10 Counter reset: blocked by #2, still open',
       'skipped #11 Todo list: path collision with PR #20: src/features/todos/list/item.js',
       'selected #13 Todo filter (role todos)',
+      `claimed #13: in-progress, assigned to ${BUILDER1}, labeled role:todos`,
     ])
+    expect(fake.find(13)?.labels).toContain('in-progress')
+    expect(fake.find(10)?.labels).toEqual(['ready'])
   })
 
   test('--json gives the selected task and every skipped task with its check and reason', async () => {
@@ -364,14 +274,16 @@ describe('AC53: after a role swap is merged on main, the new holder can take the
   afterAll(() => swap.cleanup())
 
   test('the role greeting moves from builder2 to builder1', async () => {
-    const fake = createFakeGitHub({
-      issues: [
-        task(4, { title: 'Greeting', role: 'greeting', paths: ['src/features/greeting/**'] }),
-      ],
-    })
+    // A fresh GitHub for each take: a take that succeeds claims the task.
+    const fresh = () =>
+      createFakeGitHub({
+        issues: [
+          task(4, { title: 'Greeting', role: 'greeting', paths: ['src/features/greeting/**'] }),
+        ],
+      })
 
-    expect((await take(swap, swapClones.builder2, fake, BUILDER2, ['4'])).code).toBe(0)
-    expect((await take(swap, swapClones.builder1, fake, BUILDER1, ['4'])).code).toBe(1)
+    expect((await take(swap, swapClones.builder2, fresh(), BUILDER2, ['4'])).code).toBe(0)
+    expect((await take(swap, swapClones.builder1, fresh(), BUILDER1, ['4'])).code).toBe(1)
 
     // The swap: one line per member in hackwin.yml, merged on main (3.4).
     const hackwin = hackwinObject(3)
@@ -379,18 +291,18 @@ describe('AC53: after a role swap is merged on main, the new holder can take the
     hackwin.team.members[2].roles = ['todos']
     await swap.publish({ 'hackwin.yml': yaml(hackwin) }, { message: 'Swap greeting and todos' })
 
-    const newHolder = await take(swap, swapClones.builder1, fake, BUILDER1, ['4'])
+    const newHolder = await take(swap, swapClones.builder1, fresh(), BUILDER1, ['4'])
     expect(newHolder.code).toBe(0)
     expect(newHolder.stdout).toContain('selected #4 Greeting (role greeting)')
-    const fromQueue = await take(swap, swapClones.builder1, fake, BUILDER1)
+    const fromQueue = await take(swap, swapClones.builder1, fresh(), BUILDER1)
     expect(fromQueue.stdout).toContain('selected #4 Greeting (role greeting)')
 
-    const previous = await take(swap, swapClones.builder2, fake, BUILDER2, ['4'])
+    const previous = await take(swap, swapClones.builder2, fresh(), BUILDER2, ['4'])
     expect(previous.code).toBe(1)
     expect(previous.stderr).toContain(
       `#4 is a task of the role greeting, which ${BUILDER1} holds on main; you hold todos`,
     )
-    const previousQueue = await take(swap, swapClones.builder2, fake, BUILDER2)
+    const previousQueue = await take(swap, swapClones.builder2, fresh(), BUILDER2)
     expect(previousQueue.stdout).toContain('queue empty')
   })
 })

@@ -1,10 +1,10 @@
-// What the checks of `take` read from GitHub: the open task issues, the state of each dependency
-// and the files of every open pull request. Each list is read once per run and only when a
-// check needs it, so a task that fails an early check costs no pull request calls.
+// What `take` reads from GitHub: the open task issues, the state of each dependency, the open
+// pull requests and the files of each. Each list is read once per run and only when a step needs
+// it, so a task that fails an early check costs no pull request calls.
 
 import { toTask } from '../../core/tasks/index.js'
 
-/** @import { GitHub, Issue } from '../../core/github/index.js' */
+/** @import { GitHub, Issue, PullRequest } from '../../core/github/index.js' */
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { Task } from '../../core/tasks/index.js' */
 
@@ -20,7 +20,9 @@ import { toTask } from '../../core/tasks/index.js'
  * @property {() => Promise<Task[]>} tasks The open task issues, valid or not, by number.
  * @property {(number: number) => Promise<Issue | null>} issue An issue by number; null when it
  *   does not exist.
- * @property {() => Promise<OpenPull[]>} pulls The open pull requests, drafts included.
+ * @property {() => Promise<PullRequest[]>} openPulls The open pull requests, drafts included,
+ *   by number.
+ * @property {() => Promise<OpenPull[]>} pulls The open pull requests with the paths each changes.
  */
 
 /**
@@ -33,12 +35,18 @@ export function createBoard(github, config) {
   let openIssues
   /** @type {Promise<Task[]> | undefined} */
   let tasks
+  /** @type {Promise<PullRequest[]> | undefined} */
+  let openPulls
   /** @type {Promise<OpenPull[]> | undefined} */
   let pulls
   /** @type {Map<number, Promise<Issue | null>>} */
   const issues = new Map()
 
   const listOpen = () => (openIssues ??= github.listIssues({ state: 'open' }))
+  const listOpenPulls = () =>
+    (openPulls ??= github
+      .listPullRequests({ state: 'open' })
+      .then((list) => list.sort((a, b) => a.number - b.number)))
 
   return {
     tasks() {
@@ -62,18 +70,18 @@ export function createBoard(github, config) {
       return found
     },
 
+    openPulls: listOpenPulls,
+
     pulls() {
-      pulls ??= github.listPullRequests({ state: 'open' }).then((list) =>
+      pulls ??= listOpenPulls().then((list) =>
         Promise.all(
-          list
-            .sort((a, b) => a.number - b.number)
-            .map(async (pull) => ({
-              number: pull.number,
-              title: pull.title,
-              paths: (await github.listPullRequestFiles(pull.number)).flatMap((file) =>
-                file.previousPath ? [file.path, file.previousPath] : [file.path],
-              ),
-            })),
+          list.map(async (pull) => ({
+            number: pull.number,
+            title: pull.title,
+            paths: (await github.listPullRequestFiles(pull.number)).flatMap((file) =>
+              file.previousPath ? [file.path, file.previousPath] : [file.path],
+            ),
+          })),
         ),
       )
       return pulls
