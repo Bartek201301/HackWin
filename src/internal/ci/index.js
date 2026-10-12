@@ -18,6 +18,9 @@
 // checkout, which the workflow checks out at that commit. Its own changes are therefore the
 // three-dot diff against the base branch. The diff against MERGE_HEAD of 10.2 is the form for
 // uncommitted work during a merge (the pre-commit hook); a pushed head commit has none.
+//
+// The GitHub token reaches only the gh calls of internal ci and its fetch of the base branch,
+// never the project's commands, which run code from the pull request (token.js).
 
 import semver from 'semver'
 import { REPOSITORY_URL } from '../../cli/context.js'
@@ -35,10 +38,11 @@ import { checkTaskLink, parseTaskBlock, parseTaskLink } from '../../core/tasks/i
 import { readPullEvent } from './event.js'
 import { checkMergedTree } from './merged.js'
 import { RULES, STEPS, fail, plural, report } from './steps.js'
+import { fetchAuth, githubWithToken, takeToken } from './token.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config } from '../../core/config/index.js' */
-/** @import { PullRequest } from '../../core/github/index.js' */
+/** @import { GitHub, PullRequest } from '../../core/github/index.js' */
 /** @import { TaskBlock } from '../../core/tasks/index.js' */
 /** @import { StepResult } from './steps.js' */
 
@@ -47,8 +51,11 @@ import { RULES, STEPS, fail, plural, report } from './steps.js'
  * @returns {Promise<CommandResult>}
  */
 export async function run(ctx) {
+  // Before anything runs: the token reaches only the gh calls and the fetch below.
+  const token = takeToken(ctx)
+  const github = githubWithToken(ctx.github, token)
   const event = await readPullEvent(ctx.env)
-  const pull = await ctx.github.getPullRequest(event.number)
+  const pull = await github.getPullRequest(event.number)
   if (pull === null) {
     throw new PreconditionError(`pull request #${event.number} does not exist`, {
       resolve: 'run the check again on an open pull request',
@@ -72,7 +79,8 @@ export async function run(ctx) {
   const results = []
   const base = pull.baseRef
   const baseRef = `origin/${base}`
-  await ctx.git.fetch({
+  const auth = fetchAuth(await ctx.git.remoteUrl('origin'), token)
+  await ctx.git.with({ env: { ...ctx.env, ...auth } }).fetch({
     remote: 'origin',
     refspecs: [`+refs/heads/${base}:refs/remotes/${baseRef}`],
   })
@@ -82,7 +90,7 @@ export async function run(ctx) {
   const paths = [...new Set(changed.flatMap((file) => [file.oldPath ?? file.path, file.path]))]
 
   const config = await checkConfiguration(ctx, results, { pull, head, baseRef, paths })
-  const block = await checkTaskLinkStep(ctx, results, { pull, config })
+  const block = await checkTaskLinkStep(ctx, results, { github, pull, config })
   await checkScope(ctx, results, { pull, config, paths, baseRef })
   await checkSecrets(ctx, results, { config, head, baseRef })
   await checkMergedTree(ctx, results, { pull, config, head, baseRef, changed, block })
@@ -148,11 +156,11 @@ async function checkConfiguration(ctx, results, { pull, head, baseRef, paths }) 
  * block (E11), and never from a `spike/` branch (E16).
  * @param {CommandContext} ctx
  * @param {StepResult[]} results
- * @param {{ pull: PullRequest, config: Config }} input
+ * @param {{ github: GitHub, pull: PullRequest, config: Config }} input
  * @returns {Promise<TaskBlock & { number: number }>} The block of the task.
  */
-async function checkTaskLinkStep(ctx, results, { pull, config }) {
-  const link = await checkTaskLink(ctx.github, config, pull)
+async function checkTaskLinkStep(ctx, results, { github, pull, config }) {
+  const link = await checkTaskLink(github, config, pull)
   const branch = `branch ${pull.headRef}`
   if (!link.ok) {
     switch (link.reason) {
@@ -186,7 +194,7 @@ async function checkTaskLinkStep(ctx, results, { pull, config }) {
       }
       case 'invalid-task-block': {
         const number = /** @type {number} */ (linkedIssue(pull))
-        const issue = await ctx.github.getIssue(number)
+        const issue = await github.getIssue(number)
         const parsed = issue ? parseTaskBlock(issue.body, config) : null
         const errors = parsed?.isTask && !parsed.valid ? parsed.errors : ['no # hackwin:task block']
         return failLink(
@@ -198,7 +206,7 @@ async function checkTaskLinkStep(ctx, results, { pull, config }) {
       }
     }
   }
-  const issue = await ctx.github.getIssue(link.issue)
+  const issue = await github.getIssue(link.issue)
   const parsed = issue && parseTaskBlock(issue.body, config)
   if (!parsed?.isTask || !parsed.valid) {
     // The issue changed between the two reads.

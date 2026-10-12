@@ -85,6 +85,11 @@ const TOOLS = {
     const count = readdirSync('src/features/counter').length
     writeFileSync('src/shared/counter-files.txt', count + '\\n')
   `,
+  // Writes the environment it runs with into the file named by its first argument.
+  'tools/record-env.mjs': `
+    import { writeFileSync } from 'node:fs'
+    writeFileSync(process.argv[2], JSON.stringify(process.env))
+  `,
   [SHARED_TEST]: 'PASS\n',
 }
 
@@ -181,6 +186,17 @@ export function sceneConfig(change) {
 export const GENERATE = `${NODE} tools/generate.mjs`
 
 /**
+ * A command that first records its environment into a file, then runs `command`, which gets
+ * the appended files.
+ * @param {string} file An absolute path outside the repository.
+ * @param {string} [command]
+ */
+export function recordingEnv(file, command) {
+  const record = `${NODE} tools/record-env.mjs ${quoteShellArg(file)}`
+  return command ? `${record} && ${command}` : record
+}
+
+/**
  * @typedef {object} PullInput
  * @property {string} branch The head branch.
  * @property {string} head The head commit, pushed to the branch on the origin.
@@ -189,7 +205,23 @@ export const GENERATE = `${NODE} tools/generate.mjs`
  * @property {number} [number] 30 by default.
  * @property {string} [checkoutAt] The commit the clone checks out; the head by default.
  * @property {boolean} [event] False runs without GITHUB_EVENT_PATH.
+ * @property {Record<string, string>} [env] More variables for the run, such as GH_TOKEN.
  */
+
+/**
+ * The environment of the process without the variables of a GitHub Actions runner: on the runner
+ * that tests this repository, GITHUB_EVENT_PATH names the event of that run, which a test's own
+ * run of internal ci must never read.
+ * @param {Record<string, string | undefined>} env
+ * @returns {Record<string, string | undefined>}
+ */
+export function withoutRunnerEnv(env) {
+  return Object.fromEntries(
+    Object.entries(env).filter(
+      ([key]) => key !== 'CI' && !key.startsWith('GITHUB_') && !key.startsWith('RUNNER_'),
+    ),
+  )
+}
 
 /**
  * @param {object} [options]
@@ -236,6 +268,7 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
       number = 30,
       checkoutAt = head,
       event = true,
+      env = {},
     }) {
       const issue = /^task\/(\d+)/.exec(branch)?.[1]
       const prBody = body ?? (issue ? `Closes #${issue}\n` : '')
@@ -271,15 +304,25 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
       )
       let stdout = ''
       let stderr = ''
+      /** @type {Array<{ args: string[], env: Record<string, string> }>} */
+      const ghCalls = []
       const code = await main(['internal', 'ci', '--json'], {
         cwd: checkout.path,
-        env: { ...hooks.env, ...(event ? { GITHUB_EVENT_PATH: eventFile } : {}), TMPDIR: tmp },
-        ghExecutor: fake.executor,
+        env: {
+          ...withoutRunnerEnv(hooks.env),
+          ...(event ? { GITHUB_EVENT_PATH: eventFile } : {}),
+          TMPDIR: tmp,
+          ...env,
+        },
+        ghExecutor: (args, call) => {
+          ghCalls.push({ args, env: { ...call?.env } })
+          return fake.executor(args, call)
+        },
         stdin: Readable.from(['']),
         stdout: { write: (chunk) => (stdout += chunk) },
         stderr: { write: (chunk) => (stderr += chunk) },
       })
-      return { code, json: JSON.parse(stdout), stderr, checkout, fake }
+      return { code, json: JSON.parse(stdout), stderr, checkout, fake, ghCalls }
     },
   }
 }

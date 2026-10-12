@@ -40,12 +40,16 @@ function installTemplate(prerelease) {
  * the commit the pull request started from (its merge base) and on its head commit, picks the
  * version as 10.2 says and installs it. The pull request changes `cli_version` when its head
  * differs from its merge base, so a newer version on the base branch is not its change.
- * `$version` holds only the characters of a version, so it needs no quotes.
+ * It reads the base branch as the checkout fetched it, with the whole history, and needs no
+ * credentials. `$version` holds only the characters of a version, so it needs no quotes.
  * @returns {string[]}
  */
 export function installScript() {
   return [
-    'git fetch --no-tags --quiet origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"',
+    'if ! git rev-parse --verify --quiet "refs/remotes/origin/$BASE_REF" >/dev/null; then',
+    '  echo "the checkout holds no origin/$BASE_REF" >&2',
+    '  exit 1',
+    'fi',
     '# cli_version of hackwin.yml at a commit, or nothing',
     'pinned() {',
     String.raw`  git show "$1:hackwin.yml" 2>/dev/null | sed -n -E "s/^cli_version:[[:space:]]*[\"']?([0-9A-Za-z.+-]+)[\"']?[[:space:]]*(#.*)?\$/\1/p" | sed -n 1p || true`,
@@ -93,7 +97,9 @@ export function renderWorkflow({ version }) {
     '# that the pull request itself sets as cli_version when that is a release of the same phase,',
     '# and runs `hackwin internal ci`: configuration, task link, scope of the author, secret scan,',
     '# generated files, merge with the current base branch, format check, the project check and',
-    "# the task's acceptance tests.",
+    "# the task's acceptance tests. The checkout keeps no credentials, and only the last step gets",
+    '# the token, which `hackwin internal ci` passes to its own GitHub calls and its fetch of the',
+    "# base branch, never to the project's commands, which run code from the pull request.",
     'name: hackwin',
     '',
     'on:',
@@ -118,6 +124,7 @@ export function renderWorkflow({ version }) {
     '        with:',
     '          ref: ${{ github.event.pull_request.head.sha }}',
     '          fetch-depth: 0',
+    '          persist-credentials: false',
     '',
     '      - name: Set up Node.js',
     '        uses: actions/setup-node@v7',

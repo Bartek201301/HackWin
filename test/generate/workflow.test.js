@@ -97,6 +97,7 @@ describe('1.4b/workflow: the generated CI workflow', () => {
     expect(steps[0].with).toEqual({
       ref: '${{ github.event.pull_request.head.sha }}',
       'fetch-depth': 0,
+      'persist-credentials': false,
     })
     expect(steps[1].with).toEqual({ 'node-version': 22 })
     expect(steps[2]).toMatchObject({
@@ -108,6 +109,30 @@ describe('1.4b/workflow: the generated CI workflow', () => {
       env: { GH_TOKEN: '${{ github.token }}' },
       run: 'hackwin internal ci',
     })
+  })
+})
+
+describe('1.4b/token: the token of the workflow', () => {
+  test('the checkout keeps no credentials, and only the step that runs hackwin internal ci gets the token', () => {
+    const text = renderWorkflow({ version: VERSION })
+    const steps = parse(text).jobs.hackwin.steps
+    expect(steps[0]).toMatchObject({
+      uses: 'actions/checkout@v7',
+      with: { 'persist-credentials': false },
+    })
+    const withToken = steps.filter((/** @type {any} */ step) =>
+      /github\.token|secrets\.|GH_TOKEN|GITHUB_TOKEN/.test(JSON.stringify(step)),
+    )
+    expect(withToken).toEqual([
+      {
+        name: 'Run the hackwin checks',
+        env: { GH_TOKEN: '${{ github.token }}' },
+        run: 'hackwin internal ci',
+      },
+    ])
+    // The install step reads the base branch from the checkout and needs no credentials.
+    expect(steps[2].run).not.toMatch(/git (fetch|pull|ls-remote)/)
+    expect(text.match(/\$\{\{ github\.token \}\}/g)).toHaveLength(1)
   })
 })
 
@@ -182,6 +207,21 @@ describe('1.4b/workflow: which version the install step installs', () => {
     expect(result.code).toBe(0)
     expect(result.npm).toEqual(['install -g hackwin@0.1.1'])
     expect(result.npm).toEqual([npmArgs('0.1.1')])
+  })
+
+  test('a checkout without the base branch stops the job before anything is installed', async () => {
+    const fixture = await createFixture({ files: { 'hackwin.yml': 'cli_version: 0.1.0-pre.3\n' } })
+    const ci = await fixture.clone('ci')
+    const result = await runInstallStep({
+      version: VERSION,
+      cwd: ci.path,
+      dir: join(fixture.dir, 'install'),
+      env: fixture.env,
+      baseRef: 'release',
+    })
+    expect(result.code).not.toBe(0)
+    expect(result.stderr).toContain('the checkout holds no origin/release')
+    expect(result.npm).toEqual([])
   })
 
   test('a base branch without a pinned version stops the job before anything is installed', async () => {
