@@ -17,6 +17,63 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-13 · Phase 1 · Step 1.6a, gate: process, lock, keep awake, state file, terminal input (PR #52, issue #20)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/20-gate-process-lock`, created by the integrator from `104c2f5` after the merge of #42, beside the sessions of #9, #12, #16, #19 and #41. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `14fb6de`, on `104c2f5`; PR #52 opened at 17:15:15 UTC; main had not moved.
+  - The fourth of the four merges. Steps 1 to 5 passed: 12 files inside issue #20's paths, the two `.gitkeep` files removed; no secret pattern; no conflict with `98ee1d7`, main after #48, #49 and #50. Step 6, with the PR merged into `98ee1d7`: `npm test` passed 417 of 417, and `npm run test:ac` passed AC30 (2), AC58 (3) and AC31/gate (2). Main had not moved, and the merge was pinned to the head SHA.
+  - After the four merges, from the Lead's review: scope changes on #17 (paths `src/commands/ship/**` and `test/commands/ship/**`; a half-done claim, a branch left by a failed `git worktree add -b`, a pull request from a fork's branch of the same name, the CLI version of a check record), #21 (`update_restricted` in the status block; a refusal at start when the status issue shows another Gate's fresh heartbeat, since the lock of #52 holds only within one clone), #22 and #23 (every stage boundary checks `gate.stopping`), #24 (a lock judged by its pid alone) and #46 (seven items; paths `src/core/worktrees/**`, `test/core/worktrees/**`, `AGENTS.md`, and `docs/build/plan.md`, which the integrator added for the item on plan section 9). The bodies of #17 and #46 got the new paths. Worktrees for #17 and #21 were created at `97bd1c5`. #46 waits until #9 or #35 has finished, so that fewer test suites run at once.
+- Problems, from the PR's "Workflow notes":
+  - `npm test` failed five times on the branch, each time only in `test/cli/test-ac.test.js`, whose tests spawn a nested `npm run test:ac` and timed out at 30 s. The 1-minute load average was between 15 and 103, with other task sessions and the Xcode tests of another project running. One run with the session's four test files moved out of the tree failed the same way. The head passed all 375 tests at a load average of 5.6; about 25 minutes were lost waiting. #35.
+  - To give the Gate a test pipeline, the tests build the context with `createContext` and `prepareContext` from `src/cli`, because `main()` takes no options for a command.
+  - The tests import `serveRulesets` from `test/core/protection/rulesets.js`, as contracts section 4.11 says. #46 moves the handlers into the harness.
+- Measured: PR open 6 h 58 min 41 s (17:15:15 to 00:13:56 UTC), including the Lead's review; 1 commit, 1 PR run (54 s), 0 conflicts; local merge test `npm test` 27.33 s; the run on main after the merge 66 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/52; head `14fb6de`; merge commit `97bd1c5`; runs `38282974545` (PR) and `38326214431` (main).
+
+### 2026-10-13 · Phase 1 · Step 1.4e, join (PR #50, issue #12)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/12-join`, created by the integrator from `a0610d7` after the merges of #44, #43 and #45. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9711b68`, on `a0610d7`, then a merge of `origin/main` at `104c2f5` (`90717e9`); PR #50 opened at 17:06:10 UTC.
+  - The third of the four merges. Steps 1 to 5 passed: 6 files inside issue #12's paths, the two `.gitkeep` files removed; no secret pattern; no conflict with `24c0c05`, main after #48 and #49. Step 6, with the PR merged into `24c0c05`: `npm test` passed 387 of 387, and `npm run test:ac` passed AC5 (2) and AC76/join (1). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes":
+  - After `git merge origin/main`, `npm test` failed twice: the tests of `1.3a/test-ac` timed out at 30 s, and alone that file timed out once (57 s). At 18:53 local time the 1-minute load average was 94.5 on 10 cores, with the vitest runs of three other worktrees and an Xcode build on the same machine. The session waited for a load average below 14, and then `npm test` passed. #35.
+  - Missing interface: `removeMergedWorktrees` (`src/core/worktrees`) gives each kept worktree's reason only as text, so `join` compares it with `its pull request is not merged`. #46 item 7 adds a field `merged`.
+  - `runInstall` (`src/core/project`) runs the install with `process.env`, not `ctx.env`; the tests of this task did not depend on it.
+- Measured: PR open 7 h 6 min 54 s (17:06:10 to 00:13:04 UTC), including the Lead's review; 2 commits (one a merge of `origin/main`), 1 PR run (61 s), 0 conflicts; local merge test `npm test` 26.70 s; the run on main after the merge 59 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/50; head `90717e9`; merge commit `98ee1d7`; runs `38281982065` (PR) and `38326142414` (main).
+
+### 2026-10-13 · Phase 1 · Step 1.5b, take: worktree, labels, prompt and agent start (PR #49, issue #16)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/16-take-worktree-prompt`, created by the integrator from `a0610d7` after the merges of #44, #43 and #45. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `921c44b`, on `a0610d7`, then a merge of `origin/main` at `104c2f5` (`5600a0f`); PR #49 opened at 17:00:36 UTC.
+  - The second of the four merges. Steps 1 to 5 passed: 9 files inside issue #16's paths; no secret pattern; no conflict with `ec239ce`, main after #48. Step 6, with the PR merged into `ec239ce`: `npm test` passed 371 of 371, and `npm run test:ac` passed AC11 (1), AC72 (1) and AC76/take (1). Main had not moved, and the merge was pinned to the head SHA.
+  - The Lead's review led to items 5 and 6 of the scope change on #17 and to the contracts item of #46 for section 3.5.
+- Problems, from the PR's "Workflow notes":
+  - Three of six full runs on the head failed, each only in `test/cli/test-ac.test.js` with "Test timed out in 30000ms" in the nested `npm run test:ac`. With `104c2f5` checked out, 2 of 3 runs failed the same way, so the timeout predates the change. #35.
+  - Contracts section 3.5 still says that with the caller kind `claude-code` `take` prints the prompt for the running session; the scope change on #16 replaced that. #46 item 9.
+  - `src/core/runtime/exec.js` has no mode with inherited stdio, so `take` starts Claude Code with `node:child_process` itself.
+  - The contracts name no local path for an install log of `take`, so `take` prints the last lines of the install output and writes no log.
+  - 7.7 step 7 does not cover the caller kind `non-interactive` or `--json`; the session decided to print the start command for both. #46 item 9.
+- Measured: PR open 7 h 11 min 33 s (17:00:36 to 00:12:09 UTC), including the Lead's review; 2 commits (one a merge of `origin/main`), 1 PR run (55 s), 0 conflicts; local merge test `npm test` 22.35 s; the run on main after the merge 57 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/49; head `5600a0f`; merge commit `24c0c05`; runs `38281345683` (PR) and `38326069526` (main).
+
+### 2026-10-13 · Phase 1 · Step 1.5e, ship: push, pull request, report and rerun (PR #48, issue #19)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/19-ship-push-pull-request`, created by the integrator from `a0610d7` after the merges of #44, #43 and #45. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `52e71ae`, on `a0610d7`, then a merge of `origin/main` at `104c2f5` (`976a1ae`); PR #48 opened at 16:36:43 UTC.
+  - The Lead asked for the merges of #48, #49, #50 and #52 in that order, in pasted text; the integrator ran steps 1 to 5 and 7 on all four read-only, then asked for and got a confirmation. #51 stays held: its CI is red, and #9 is fixing it.
+  - The first of the four merges. Steps 1 to 5 passed: 7 files inside issue #19's paths; no secret pattern; no conflict with `104c2f5`. Step 6, with the PR merged into `104c2f5`: `npm test` passed 356 of 356, and `npm run test:ac` passed AC16 (6). Main had not moved, and the merge was pinned to the head SHA.
+  - The Lead's review led to items 7 and 8 of the scope change on #17 and to the contracts item of #46 for `gh pr ready`.
+- Problems, from the PR's "Workflow notes":
+  - The fake GitHub does not answer `gh pr ready`, so the test registers its own handler. `docs/verification.md` does not record that call's form. #46 item 9.
+  - Sharing the 1.5d test scene with the new test file meant moving the helpers out of `ship.test.js`, a file of an earlier task of the same lane, into `test/commands/ship/scene.js`.
+- Measured: PR open 7 h 34 min 25 s (16:36:43 to 00:11:08 UTC), including the Lead's review; 2 commits (one a merge of `origin/main`), 1 PR run (53 s), 0 conflicts; local merge test `npm test` 20.31 s; the run on main after the merge 55 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/48; head `976a1ae`; merge commit `ec239ce`; runs `38278613847` (PR) and `38325985282` (main).
+
 ### 2026-10-12 · Phase 1 · Step 1.3e, the protection state reader (PR #42, issue #7)
 
 - Setup: one builder session (Claude Code) in the worktree `task/7-protection-state-reader`, created by the integrator from `0468baa` at the start of wave 2, with `HACKWIN_TEST_BUILDER_TOKEN` set in its terminal. The integrator's planning session for the merge, without that variable.
