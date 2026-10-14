@@ -85,10 +85,11 @@ export function manualClock(start = '2026-10-24T10:00:00.000Z') {
  * The fake GitHub with the rule sets that `setup` creates: the protection state is
  * `full-restricted`, and the Lead can bypass only the update restriction.
  * @param {any[]} [rulesets]
+ * @param {Parameters<typeof createFakeGitHub>[0]} [initial] The rest of the fake's state.
  * @returns {FakeGitHub}
  */
-export function leadGitHub(rulesets = [branchRulesBody(), updateRestrictionBody()]) {
-  const fake = createFakeGitHub()
+export function leadGitHub(rulesets = [branchRulesBody(), updateRestrictionBody()], initial = {}) {
+  const fake = createFakeGitHub(initial)
   serveRulesets(fake, rulesets)
   return fake
 }
@@ -116,15 +117,16 @@ export function startMain(fixture, options) {
  * Start the Gate with its options (a pipeline, a keep awake), on a context that the runner
  * prepared as for `hackwin gate` in a terminal. `done` settles with the result.
  * @param {Fixture} fixture
- * @param {{ fake: FakeGitHub, login: string, clock?: ManualClock, io?: Terminal, options?: import('../../../src/commands/gate/gate.js').GateOptions, prepare?: (ctx: any) => void }} setup
+ * @param {{ fake: FakeGitHub, login: string, clock?: ManualClock, io?: Terminal, options?: import('../../../src/commands/gate/gate.js').GateOptions, prepare?: (ctx: any) => void, cwd?: string }} setup
+ *   `cwd` is a checkout of another clone; the main checkout by default.
  */
 export async function startDirect(fixture, setup) {
-  const { fake, login, clock = manualClock(), io = terminal() } = setup
+  const { fake, login, clock = manualClock(), io = terminal(), cwd = fixture.main } = setup
   const ctx = await createContext({
     command: 'gate',
     args: [],
     flags: {},
-    cwd: fixture.main,
+    cwd,
     env: fixture.env,
     stdin: io.stdin,
     stdoutIsTTY: true,

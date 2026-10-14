@@ -1,7 +1,7 @@
-// The Gate process (7.5; 9.1 G1 to G6, G24): its own process in its own terminal on the Lead's
-// laptop, which never touches an agent conversation. It takes the lock, counts the start, keeps
-// the laptop awake, loads the state file and polls every `gate.poll_seconds` until the Lead types
-// `quit`.
+// The Gate process (7.5; 9.1 G1 to G6, G24, G25): its own process in its own terminal on the
+// Lead's laptop, which never touches an agent conversation. It takes the lock, counts the start,
+// keeps the laptop awake, loads the state file, writes the status issue and polls every
+// `gate.poll_seconds` until the Lead types `quit`.
 //
 // The poll loop and the pull request pipeline run side by side: a poll writes the heartbeat,
 // fetches origin and runs the intake, while one pull request at a time goes through the stages,
@@ -9,6 +9,7 @@
 // (G5). The pipeline of section 9 plugs into the loop (`Pipeline`); without it the Gate polls but
 // takes no pull request.
 
+import { hostname } from 'node:os'
 import { readProtection } from '../../core/protection/index.js'
 import { PreconditionError, runIn } from '../../core/runtime/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
@@ -16,14 +17,22 @@ import { startKeepAwake } from './awake.js'
 import { INPUT_HELP, readCommands } from './input.js'
 import { acquireLock, releaseLock, runningGate } from './lock.js'
 import { gateFiles, loadState, readHeartbeat, saveState, writeHeartbeat } from './state.js'
+import {
+  createStatusPublisher,
+  findStatusIssue,
+  otherGateHeartbeat,
+  parseStatusBody,
+} from './status-issue.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { Git } from '../../core/git/index.js' */
+/** @import { Issue } from '../../core/github/index.js' */
 /** @import { Protection } from '../../core/protection/index.js' */
 /** @import { KeepAwake, StartKeepAwake } from './awake.js' */
 /** @import { TypedCommand } from './input.js' */
 /** @import { GateFiles, GateState } from './state.js' */
+/** @import { StatusPublisher } from './status-issue.js' */
 
 /** The longest wait between two looks at the clock and at `quit`. */
 const TICK_MS = 1000
@@ -47,6 +56,8 @@ const TICK_MS = 1000
  * @property {Git} git Git in this checkout with the member hooks switched off (10.3).
  * @property {GateFiles} files
  * @property {GateState} state
+ * @property {Protection} protection The latest protection read, which the status issue shows.
+ * @property {string} machine The host name, which the status issue shows.
  * @property {Set<number>} retries The pull requests the Lead typed `retry` for, until the intake
  *   queues them again.
  * @property {number | null} running The pull request whose run is under way.
@@ -56,7 +67,8 @@ const TICK_MS = 1000
  * @property {(text: string) => void} line Prints a line with the time as hours and minutes.
  * @property {(pr: number, stage: string) => Promise<void>} stage Records a stage change.
  * @property {() => Promise<void>} save Writes the state file.
- * @property {(stoppedAt?: string | null) => Promise<void>} beat Renews the heartbeat.
+ * @property {(stoppedAt?: string | null, at?: string) => Promise<void>} beat Renews the local
+ *   heartbeat, with the time `at`, now by default.
  */
 
 /**
@@ -64,6 +76,7 @@ const TICK_MS = 1000
  * @property {Pipeline} [pipeline] The stages; none by default.
  * @property {StartKeepAwake} [keepAwake]
  * @property {number} [pid] The process of the Gate; this one by default.
+ * @property {string} [machine] The host name for the status issue; this machine's by default.
  */
 
 /**
@@ -74,6 +87,7 @@ const TICK_MS = 1000
  */
 export async function startGate(ctx, options = {}) {
   const { pipeline = {}, keepAwake = startKeepAwake, pid = process.pid } = options
+  const machine = options.machine ?? hostname().split('.')[0]
   const { config, identity } = prepared(ctx)
   const lead = config.hackwin.team.lead
   if (!identity.isLead) {
@@ -109,6 +123,8 @@ export async function startGate(ctx, options = {}) {
       branch: config.hackwin.project.default_branch,
     })
     requireOnlyUpdateBypass(protection)
+    const issue = await findStatusIssue(ctx.github)
+    await refuseOtherGate({ ctx, config, files, issue, main, machine })
 
     const { state, kept } = await loadState(files.state, ctx.clock.now())
     if (kept !== null) {
@@ -119,7 +135,7 @@ export async function startGate(ctx, options = {}) {
     state.starts += 1
     await saveState(files.state, state)
 
-    const gate = createGate({ ctx, config, files, state, pid })
+    const gate = createGate({ ctx, config, files, state, pid, protection, machine })
     awake = await keepAwake({
       pid,
       onLost: (reason) =>
@@ -130,14 +146,18 @@ export async function startGate(ctx, options = {}) {
         `the Gate cannot keep this laptop awake: ${awake.reason}; merges wait while it sleeps`,
       )
     }
-    for (const text of headerLines({ gate, protection, awake, pid, pipeline })) ctx.out.line(text)
+    // The first heartbeat in the status issue clears the stop time of the last `quit` (7.5 step 6).
+    const status = createStatusPublisher(gate, issue)
+    await status.publish()
+    await gate.save()
+    for (const text of headerLines({ gate, status, awake, pid, pipeline })) ctx.out.line(text)
 
     input = readCommands(ctx.stdin, (command) => onCommand(gate, command))
-    await runLoop(gate, pipeline)
+    await runLoop(gate, pipeline, status)
 
     const stoppedAt = ctx.clock.now().toISOString()
+    await status.publish({ stoppedAt })
     await gate.save()
-    await gate.beat(stoppedAt)
     return {
       lines: [
         `${hoursAndMinutes(ctx.clock.now())} Gate stopped; to start it again, ${runIn('hackwin gate', main)}`,
@@ -194,10 +214,42 @@ function requireOnlyUpdateBypass({ rules }) {
 }
 
 /**
- * @param {{ ctx: CommandContext, config: Config, files: GateFiles, state: GateState, pid: number }} parts
+ * One Gate per project (G2): the lock holds only within one clone, so a start also refuses while
+ * the status issue shows the fresh heartbeat of a Gate that has not stopped, unless this clone's
+ * own Gate wrote it, as before a crash.
+ * @param {{ ctx: CommandContext, config: Config, files: GateFiles, issue: Issue | null, main: string, machine: string }} parts
+ */
+async function refuseOtherGate({ ctx, config, files, issue, main, machine }) {
+  if (issue === null) return
+  const stale = config.hackwin.gate.heartbeat_stale_seconds
+  const now = ctx.clock.now()
+  const other = otherGateHeartbeat(parseStatusBody(issue.body), {
+    local: await readHeartbeat(files.heartbeat),
+    now,
+    staleSeconds: stale,
+  })
+  if (other === null) return
+  const where =
+    other.machine === null
+      ? 'on another machine or in another clone'
+      : other.machine === machine
+        ? `in another clone on this machine (${machine})`
+        : `on the machine ${other.machine}`
+  const staleAt = new Date(Date.parse(other.heartbeat_at) + stale * 1000).toISOString()
+  throw new PreconditionError(
+    `another Gate is running ${where}: the status issue #${issue.number} shows its heartbeat of ${other.heartbeat_at}, ${other.age_seconds} s old, and no stop; there is one Gate per project`,
+    {
+      resolve: `type \`quit\` in that Gate's terminal; if it no longer runs, wait until ${staleAt}, when its heartbeat is ${stale} s old; then ${runIn('hackwin gate', main)}`,
+      details: { status_issue: issue.number, ...other },
+    },
+  )
+}
+
+/**
+ * @param {{ ctx: CommandContext, config: Config, files: GateFiles, state: GateState, pid: number, protection: Protection, machine: string }} parts
  * @returns {Gate}
  */
-function createGate({ ctx, config, files, state, pid }) {
+function createGate({ ctx, config, files, state, pid, protection, machine }) {
   // State and heartbeat writes run one after another, each with the state of its turn.
   let writes = Promise.resolve()
   /** @param {() => Promise<void>} write */
@@ -220,6 +272,8 @@ function createGate({ ctx, config, files, state, pid }) {
     git: ctx.git.with({ hooksOff: true }),
     files,
     state,
+    protection,
+    machine,
     retries: new Set(),
     running: null,
     stopping: false,
@@ -235,11 +289,11 @@ function createGate({ ctx, config, files, state, pid }) {
       await Promise.all([gate.beat(), gate.save()])
     },
     save: () => serial(() => saveState(files.state, state)),
-    beat: (stoppedAt = null) =>
+    beat: (stoppedAt = null, at = ctx.clock.now().toISOString()) =>
       serial(() =>
         writeHeartbeat(files.heartbeat, {
           pid,
-          heartbeat_at: ctx.clock.now().toISOString(),
+          heartbeat_at: at,
           last_github_ok_at: state.last_github_ok_at,
           stopped_at: stoppedAt,
         }),
@@ -249,19 +303,23 @@ function createGate({ ctx, config, files, state, pid }) {
 }
 
 /**
- * The poll loop (G24): a poll every `gate.poll_seconds` until `quit`, then the end of the step
- * under way: the poll, or the stage of the running pull request.
+ * The poll loop (G24): a poll every `gate.poll_seconds` and an edit of the status issue every
+ * `gate.status_issue_seconds` (G25) until `quit`, then the end of the step under way: the poll,
+ * the edit, or the stage of the running pull request.
  * @param {Gate} gate
  * @param {Pipeline} pipeline
+ * @param {StatusPublisher} status
  * @returns {Promise<void>}
  */
-async function runLoop(gate, pipeline) {
+async function runLoop(gate, pipeline, status) {
   const { clock } = gate.ctx
   const interval = gate.config.hackwin.gate.poll_seconds * 1000
   /** @type {Promise<void> | null} */
   let polling = null
   /** @type {Promise<void> | null} */
   let working = null
+  /** @type {Promise<unknown> | null} */
+  let editing = null
   const run = pipeline.run
 
   const work = async () => {
@@ -302,10 +360,17 @@ async function runLoop(gate, pipeline) {
         startWork()
       })
     }
-    const wait = Math.max(0, Math.min(TICK_MS, next - clock.now().getTime()))
+    if (editing === null && clock.now().getTime() >= status.nextAt) {
+      editing = status.publish().finally(() => {
+        editing = null
+      })
+    }
+    // While an edit is under way the next one cannot be due.
+    const due = editing === null ? Math.min(next, status.nextAt) : next
+    const wait = Math.max(0, Math.min(TICK_MS, due - clock.now().getTime()))
     await Promise.race([clock.sleep(wait), gate.stopped])
   }
-  await Promise.all([polling, working])
+  await Promise.all([polling, working, editing])
 }
 
 /**
@@ -405,22 +470,22 @@ function retry(gate, pr) {
 
 /**
  * The header (7.5 step 7).
- * @param {{ gate: Gate, protection: Protection, awake: KeepAwake, pid: number, pipeline: Pipeline }} parts
+ * @param {{ gate: Gate, status: StatusPublisher, awake: KeepAwake, pid: number, pipeline: Pipeline }} parts
  * @returns {string[]}
  */
-function headerLines({ gate, protection, awake, pid, pipeline }) {
-  const { ctx, config, state } = gate
+function headerLines({ gate, status, awake, pid, pipeline }) {
+  const { ctx, config, state, protection } = gate
   const { gated } = config.hackwin.paths
   const restarts = state.starts > 1 ? `, restart ${state.starts - 1}` : ''
   const queued = state.queue.length
-  const issue = state.status_issue.number
+  const issue = status.issue
   const lines = [
     `${hoursAndMinutes(ctx.clock.now())} Gate started: start ${state.starts}${restarts}, pid ${pid}`,
     `protection: ${protection.state}`,
     'resolver: none',
     `poll: every ${config.hackwin.gate.poll_seconds} s`,
     `queue: ${queued} pull ${queued === 1 ? 'request' : 'requests'}`,
-    `status issue: ${issue === null ? 'not created yet' : issueLink(ctx, issue)}`,
+    `status issue: ${issue === null ? 'not created yet' : `#${issue.number} ${issue.url}`}`,
     `keep awake: ${awake.active ? awake.command : 'off'}`,
   ]
   if (gated.migrations.length === 0 && gated.production_config.length === 0) {
@@ -433,16 +498,6 @@ function headerLines({ gate, protection, awake, pid, pipeline }) {
   }
   lines.push(INPUT_HELP)
   return lines
-}
-
-/**
- * @param {CommandContext} ctx
- * @param {number} number
- */
-function issueLink(ctx, number) {
-  return ctx.github.repo
-    ? `#${number} https://github.com/${ctx.github.repo}/issues/${number}`
-    : `#${number}`
 }
 
 /**

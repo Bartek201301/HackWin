@@ -49,9 +49,15 @@ afterEach(async () => {
 
 /**
  * Start a Gate with a pipeline, after writing a state whose queue holds PR.
- * @param {{ pipeline?: Pipeline, queued?: boolean, keepAwake?: any, prepare?: (ctx: any) => void }} [options]
+ * @param {{ pipeline?: Pipeline, queued?: boolean, keepAwake?: any, prepare?: (ctx: any) => void, fake?: import('../../harness/index.js').FakeGitHub }} [options]
  */
-async function start({ pipeline = {}, queued = false, keepAwake = noKeepAwake, prepare } = {}) {
+async function start({
+  pipeline = {},
+  queued = false,
+  keepAwake = noKeepAwake,
+  prepare,
+  fake = leadGitHub(),
+} = {}) {
   if (queued) {
     const state = emptyState()
     state.queue = [PR]
@@ -59,7 +65,7 @@ async function start({ pipeline = {}, queued = false, keepAwake = noKeepAwake, p
     await saveState(files.state, state)
   }
   const gate = await startDirect(fixture, {
-    fake: leadGitHub(),
+    fake,
     login: LEAD,
     clock: manualClock(),
     options: { pipeline, keepAwake },
@@ -303,13 +309,13 @@ describe('1.6a/awake: a Gate that cannot keep the laptop awake warns', () => {
 
 describe('1.6a/header: the gated notice and the status issue', () => {
   test('no notice while paths.gated has a glob, and the status issue once it exists', async () => {
-    const state = emptyState()
-    state.status_issue.number = 31
-    await saveState(files.state, state)
+    const fake = leadGitHub(undefined, {
+      issues: [{ number: 31, title: 'HackWin Gate status', labels: ['gate-status'] }],
+    })
     const gate = await start({
+      fake,
       prepare: (ctx) => {
         ctx.config.hackwin.paths.gated.migrations = ['db/migrations/**']
-        ctx.github.repo = DEFAULT_FAKE_REPO
       },
     })
     expect(gate.io.out).toContain(
