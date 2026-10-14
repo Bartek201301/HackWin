@@ -366,10 +366,14 @@ describe('1.5a/preconditions: take N needs an open task issue', () => {
     expect(result.stderr).toContain(message)
   })
 
-  test('--release is not built yet and exits 2', async () => {
-    const result = await take(fixture, clones.builder1, fake(), BUILDER1, ['2', '--release'])
+  test.each([
+    [[], 'take --release needs the number of the task'],
+    [['2'], '#2 is closed'],
+    [['3'], '#3 is a pull request, not a task issue'],
+  ])('take %j --release exits 2', async (args, message) => {
+    const result = await take(fixture, clones.builder1, fake(), BUILDER1, [...args, '--release'])
     expect(result.code).toBe(2)
-    expect(result.stderr).toContain('`take --release` is not built yet')
+    expect(result.stderr).toContain(message)
   })
 })
 

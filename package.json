@@ -20,7 +20,7 @@
   },
   "scripts": {
     "test": "tsc -p tsconfig.json && vitest run",
-    "test:ac": "sh -c 'HACKWIN_TEST_IDS=\"$*\" exec vitest run --config vitest.ac.config.js' test:ac",
+    "test:ac": "node scripts/test-ac.js",
     "format": "prettier --write",
     "typecheck": "tsc -p tsconfig.json"
   },

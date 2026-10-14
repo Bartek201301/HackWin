@@ -162,8 +162,10 @@ async function pushBranch(ctx, worktree, head) {
 
 /**
  * Step 11: open the pull request of the task, not as a draft, or update the open one (T1). A pull
- * request that was closed without a merge is not reused. An open one gets back what `ship` would
- * have opened it with: ready for review, into the default branch, a body that closes the task.
+ * request that was closed without a merge is not reused, and neither is one from a fork's branch
+ * of the same name: only a head in this repository is the task's branch. An open one gets back
+ * what `ship` would have opened it with: ready for review, into the default branch, a body that
+ * closes the task.
  * @param {CommandContext} ctx
  * @param {TaskWorktree} worktree
  * @param {Synced} synced
@@ -176,7 +178,10 @@ async function openPullRequest(ctx, worktree, synced) {
   const { task } = synced
   const body = pullRequestBody(await ctx.git.showFile(synced.head, TEMPLATE_PATH), task.number)
   const link = parseTaskLink({ branch, body })
-  const open = await ctx.github.listPullRequests({ state: 'open', head: branch })
+  const repository = (await ctx.github.repository()).nameWithOwner.toLowerCase()
+  const open = (await ctx.github.listPullRequests({ state: 'open', head: branch })).filter(
+    (pull) => pull.headRepo?.toLowerCase() === repository,
+  )
   const existing = open.find((pull) => pull.baseRef === base) ?? open[0]
 
   if (existing === undefined) {

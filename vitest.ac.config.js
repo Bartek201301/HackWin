@@ -5,9 +5,27 @@ import { testConfig } from './vitest.config.js'
 // included, and fails for an id that matches no test that ran. The id of a test is the text
 // before the first colon of its full name (its describe blocks and its own name). An id also
 // selects its parts: `AC54` runs `AC54: ...` and `AC54/hooks: ...`.
-const ids = (process.env.HACKWIN_TEST_IDS ?? '').split(/\s+/).filter(Boolean)
+const ids = parseIds(process.env.HACKWIN_TEST_IDS).filter(Boolean)
 if (ids.length === 0) {
   throw new Error('test:ac: name at least one test id: npm run test:ac -- <id>...')
+}
+
+/**
+ * The ids that scripts/test-ac.js hands over: a JSON array of strings, so that each id stays whole.
+ * @param {string | undefined} text
+ * @returns {string[]}
+ */
+function parseIds(text) {
+  if (!text) return []
+  try {
+    const value = JSON.parse(text)
+    if (Array.isArray(value) && value.every((id) => typeof id === 'string')) return value
+  } catch {
+    // Not JSON: fails below.
+  }
+  throw new Error(
+    'test:ac: HACKWIN_TEST_IDS is not a JSON array of strings: npm run test:ac -- <id>...',
+  )
 }
 
 /** @param {string} text */
