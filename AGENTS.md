@@ -38,6 +38,7 @@ Never read, print or copy a secret or token: no `.env` file other than `.env.exa
 
 - Never change `hackwin-sandbox`; it is for the human's live tests. Tests use the fixture repositories, only through the test harness.
 - Never delete a repository, and never request the `delete_repo` scope.
+- `maljul`, the `builder2` of the tests, is a real teammate's account used only as a name. Never invite it to any repository, and never act as it on GitHub; every test in which `builder2` acts runs against the fake GitHub. If a live test needs a second builder, say so in the pull request instead.
 
 ## Finishing a task
 
