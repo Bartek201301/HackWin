@@ -17,6 +17,40 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-14 · Phase 1 · Step 1.4b, the CI workflow and internal ci (PR #51, issue #9)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/9-ci-workflow`, created by the integrator from `a0610d7` after the merges of #44, #43 and #45. The integrator's planning session for the merge. From this day the Lead's reviews and instructions reach the integrator from the Lead's session (`lead-55`) by SendMessage. The human confirmed this in the integrator's terminal, and merges still need the human's go there.
+- What happened:
+  - The first commit, `92984f7`, on `a0610d7`, then a merge of `origin/main` at `104c2f5` (`560607e`); PR #51 opened at 17:13:26 UTC on 12 October. CI failed on `560607e` on Node 22 and 24, and the Lead held the PR.
+  - After the Lead's review, a commit `e492667` (23:59:23 UTC on 12 October) made the test's environment drop `GITHUB_*`, `RUNNER_*` and `CI`. It also kept the CI token away from the project's commands: the checkout keeps no credentials, and `internal ci` takes `GH_TOKEN` and `GITHUB_TOKEN` out of its environment before any project command runs. A new test, `1.4b/token`, checks the second part. CI passed on `e492667`.
+  - The review of `lead-55` arrived by SendMessage. The human confirmed in the integrator's terminal and agreed to the merges of #47 and #51 with "tak" (yes). #51 was the second.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 19 files inside issue #9's paths; no secret pattern; no conflict with `d0c3cb2`, main after #47. Step 6, with the PR merged into `d0c3cb2`: `npm test` passed 456 of 456, and `npm run test:ac` passed AC4/ci (3), AC54/ci (2), AC71/ci (2), AC77/ci (3), AC47/ci (2), AC80/ci (2) and 1.4b/workflow (11). Main had not moved, and the merge was pinned to the head SHA.
+  - After both merges: a scope change on #35 (`1.3a/test-ac` must also hold on a loaded machine; no new paths), and worktrees for #35 and #46 at `4454ab8`. #46 is no longer held.
+  - Before the review arrived, the integrator sent a test message by SendMessage to the sessions of #19 and #12, whose tasks were merged. Both messages reached the sessions, and each answered only "Not logged in · Please run /login".
+- Problems, from the PR's "Workflow notes":
+  - About 20 minutes lost: `npm test` failed five times with a timeout in `test/cli/test-ac.test.js` (33.7 s to 57.7 s against 30 s), while the suites of the worktrees of #16 and #20 ran; the one-minute load average reached 110 on 10 cores. #35.
+  - Missing export: `pinnedVersionOf`, `HACKWIN_FILE` and `OWNERS_FILE` of `src/core/config/load.js`. #46 item 5.
+  - A test of 1.4a (`test/generate/githooks.test.js`, lane A) expected exactly two stale files; adding the workflow to the manifest changed the list, so the session narrowed the assertion.
+  - The red CI: `isolatedEnv` of the harness copies `process.env`, so the runner's `GITHUB_EVENT_PATH` reached the test. The harness-wide fix is #46 item 8.
+  - Missing interface: `src/core/project` takes no `env`, so `internal ci` removes the token from `process.env` itself.
+  - Unclear instruction: step 3 names the diff against `MERGE_HEAD` during a merge, which CI on a pushed head never has.
+  - The Lead's review records, not blocking and not tested: on a Linux runner a project command running as the same user may still read the token from the initial environment of the step's shell or of the hackwin process. The token is read only; it is noted for the PRD.
+- Measured: PR open 2 d 5 h 35 min 24 s (17:13:26 UTC on 12 October to 22:48:50 UTC on 14 October), including the red CI, the fix and the Lead's review; 3 commits (one a merge of `origin/main`), 2 PR runs (63 s failed on `560607e`, 60 s passed on `e492667`), 0 conflicts; local merge test `npm test` 33.13 s; the run on main after the merge 68 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/51; head `e492667`; merge commit `4454ab8`; runs `38282785682` (red), `38325049909` (green) and `38650161317` (main).
+
+### 2026-10-14 · Phase 1 · Docs: the harness, hackwin-test-builder3 and the workflow fixes in the plan and contracts (PR #47, issue #41)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/41-docs-record-harness`, created from `104c2f5` after the merge of #42. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `f56cd4a`, on `104c2f5`; PR #47 opened at 16:34:08 UTC on 12 October. The Lead's review cleared it on 12 October, but the merge request did not reach the integrator until the review of `lead-55` on 14 October.
+  - The first of the two merges. Steps 1 to 5 passed: 2 files inside issue #41's paths; no secret pattern; no conflict with `97bd1c5`. Contracts section 4.11 has the sentence of the scope change on #41: the Gate reads `rules.bypassable` whenever the update restriction is active, in any protection state. Step 6, with the PR merged into `97bd1c5`: `npm test` passed 417 of 417; `npm run test:ac` skipped, because every acceptance criterion is an inspection. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes":
+  - The task has no test ids. `AGENTS.md` still asks for `npm run test:ac -- <ids>` before a pull request and does not cover a task without ids; the session ran `npm test` only. #46 item 11.
+  - The scope change cited comments on #20 and #23 by URL; the session read them with `gh api repos/Bartek201301/HackWin/issues/comments/<id> --jq .body`.
+  - The PR's "Remaining limitations": plan section 9 decision 4 still describes the reset of 10 October, and section 4.12 does not list every export of `test/harness/index.js`. #46 items 9 and 10.
+- Measured: PR open 2 d 6 h 13 min 39 s (16:34:08 UTC on 12 October to 22:47:47 UTC on 14 October); 1 commit, 1 PR run (64 s), 0 conflicts; local merge test `npm test` 25.82 s; the run on main after the merge 70 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/47; head `f56cd4a`; merge commit `d0c3cb2`; runs `38278308919` (PR) and `38650049062` (main).
+
 ### 2026-10-13 · Phase 1 · Step 1.6a, gate: process, lock, keep awake, state file, terminal input (PR #52, issue #20)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/20-gate-process-lock`, created by the integrator from `104c2f5` after the merge of #42, beside the sessions of #9, #12, #16, #19 and #41. The integrator's planning session for the merge.
