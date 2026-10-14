@@ -1,13 +1,17 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { existsSync, rmSync } from 'node:fs'
-import { hostname } from 'node:os'
 import {
   appendDigestLine,
   formatDigestLine,
   parseDigestLine,
   readDigest,
 } from '../../../src/commands/gate/digest.js'
-import { gateFiles, readHeartbeat, writeHeartbeat } from '../../../src/commands/gate/state.js'
+import {
+  gateFiles,
+  loadGateId,
+  readHeartbeat,
+  writeHeartbeat,
+} from '../../../src/commands/gate/state.js'
 import {
   MAX_BODY_LENGTH,
   STATUS_LABEL,
@@ -38,7 +42,8 @@ const LEAD = accounts.lead.login
 const BUILDER1 = accounts.builder1.login
 const START = '2026-10-24T10:00:00.000Z'
 const INTERVAL_MS = 120_000
-const MACHINE = 'lead-laptop'
+/** The Gate id of another clone, in the issues of the tests. */
+const OTHER_ID = '0123456789abcdef'
 const ISSUES = 'repos/{owner}/{repo}/issues'
 const HEADER_END = 'type `retry <PR>`, `ack <PR>` or `quit`'
 
@@ -68,15 +73,15 @@ afterEach(async () => {
 
 /**
  * Start a Gate of the Lead, without a pipeline, and wait for its header.
- * @param {{ fake: FakeGitHub, clock?: ReturnType<typeof manualClock>, cwd?: string, machine?: string }} options
+ * @param {{ fake: FakeGitHub, clock?: ReturnType<typeof manualClock>, cwd?: string }} options
  */
-async function startLead({ fake, clock = manualClock(START), cwd, machine = MACHINE }) {
+async function startLead({ fake, clock = manualClock(START), cwd }) {
   const gate = await startDirect(fixture, {
     fake,
     login: LEAD,
     clock,
     cwd,
-    options: { keepAwake: noKeepAwake, machine },
+    options: { keepAwake: noKeepAwake },
   })
   running.push(gate)
   /** @type {unknown} */
@@ -89,16 +94,16 @@ async function startLead({ fake, clock = manualClock(START), cwd, machine = MACH
 
 /**
  * Start a Gate that is refused, and return the error.
- * @param {{ fake: FakeGitHub, clock?: ReturnType<typeof manualClock>, cwd?: string, machine?: string }} options
+ * @param {{ fake: FakeGitHub, clock?: ReturnType<typeof manualClock>, cwd?: string }} options
  * @returns {Promise<any>}
  */
-async function refusedStart({ fake, clock = manualClock(START), cwd, machine = MACHINE }) {
+async function refusedStart({ fake, clock = manualClock(START), cwd }) {
   const gate = await startDirect(fixture, {
     fake,
     login: LEAD,
     clock,
     cwd,
-    options: { keepAwake: noKeepAwake, machine },
+    options: { keepAwake: noKeepAwake },
   })
   return gate.done.then(
     () => {
@@ -106,6 +111,15 @@ async function refusedStart({ fake, clock = manualClock(START), cwd, machine = M
     },
     (error) => error,
   )
+}
+
+/**
+ * The Gate id of a clone, from its `gate/gate-id`.
+ * @param {import('../../../src/commands/gate/state.js').GateFiles} [own]
+ * @returns {string}
+ */
+function gateIdOf(own = files) {
+  return readJson(own.id).gate_id
 }
 
 /** @param {StartedGate} gate */
@@ -126,7 +140,7 @@ function statusOf(overrides = {}) {
     heartbeat_at: START,
     stopped_at: null,
     starts: 1,
-    machine: MACHINE,
+    gate_id: OTHER_ID,
     protection: 'full-restricted',
     update_restricted: true,
     queue: [],
@@ -243,7 +257,7 @@ describe('1.6b/status-issue: the body of the status issue and its parser', () =>
         `heartbeat_at: "${START}"`,
         'stopped_at: null',
         'starts: 3',
-        `machine: "${MACHINE}"`,
+        `gate_id: "${OTHER_ID}"`,
         'protection: soft',
         'update_restricted: true',
         'queue: [12, 15]',
@@ -256,7 +270,7 @@ describe('1.6b/status-issue: the body of the status issue and its parser', () =>
     expect(body).toContain(
       ['## Digest', '', '```text', ...status.digest.map(formatDigestLine), '```', ''].join('\n'),
     )
-    // Nothing that GitHub links or mentions lies outside a code block.
+    // No `#<PR>` lies outside a code block, where GitHub would link it.
     expect(outsideFences(body).filter((line) => line !== '')).toEqual(['## Digest'])
     expect(parseStatusBody(body)).toEqual(status)
 
@@ -286,7 +300,7 @@ describe('1.6b/status-issue: the body of the status issue and its parser', () =>
       heartbeat_at: START,
       stopped_at: null,
       starts: 0,
-      machine: null,
+      gate_id: null,
       protection: null,
       update_restricted: false,
       queue: [3],
@@ -338,27 +352,67 @@ describe('1.6b/status-issue: the body of the status issue and its parser', () =>
     expect(others).toEqual(digest.filter((own) => own.result === 'failed').slice(0, others.length))
   })
 
-  test('a body that GitHub refuses as too long is sent again within the maximum it names', async () => {
+  test('a body refused with HTTP 422 is sent again with fewer lines, whatever the message', async () => {
     const fake = createFakeGitHub({
       issues: [{ number: 4, title: STATUS_TITLE, labels: [STATUS_LABEL] }],
     })
-    const limit = 50_000
-    refuseLongBodies(
-      fake,
-      limit,
-      `Validation Failed: body is too long (maximum is ${limit} characters)`,
-    )
+    refuseBodies(fake, (body) => body.length > 50_000)
     const github = createGitHub({ executor: fake.executor, repo: DEFAULT_FAKE_REPO })
     const digest = longDigest(900)
     const issue = await findStatusIssue(github)
-    const written = await writeStatusIssue(github, { issue, status: statusOf({ digest }) })
-    expect(written.maxLength).toBe(limit)
-    expect(issueOf(fake, 4).body.length).toBeLessThanOrEqual(limit)
-    expect(edits(fake, 4).map((call) => call.code)).toEqual([1, 0])
+    const limits = { maxLength: MAX_BODY_LENGTH }
+    await writeStatusIssue(github, { issue, status: statusOf({ digest }), limits })
+    const sent = edits(fake, 4)
+    expect(sent.map((call) => call.code)).toEqual([1, 0])
+    expect(limits.maxLength).toBe(Math.floor((sent[0].body.body.length * 3) / 4))
+    expect(issueOf(fake, 4).body.length).toBeLessThanOrEqual(limits.maxLength)
     expectOldestMergedLeftOut(
       digest,
       /** @type {GateStatus} */ (parseStatusBody(issueOf(fake, 4).body)).digest,
     )
+  })
+
+  test('after a write whose every try was refused, the next write starts below every refused size', async () => {
+    const fake = createFakeGitHub({
+      issues: [{ number: 4, title: STATUS_TITLE, labels: [STATUS_LABEL] }],
+    })
+    let refuseAll = true
+    refuseBodies(fake, () => refuseAll)
+    const github = createGitHub({ executor: fake.executor, repo: DEFAULT_FAKE_REPO })
+    const issue = await findStatusIssue(github)
+    const status = statusOf({ digest: longDigest(900) })
+    const limits = { maxLength: MAX_BODY_LENGTH }
+    await expect(writeStatusIssue(github, { issue, status, limits })).rejects.toMatchObject({
+      status: 422,
+    })
+    const refused = edits(fake, 4).map((call) => call.body.body.length)
+    expect(refused).toHaveLength(4)
+    expect(refused.every((length, index) => index === 0 || length < refused[index - 1])).toBe(true)
+    expect(limits.maxLength).toBe(Math.floor(((refused.at(-1) ?? 0) * 3) / 4))
+
+    refuseAll = false
+    await writeStatusIssue(github, { issue, status, limits })
+    const next = edits(fake, 4).slice(4)
+    expect(next.map((call) => call.code)).toEqual([0])
+    expect(next[0].body.body.length).toBeLessThan(Math.min(...refused))
+
+    // A body without a digest line to leave out is sent once; another failure is never retried.
+    refuseAll = true
+    const empty = { maxLength: MAX_BODY_LENGTH }
+    await expect(
+      writeStatusIssue(github, { issue, status: statusOf(), limits: empty }),
+    ).rejects.toMatchObject({ status: 422 })
+    expect(edits(fake, 4).slice(5)).toHaveLength(1)
+    const off = fake.on(`PATCH ${ISSUES}/:number`, () => {
+      throw httpError(502, 'Bad Gateway')
+    })
+    const unchanged = { maxLength: MAX_BODY_LENGTH }
+    await expect(
+      writeStatusIssue(github, { issue, status, limits: unchanged }),
+    ).rejects.toMatchObject({ status: 502 })
+    off()
+    expect(edits(fake, 4).slice(6)).toHaveLength(1)
+    expect(unchanged.maxLength).toBe(MAX_BODY_LENGTH)
   })
 })
 
@@ -376,7 +430,8 @@ describe('1.6b/status-issue: created and pinned at the first start, found by its
       state: 'open',
       author: LEAD,
     })
-    expect(parseStatusBody(issue.body)).toEqual(statusOf())
+    expect(parseStatusBody(issue.body)).toEqual(statusOf({ gate_id: gateIdOf() }))
+    expect(gateIdOf()).toMatch(/^[0-9a-f]{16}$/)
     expect(first.io.out).toContain(
       `status issue: #1 https://github.com/${DEFAULT_FAKE_REPO}/issues/1\n`,
     )
@@ -397,7 +452,7 @@ describe('1.6b/status-issue: created and pinned at the first start, found by its
     const second = await startLead({ fake, clock })
     expect(fake.state.items).toHaveLength(1)
     expect(parseStatusBody(issueOf(fake).body)).toEqual(
-      statusOf({ heartbeat_at: clock.iso(), starts: 2 }),
+      statusOf({ heartbeat_at: clock.iso(), starts: 2, gate_id: gateIdOf() }),
     )
     expect(second.io.out).toContain(
       `status issue: #1 https://github.com/${DEFAULT_FAKE_REPO}/issues/1\n`,
@@ -481,9 +536,8 @@ describe('1.6b/status-issue: the Gate keeps the body within the size GitHub acce
     const fake = leadGitHub(undefined, {
       issues: [{ number: 1, title: STATUS_TITLE, labels: [STATUS_LABEL] }],
     })
-    // GitHub's GraphQL message names no maximum: the Gate tries three quarters of the length.
     const limit = 40_000
-    refuseLongBodies(fake, limit, 'GraphQL: Body is too long (updateIssue)')
+    refuseBodies(fake, (body) => body.length > limit)
     const clock = manualClock(START)
     const gate = await startLead({ fake, clock })
 
@@ -495,16 +549,45 @@ describe('1.6b/status-issue: the Gate keeps the body within the size GitHub acce
     expect(body.length).toBeLessThanOrEqual(limit)
     const kept = /** @type {GateStatus} */ (parseStatusBody(body)).digest
     expectOldestMergedLeftOut(digest, kept)
-    expect(gate.io.out).toMatch(
-      new RegExp(
-        `status issue: the ${digest.length - kept.length} oldest digest lines are left out to stay within \\d+ characters; digest.log keeps every run`,
-      ),
+    const allowed = Math.floor((startEdits[1].body.body.length * 3) / 4)
+    expect(gate.io.out).toContain(
+      `status issue: GitHub refused a body with HTTP 422, so the Gate writes at most ${allowed} characters from now on`,
+    )
+    expect(gate.io.out).toContain(
+      `status issue: the ${digest.length - kept.length} oldest digest lines are left out to stay within ${allowed} characters; digest.log keeps every run`,
     )
 
-    // The next edit stays within the limit that GitHub took, and is not refused.
+    // The next edit stays within the size that GitHub took, and is not refused.
     clock.advance(INTERVAL_MS)
     await until(() => parseStatusBody(issueOf(fake).body)?.heartbeat_at === clock.iso(), 'the edit')
     expect(edits(fake, 1).map((call) => call.code)).toEqual([1, 1, 0, 0])
+    await quit(gate)
+  })
+
+  test('when every try of an edit is refused, the next interval sends a smaller body once', async () => {
+    const digest = longDigest(900, { note: '' })
+    for (const own of [...digest].reverse()) await appendDigestLine(files.digest, own)
+    const fake = leadGitHub(undefined, {
+      issues: [{ number: 1, title: STATUS_TITLE, labels: [STATUS_LABEL] }],
+    })
+    let refuseAll = true
+    refuseBodies(fake, () => refuseAll)
+    const clock = manualClock(START)
+    const gate = await startLead({ fake, clock })
+    const refused = edits(fake, 1).map((call) => call.body.body.length)
+    expect(refused).toHaveLength(4)
+    expect(gate.io.out).toContain(
+      'status issue: not written, the Gate tries again in 120 s: GitHub call failed: gh api --method PATCH',
+    )
+
+    refuseAll = false
+    clock.advance(INTERVAL_MS)
+    await until(() => parseStatusBody(issueOf(fake).body)?.heartbeat_at === clock.iso(), 'the edit')
+    const next = edits(fake, 1).slice(4)
+    expect(next.map((call) => call.code)).toEqual([0])
+    expect(next[0].body.body.length).toBeLessThanOrEqual(
+      Math.floor(((refused.at(-1) ?? 0) * 3) / 4),
+    )
     await quit(gate)
   })
 })
@@ -521,46 +604,83 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
     })
   }
 
-  test('a fresh heartbeat of a Gate on another machine refuses the start with exit 2', async () => {
-    const fake = withStatus({ heartbeat_at: '2026-10-24T09:59:30.000Z', machine: 'other-laptop' })
+  test("a fresh heartbeat of another clone's Gate refuses the start with exit 2", async () => {
+    const fake = withStatus({ heartbeat_at: '2026-10-24T09:59:30.000Z' })
     const error = await refusedStart({ fake })
+    const own = gateIdOf()
+    expect(own).not.toBe(OTHER_ID)
     expect(error.exitCode).toBe(2)
     expect(error.message).toBe(
-      'another Gate is running on the machine other-laptop: the status issue #1 shows its heartbeat of 2026-10-24T09:59:30.000Z, 30 s old, and no stop; there is one Gate per project',
+      `another Gate is running for this project: the status issue #1 shows the heartbeat of the Gate ${OTHER_ID} at 2026-10-24T09:59:30.000Z, 30 s old, and no stop; this clone's Gate is ${own}; there is one Gate per project`,
     )
     expect(error.resolve).toBe(
-      `type \`quit\` in that Gate's terminal; if it no longer runs, wait until 2026-10-24T10:04:30.000Z, when its heartbeat is 300 s old; then run \`hackwin gate\` in ${fixture.main}`,
+      `type \`quit\` in that Gate's terminal (its clone holds ${OTHER_ID} in .git/hackwin/gate/gate-id); if it no longer runs, wait until 2026-10-24T10:04:30.000Z, when its heartbeat is 300 s old; then run \`hackwin gate\` in ${fixture.main}`,
     )
-    // Nothing was started: no start counted, no heartbeat, no edit, no lock left.
+    // Nothing was started: no start counted, no heartbeat, no edit, no lock left. Only the
+    // clone's Gate id now exists.
     expect(existsSync(files.state)).toBe(false)
     expect(existsSync(files.heartbeat)).toBe(false)
     expect(existsSync(files.lock)).toBe(false)
     expect(edits(fake, 1)).toEqual([])
   })
 
-  test('the message names this machine for a Gate in another clone, and an unnamed one', async () => {
-    const same = await refusedStart({
-      fake: withStatus({ heartbeat_at: '2026-10-24T09:58:00.000Z' }),
+  test("this clone's id decides: no local heartbeat or a clock ahead does not matter, an older heartbeat of another id does", async () => {
+    const { id } = await loadGateId(files.id, new Date(START))
+    // The issue shows this clone's id 40 s ahead of this clock, and there is no local heartbeat.
+    const ahead = withStatus({ heartbeat_at: '2026-10-24T10:00:40.000Z', gate_id: id })
+    const gate = await startLead({ fake: ahead })
+    expect(gate.io.out).toContain('Gate started: start 1')
+    await quit(gate)
+
+    // Another id is another Gate, even when its heartbeat is older than this clone's local one.
+    await writeHeartbeat(files.heartbeat, {
+      pid: 1,
+      heartbeat_at: START,
+      last_github_ok_at: null,
+      stopped_at: null,
     })
-    expect(same.message).toContain(
-      `another Gate is running in another clone on this machine (${MACHINE}): the status issue #1 shows its heartbeat of 2026-10-24T09:58:00.000Z, 120 s old`,
-    )
+    const older = await refusedStart({
+      fake: withStatus({ heartbeat_at: '2026-10-24T09:59:00.000Z' }),
+    })
+    expect(older.message).toContain(`shows the heartbeat of the Gate ${OTHER_ID}`)
+  })
+
+  test('without an id in the block, or with a new id of this clone, the local heartbeat decides', async () => {
+    const heartbeat = '2026-10-24T09:59:30.000Z'
+    const local = () =>
+      writeHeartbeat(files.heartbeat, {
+        pid: 1,
+        heartbeat_at: heartbeat,
+        last_github_ok_at: null,
+        stopped_at: null,
+      })
+
+    // No id, no local heartbeat: another Gate.
     const unnamed = await refusedStart({
-      fake: withStatus({ heartbeat_at: '2026-10-24T09:58:00.000Z', machine: null }),
+      fake: withStatus({ heartbeat_at: heartbeat, gate_id: null }),
     })
     expect(unnamed.message).toContain(
-      'another Gate is running on another machine or in another clone',
+      'another Gate is running for this project: the status issue #1 shows the heartbeat of a Gate without an id at 2026-10-24T09:59:30.000Z, 30 s old',
     )
+    expect(unnamed.resolve).toMatch(/^type `quit` in that Gate's terminal; if it no longer runs/)
+
+    // No id, and the local heartbeat is as new: this clone's own.
+    await local()
+    const own = await startLead({ fake: withStatus({ heartbeat_at: heartbeat, gate_id: null }) })
+    await quit(own)
+
+    // This clone's id file was lost, so its new id says nothing; the local heartbeat decides.
+    rmSync(files.root, { recursive: true, force: true })
+    await local()
+    const lost = await startLead({ fake: withStatus({ heartbeat_at: heartbeat }) })
+    expect(gateIdOf()).not.toBe(OTHER_ID)
+    await quit(lost)
   })
 
   test('a stale heartbeat, or one with a stop time, lets the start go on and take over', async () => {
     for (const overrides of [
-      { heartbeat_at: '2026-10-24T09:55:00.000Z', machine: 'other-laptop' },
-      {
-        heartbeat_at: '2026-10-24T09:59:50.000Z',
-        stopped_at: '2026-10-24T09:59:50.000Z',
-        machine: 'other-laptop',
-      },
+      { heartbeat_at: '2026-10-24T09:55:00.000Z' },
+      { heartbeat_at: '2026-10-24T09:59:50.000Z', stopped_at: '2026-10-24T09:59:50.000Z' },
     ]) {
       rmSync(files.root, { recursive: true, force: true })
       const fake = withStatus(overrides)
@@ -568,13 +688,13 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
       expect(parseStatusBody(issueOf(fake).body)).toMatchObject({
         heartbeat_at: START,
         stopped_at: null,
-        machine: MACHINE,
+        gate_id: gateIdOf(),
       })
       await quit(gate)
     }
   })
 
-  test("a heartbeat this clone's Gate wrote before a crash does not count", async () => {
+  test("a heartbeat this clone's Gate wrote before a crash does not count, also without the local heartbeat", async () => {
     const fake = leadGitHub()
     const clock = manualClock(START)
     const gate = await startLead({ fake, clock })
@@ -598,18 +718,13 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
     })
     await quit(restarted)
 
-    // The same issue with a heartbeat one second newer than this clone's own was another Gate's.
-    issueOf(fake).body = formatStatusBody(
-      statusOf({ heartbeat_at: new Date(Date.parse(clock.iso()) + 1000).toISOString() }),
-    ).body
-    await writeHeartbeat(files.heartbeat, {
-      pid: 1,
-      heartbeat_at: clock.iso(),
-      last_github_ok_at: null,
-      stopped_at: null,
-    })
-    const refused = await refusedStart({ fake, clock })
-    expect(refused.message).toContain('another Gate is running in another clone on this machine')
+    // The same crash, and the local heartbeat file is gone too.
+    issueOf(fake).body = body
+    rmSync(files.heartbeat)
+    clock.advance(10_000)
+    const again = await startLead({ fake, clock })
+    expect(again.io.out).toContain('Gate started: start 3, restart 2')
+    await quit(again)
   })
 
   test('two clones on one machine: the second Gate is refused until the first quits', async () => {
@@ -617,17 +732,13 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
     const clock = manualClock(START)
     const other = await fixture.clone('lead-second-clone')
     const otherFiles = gateFiles(await other.git.commonDir())
-    const first = await startLead({ fake, clock, machine: hostname().split('.')[0] })
+    const first = await startLead({ fake, clock })
 
     clock.advance(10_000)
-    const refused = await refusedStart({
-      fake,
-      clock,
-      cwd: other.path,
-      machine: hostname().split('.')[0],
-    })
-    expect(refused.message).toContain(
-      `another Gate is running in another clone on this machine (${hostname().split('.')[0]}): the status issue #1 shows its heartbeat of ${START}, 10 s old`,
+    const refused = await refusedStart({ fake, clock, cwd: other.path })
+    expect(gateIdOf(otherFiles)).not.toBe(gateIdOf())
+    expect(refused.message).toBe(
+      `another Gate is running for this project: the status issue #1 shows the heartbeat of the Gate ${gateIdOf()} at ${START}, 10 s old, and no stop; this clone's Gate is ${gateIdOf(otherFiles)}; there is one Gate per project`,
     )
     expect(existsSync(otherFiles.state)).toBe(false)
 
@@ -637,6 +748,7 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
     expect(parseStatusBody(issueOf(fake).body)).toMatchObject({
       heartbeat_at: clock.iso(),
       stopped_at: null,
+      gate_id: gateIdOf(otherFiles),
     })
     await quit(second)
     expect(fake.state.items).toHaveLength(1)
@@ -644,16 +756,14 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
 })
 
 /**
- * Refuse every body edit of an issue longer than `limit` with this message, as GitHub would.
+ * Refuse the body edits that `refuse` names with HTTP 422 "Validation Failed", the status that
+ * GitHub's reference lists for "Update an issue", and take the others.
  * @param {FakeGitHub} fake
- * @param {number} limit
- * @param {string} message
+ * @param {(body: string) => boolean} refuse
  */
-function refuseLongBodies(fake, limit, message) {
+function refuseBodies(fake, refuse) {
   fake.on(`PATCH ${ISSUES}/:number`, async ({ params, body }) => {
-    if (typeof body?.body === 'string' && body.body.length > limit) {
-      throw httpError(422, message)
-    }
+    if (refuse(body.body)) throw httpError(422, 'Validation Failed')
     issueOf(fake, Number(params.number)).body = body.body
     return rawResult(await fake.executor(['api', '--method', 'GET', `${ISSUES}/${params.number}`]))
   })

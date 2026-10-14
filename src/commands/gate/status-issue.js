@@ -1,12 +1,13 @@
 // The status issue (G25, 9.6, A55) [D4]: one pinned issue whose body holds the Gate's heartbeat,
 // the open attention items and the digest, so that every member sees them on their own machine
 // and nothing enters a conversation. The Gate creates it at its first start with the label
-// `gate-status` and pins it; later it finds it by the label. It only edits the body, which sends
-// no notification, and never comments (docs/verification.md rows 8 to 10).
+// `gate-status` and pins it (`gh issue pin`, docs/verification.md row 8); later it finds it by
+// the label. It only edits the body and never comments, as G25 asks. Whether a body edit notifies
+// the watchers of the repository is unknown: GitHub does not document it, and it was not observed
+// (docs/verification.md row 9).
 //
-// The block and the digest each sit in a fenced code block. So GitHub renders the digest one line
-// per pull request, links no `#<PR>`, which would add an entry to that pull request's timeline,
-// and processes no mention.
+// The digest sits in a fenced code block, so that GitHub links no `#<PR>` in it, which would add
+// a reference to the timeline of every pull request in the digest.
 //
 // `status` (1.6f) finds the issue with findStatusIssue and reads its body with parseStatusBody.
 
@@ -33,8 +34,8 @@ export const MAX_BODY_LENGTH = 65_536
 const DIGEST_HEADING = '## Digest'
 const NO_DIGEST = 'No pull request has finished a run yet.'
 
-/** How often one edit is sent after GitHub refused its body as too long. */
-const TOO_LONG_ATTEMPTS = 4
+/** How often one edit is sent at most, the first try and the tries after a refused body. */
+const BODY_ATTEMPTS = 4
 
 /**
  * An open attention item, as the status issue shows it.
@@ -52,7 +53,7 @@ const TOO_LONG_ATTEMPTS = 4
  * @property {string} heartbeat_at ISO 8601: the Gate was alive at this time.
  * @property {string | null} stopped_at Set by `quit`; a start clears it.
  * @property {number} starts How often a Gate started in the Gate's clone.
- * @property {string | null} machine The host name of the Gate's machine.
+ * @property {string | null} gate_id The random id of the Gate's clone (`gate/gate-id`).
  * @property {'full-restricted' | 'full' | 'soft' | null} protection From the Gate's latest
  *   protection read.
  * @property {boolean} update_restricted `rules.updateRestricted` of that read.
@@ -94,19 +95,14 @@ export function formatStatusBody(status, { maxLength = MAX_BODY_LENGTH } = {}) {
     length -= lines[index].length + 1
     dropped.push(status.digest[index])
   }
-  return {
-    body: bodyText(
-      block,
-      lines.filter((_, index) => kept[index]),
-    ),
-    dropped,
-  }
+  const keptLines = lines.filter((_, index) => kept[index])
+  return { body: bodyText(block, keptLines), dropped }
 }
 
 /**
  * The content of a status issue body, or null when it holds no readable `# hackwin:gate-status`
  * block of schema 1 with a heartbeat time. Fields that are missing or of the wrong kind read as
- * empty: no stop time, no machine, an unknown protection state, an empty queue.
+ * empty: no stop time, no Gate id, an unknown protection state, an empty queue.
  * @param {string | null | undefined} body
  * @returns {GateStatus | null}
  */
@@ -139,7 +135,7 @@ export function parseStatusBody(body) {
     heartbeat_at: data.heartbeat_at,
     stopped_at: typeof data.stopped_at === 'string' ? data.stopped_at : null,
     starts: Number.isInteger(data.starts) && data.starts >= 0 ? data.starts : 0,
-    machine: typeof data.machine === 'string' ? data.machine : null,
+    gate_id: typeof data.gate_id === 'string' ? data.gate_id : null,
     protection: PROTECTION_STATES.includes(data.protection) ? data.protection : null,
     update_restricted: data.update_restricted === true,
     queue: Array.isArray(data.queue) ? data.queue.filter(isPullNumber) : [],
@@ -156,23 +152,28 @@ export function parseStatusBody(body) {
 }
 
 /**
- * Write the status into the status issue: edit the body of `issue`, or, without one, create the
- * issue with its title and label and pin it. Only the body changes, never through a comment. A
- * body that GitHub refuses as too long is sent again with fewer digest lines, within the limit
- * GitHub named or else three quarters of the refused length; `maxLength` is the limit that the
- * accepted body kept, for the next edits.
+ * Write the status into the status issue over REST: edit the body of `issue`, or, without one,
+ * create the issue with its title and label and pin it. Only the body changes, never through a
+ * comment.
+ *
+ * GitHub documents no limit for the body, and no refusal was seen over REST up to 1,048,576
+ * characters (docs/verification.md row 10). Its reference lists HTTP 422, "Validation failed, or
+ * the endpoint has been spammed", for both calls. So a 422 counts as a refused body, whatever
+ * its text: `limits.maxLength` drops to three quarters of the refused length at once, and the
+ * write is sent again with fewer digest lines, at most BODY_ATTEMPTS times in all. The caller
+ * keeps `limits` for its next writes, so no later write tries a size that was refused, also
+ * when every try of this one was.
  * @param {GitHub} github
- * @param {{ issue: Issue | null, status: GateStatus, maxLength?: number }} write
- * @returns {Promise<{ issue: Issue, created: boolean, pinError: string | null, dropped: DigestEntry[], maxLength: number }>}
+ * @param {{ issue: Issue | null, status: GateStatus, limits: { maxLength: number } }} write
+ * @returns {Promise<{ issue: Issue, created: boolean, pinError: string | null, dropped: DigestEntry[] }>}
  */
-export async function writeStatusIssue(github, { issue, status, maxLength = MAX_BODY_LENGTH }) {
-  let limit = maxLength
+export async function writeStatusIssue(github, { issue, status, limits }) {
   for (let attempt = 1; ; attempt += 1) {
-    const { body, dropped } = formatStatusBody(status, { maxLength: limit })
+    const { body, dropped } = formatStatusBody(status, { maxLength: limits.maxLength })
     try {
       if (issue !== null) {
         const edited = await github.updateIssue(issue.number, { body })
-        return { issue: edited, created: false, pinError: null, dropped, maxLength: limit }
+        return { issue: edited, created: false, pinError: null, dropped }
       }
       const created = await github.createIssue({
         title: STATUS_TITLE,
@@ -180,42 +181,52 @@ export async function writeStatusIssue(github, { issue, status, maxLength = MAX_
         labels: [STATUS_LABEL],
       })
       const pinError = await pin(github, created.number)
-      return { issue: created, created: true, pinError, dropped, maxLength: limit }
+      return { issue: created, created: true, pinError, dropped }
     } catch (error) {
-      if (!isBodyTooLong(error) || attempt >= TOO_LONG_ATTEMPTS) throw error
-      limit = lowerLimit(error, body.length)
+      if (!isBodyRefused(error)) throw error
+      limits.maxLength = Math.min(limits.maxLength, Math.floor((body.length * 3) / 4))
+      // A body that has no digest line left to leave out is not sent again.
+      const shorter = formatStatusBody(status, { maxLength: limits.maxLength }).body
+      if (attempt >= BODY_ATTEMPTS || shorter.length >= body.length) throw error
     }
   }
 }
 
 /**
- * True when GitHub refused a body as too long: "Body is too long" from GraphQL, "body is too
- * long (maximum is ... characters)" from REST.
+ * True when GitHub refused a write of the body with HTTP 422, which its reference lists for
+ * "Create an issue" and "Update an issue".
  * @param {unknown} error
  */
-export function isBodyTooLong(error) {
-  return error instanceof RemoteError && /body is too long/i.test(errorText(error))
+export function isBodyRefused(error) {
+  return error instanceof RemoteError && error.status === 422
 }
 
 /**
  * Another Gate's heartbeat in the status issue: less than `staleSeconds` old, without a stop
- * time, and newer than the last heartbeat this clone's Gate wrote. The Gate writes its local
- * heartbeat before each edit of the status issue, with the time it publishes, so a heartbeat
- * this clone wrote itself never counts, and a restart after a crash goes on (#24, AC22).
+ * time, and written by another clone's Gate. A Gate id in the block decides that: the heartbeat
+ * is this clone's own when the id is this clone's, so a missing local heartbeat or a clock that
+ * differs between machines does not matter. Without an id in the block, or when this clone's id
+ * was just made (its file was missing or unreadable), the heartbeat is this clone's own when it
+ * is not newer than the last one in this clone's `gate/heartbeat`, which the Gate writes before
+ * each edit with the time it publishes. So a restart after a crash goes on (#24, AC22).
  * @param {GateStatus | null} status The status issue's content.
- * @param {{ local: Heartbeat | null, now: Date, staleSeconds: number }} context
- * @returns {{ heartbeat_at: string, age_seconds: number, machine: string | null } | null}
+ * @param {{ gateId: string, newId: boolean, local: Heartbeat | null, now: Date, staleSeconds: number }} context
+ * @returns {{ heartbeat_at: string, age_seconds: number, gate_id: string | null } | null}
  */
-export function otherGateHeartbeat(status, { local, now, staleSeconds }) {
+export function otherGateHeartbeat(status, { gateId, newId, local, now, staleSeconds }) {
   if (status === null || status.stopped_at !== null) return null
   const at = Date.parse(status.heartbeat_at)
   const age = now.getTime() - at
   if (age >= staleSeconds * 1000) return null
-  if (local !== null && Date.parse(local.heartbeat_at) >= at) return null
+  if (status.gate_id !== null && !newId) {
+    if (status.gate_id === gateId) return null
+  } else if (local !== null && Date.parse(local.heartbeat_at) >= at) {
+    return null
+  }
   return {
     heartbeat_at: status.heartbeat_at,
     age_seconds: Math.max(0, Math.floor(age / 1000)),
-    machine: status.machine,
+    gate_id: status.gate_id,
   }
 }
 
@@ -225,8 +236,9 @@ export function otherGateHeartbeat(status, { local, now, staleSeconds }) {
  * edit carries the time of its own heartbeat, which it first writes into the local heartbeat,
  * and everything that changed since the last one. A failed edit waits for the next interval;
  * without an issue it then looks for one by its label again before it creates one, in case
- * GitHub created the issue but the answer was lost. An edit records itself in
- * `state.status_issue`, which the next write of the state file keeps.
+ * GitHub created the issue but the answer was lost. A refused body lowers the size of every
+ * later edit of this run (writeStatusIssue). An edit records itself in `state.status_issue`,
+ * which the next write of the state file keeps.
  * @param {Gate} gate
  * @param {Issue | null} issue The status issue found at the start, or null before the first.
  */
@@ -236,7 +248,7 @@ export function createStatusPublisher(gate, issue) {
   let current = issue
   // False after a failure: GitHub may hold a status issue that `current` does not know.
   let known = true
-  let maxLength = MAX_BODY_LENGTH
+  const limits = { maxLength: MAX_BODY_LENGTH }
   let droppedBefore = 0
   if (current !== null) state.status_issue.number = current.number
 
@@ -255,6 +267,7 @@ export function createStatusPublisher(gate, issue) {
     async publish({ stoppedAt = null } = {}) {
       const at = stoppedAt ?? ctx.clock.now().toISOString()
       publisher.nextAt = Date.parse(at) + seconds * 1000
+      const limitBefore = limits.maxLength
       try {
         await gate.beat(stoppedAt, at)
         if (current === null && !known) current = await findStatusIssue(ctx.github)
@@ -262,11 +275,10 @@ export function createStatusPublisher(gate, issue) {
         const written = await writeStatusIssue(ctx.github, {
           issue: current,
           status: { ...gateStatus(gate, at, stoppedAt), digest },
-          maxLength,
-        })
+          limits,
+        }).finally(() => reportLimit(limitBefore))
         current = written.issue
         known = true
-        maxLength = written.maxLength
         state.status_issue = { number: current.number, last_edit_at: at }
         if (written.pinError !== null) {
           ctx.out.warn(
@@ -276,7 +288,7 @@ export function createStatusPublisher(gate, issue) {
         if (written.dropped.length !== droppedBefore) {
           droppedBefore = written.dropped.length
           gate.line(
-            `status issue: the ${droppedBefore} oldest digest lines are left out to stay within ${maxLength} characters; digest.log keeps every run`,
+            `status issue: the ${droppedBefore} oldest digest lines are left out to stay within ${limits.maxLength} characters; digest.log keeps every run`,
           )
         }
         return true
@@ -294,6 +306,14 @@ export function createStatusPublisher(gate, issue) {
         return false
       }
     },
+  }
+
+  /** @param {number} before */
+  const reportLimit = (before) => {
+    if (limits.maxLength >= before) return
+    gate.line(
+      `status issue: GitHub refused a body with HTTP 422, so the Gate writes at most ${limits.maxLength} characters from now on`,
+    )
   }
   return publisher
 }
@@ -313,7 +333,7 @@ function gateStatus(gate, at, stoppedAt) {
     heartbeat_at: at,
     stopped_at: stoppedAt,
     starts: state.starts,
-    machine: gate.machine,
+    gate_id: gate.id,
     protection: protection.state,
     update_restricted: protection.rules.updateRestricted,
     queue: [...state.queue],
@@ -337,7 +357,7 @@ function blockText(status) {
     `heartbeat_at: ${quoted(status.heartbeat_at)}`,
     `stopped_at: ${quoted(status.stopped_at)}`,
     `starts: ${status.starts}`,
-    `machine: ${quoted(status.machine)}`,
+    `gate_id: ${quoted(status.gate_id)}`,
     `protection: ${word(status.protection)}`,
     `update_restricted: ${status.update_restricted === true}`,
     `queue: [${status.queue.join(', ')}]`,
@@ -407,8 +427,8 @@ function findBlock(lines) {
 }
 
 /**
- * Pin the issue (docs/verification.md row 8). Pinning fails when the repository holds three
- * pinned issues already; then the issue is found by its label alone.
+ * Pin the issue (docs/verification.md row 8). GitHub documents at most three pinned issues per
+ * repository; a refused pin leaves the issue to be found by its label alone.
  * @param {GitHub} github
  * @param {number} number
  * @returns {Promise<string | null>} Null when pinned, else the reason.
@@ -420,25 +440,6 @@ async function pin(github, number) {
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
-}
-
-/**
- * The limit for the next attempt after GitHub refused a body of `refused` characters.
- * @param {RemoteError} error
- * @param {number} refused
- */
-function lowerLimit(error, refused) {
-  const stated = /maximum is ([\d,]+)/i.exec(errorText(error))
-  const maximum = stated ? Number(stated[1].replace(/,/g, '')) : Number.NaN
-  return Number.isInteger(maximum) && maximum > 0 && maximum < refused
-    ? maximum
-    : Math.floor((refused * 3) / 4)
-}
-
-/** @param {RemoteError} error */
-function errorText(error) {
-  const tail = /** @type {{ tail?: string[] } | undefined} */ (error.details)?.tail ?? []
-  return [error.message, ...tail].join('\n')
 }
 
 /** @param {string | null} value */

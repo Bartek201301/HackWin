@@ -162,7 +162,7 @@ describe('AC62: the status issue over a run of 45 pull request events', () => {
         fake,
         login: LEAD,
         clock,
-        options: { pipeline, keepAwake: noKeepAwake, machine: 'lead-laptop' },
+        options: { pipeline, keepAwake: noKeepAwake },
       })
       running.push(gate)
       await until(() => gate.io.out.includes('`quit`'), 'the header')

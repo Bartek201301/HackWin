@@ -9,14 +9,20 @@
 // (G5). The pipeline of section 9 plugs into the loop (`Pipeline`); without it the Gate polls but
 // takes no pull request.
 
-import { hostname } from 'node:os'
 import { readProtection } from '../../core/protection/index.js'
 import { PreconditionError, runIn } from '../../core/runtime/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
 import { startKeepAwake } from './awake.js'
 import { INPUT_HELP, readCommands } from './input.js'
 import { acquireLock, releaseLock, runningGate } from './lock.js'
-import { gateFiles, loadState, readHeartbeat, saveState, writeHeartbeat } from './state.js'
+import {
+  gateFiles,
+  loadGateId,
+  loadState,
+  readHeartbeat,
+  saveState,
+  writeHeartbeat,
+} from './state.js'
 import {
   createStatusPublisher,
   findStatusIssue,
@@ -57,7 +63,7 @@ const TICK_MS = 1000
  * @property {GateFiles} files
  * @property {GateState} state
  * @property {Protection} protection The latest protection read, which the status issue shows.
- * @property {string} machine The host name, which the status issue shows.
+ * @property {string} id The random id of this clone's Gate, which the status issue shows.
  * @property {Set<number>} retries The pull requests the Lead typed `retry` for, until the intake
  *   queues them again.
  * @property {number | null} running The pull request whose run is under way.
@@ -76,7 +82,6 @@ const TICK_MS = 1000
  * @property {Pipeline} [pipeline] The stages; none by default.
  * @property {StartKeepAwake} [keepAwake]
  * @property {number} [pid] The process of the Gate; this one by default.
- * @property {string} [machine] The host name for the status issue; this machine's by default.
  */
 
 /**
@@ -87,7 +92,6 @@ const TICK_MS = 1000
  */
 export async function startGate(ctx, options = {}) {
   const { pipeline = {}, keepAwake = startKeepAwake, pid = process.pid } = options
-  const machine = options.machine ?? hostname().split('.')[0]
   const { config, identity } = prepared(ctx)
   const lead = config.hackwin.team.lead
   if (!identity.isLead) {
@@ -124,7 +128,8 @@ export async function startGate(ctx, options = {}) {
     })
     requireOnlyUpdateBypass(protection)
     const issue = await findStatusIssue(ctx.github)
-    await refuseOtherGate({ ctx, config, files, issue, main, machine })
+    const own = await loadGateId(files.id, ctx.clock.now())
+    await refuseOtherGate({ ctx, config, files, issue, main, own })
 
     const { state, kept } = await loadState(files.state, ctx.clock.now())
     if (kept !== null) {
@@ -135,7 +140,7 @@ export async function startGate(ctx, options = {}) {
     state.starts += 1
     await saveState(files.state, state)
 
-    const gate = createGate({ ctx, config, files, state, pid, protection, machine })
+    const gate = createGate({ ctx, config, files, state, pid, protection, id: own.id })
     awake = await keepAwake({
       pid,
       onLost: (reason) =>
@@ -217,39 +222,37 @@ function requireOnlyUpdateBypass({ rules }) {
  * One Gate per project (G2): the lock holds only within one clone, so a start also refuses while
  * the status issue shows the fresh heartbeat of a Gate that has not stopped, unless this clone's
  * own Gate wrote it, as before a crash.
- * @param {{ ctx: CommandContext, config: Config, files: GateFiles, issue: Issue | null, main: string, machine: string }} parts
+ * @param {{ ctx: CommandContext, config: Config, files: GateFiles, issue: Issue | null, main: string, own: { id: string, created: boolean } }} parts
  */
-async function refuseOtherGate({ ctx, config, files, issue, main, machine }) {
+async function refuseOtherGate({ ctx, config, files, issue, main, own }) {
   if (issue === null) return
   const stale = config.hackwin.gate.heartbeat_stale_seconds
-  const now = ctx.clock.now()
   const other = otherGateHeartbeat(parseStatusBody(issue.body), {
+    gateId: own.id,
+    newId: own.created,
     local: await readHeartbeat(files.heartbeat),
-    now,
+    now: ctx.clock.now(),
     staleSeconds: stale,
   })
   if (other === null) return
+  const whose = other.gate_id === null ? 'a Gate without an id' : `the Gate ${other.gate_id}`
   const where =
-    other.machine === null
-      ? 'on another machine or in another clone'
-      : other.machine === machine
-        ? `in another clone on this machine (${machine})`
-        : `on the machine ${other.machine}`
+    other.gate_id === null ? '' : ` (its clone holds ${other.gate_id} in .git/hackwin/gate/gate-id)`
   const staleAt = new Date(Date.parse(other.heartbeat_at) + stale * 1000).toISOString()
   throw new PreconditionError(
-    `another Gate is running ${where}: the status issue #${issue.number} shows its heartbeat of ${other.heartbeat_at}, ${other.age_seconds} s old, and no stop; there is one Gate per project`,
+    `another Gate is running for this project: the status issue #${issue.number} shows the heartbeat of ${whose} at ${other.heartbeat_at}, ${other.age_seconds} s old, and no stop; this clone's Gate is ${own.id}; there is one Gate per project`,
     {
-      resolve: `type \`quit\` in that Gate's terminal; if it no longer runs, wait until ${staleAt}, when its heartbeat is ${stale} s old; then ${runIn('hackwin gate', main)}`,
-      details: { status_issue: issue.number, ...other },
+      resolve: `type \`quit\` in that Gate's terminal${where}; if it no longer runs, wait until ${staleAt}, when its heartbeat is ${stale} s old; then ${runIn('hackwin gate', main)}`,
+      details: { status_issue: issue.number, gate_id: own.id, other },
     },
   )
 }
 
 /**
- * @param {{ ctx: CommandContext, config: Config, files: GateFiles, state: GateState, pid: number, protection: Protection, machine: string }} parts
+ * @param {{ ctx: CommandContext, config: Config, files: GateFiles, state: GateState, pid: number, protection: Protection, id: string }} parts
  * @returns {Gate}
  */
-function createGate({ ctx, config, files, state, pid, protection, machine }) {
+function createGate({ ctx, config, files, state, pid, protection, id }) {
   // State and heartbeat writes run one after another, each with the state of its turn.
   let writes = Promise.resolve()
   /** @param {() => Promise<void>} write */
@@ -273,7 +276,7 @@ function createGate({ ctx, config, files, state, pid, protection, machine }) {
     files,
     state,
     protection,
-    machine,
+    id,
     retries: new Set(),
     running: null,
     stopping: false,
