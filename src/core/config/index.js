@@ -1,11 +1,19 @@
 // Configuration, ownership, identity, the version check and the fast-forward of the main
 // checkout. See docs/build/contracts.md section 4.4.
 
-export { loadConfig, loadProposedConfig } from './load.js'
+export {
+  loadConfig,
+  loadProposedConfig,
+  pinnedVersionOf,
+  HACKWIN_FILE,
+  OWNERS_FILE,
+} from './load.js'
+export { loadCheckedConfig, mainRef, enforceVersion } from './checked.js'
 export { parseHackwinConfig } from './hackwin.js'
 export { parseOwners } from './owners.js'
 export { validateConfig } from './validate.js'
-export { ownerOf, rolesOf, scopeCheck } from './ownership.js'
+export { ownerOf, holderOf, rolesOf, scopeCheck } from './ownership.js'
+export { createMatcher, samplePath } from './glob.js'
 export { resolveIdentity } from './identity.js'
 export { checkVersion, installCommand } from './version.js'
 export { fastForwardMainCheckout } from './checkout.js'

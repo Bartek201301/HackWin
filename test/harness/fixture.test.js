@@ -20,6 +20,7 @@ import {
   TEAM_SIZES,
   accounts,
   createFixture,
+  isolatedEnv,
   nodeProjectFiles,
   packNodeProject,
   teamConfig,
@@ -186,6 +187,39 @@ describe('1.3d/fixture: offline fixtures', () => {
       key: 'team.lead',
     })
     fixture.cleanup()
+  })
+
+  test('the environment of a fixture drops the variables of a CI runner, so no test reads the run that tests this repository', () => {
+    const runner = {
+      PATH: '/usr/bin:/bin',
+      LANG: 'C.UTF-8',
+      CI: 'true',
+      GITHUB_ACTIONS: 'true',
+      GITHUB_EVENT_PATH: '/home/runner/work/_temp/_github_workflow/event.json',
+      GITHUB_EVENT_NAME: 'pull_request',
+      GITHUB_REPOSITORY: 'Bartek201301/HackWin',
+      GITHUB_TOKEN: 'placeholder',
+      RUNNER_OS: 'Linux',
+      RUNNER_TEMP: '/home/runner/work/_temp',
+      GIT_DIR: '/elsewhere/.git',
+      GH_TOKEN: 'placeholder',
+      HACKWIN_CALLER: 'claude-code',
+      // Only the exact name CI and the prefixes are dropped.
+      CIRCLE: 'kept',
+      MY_GITHUB_NOTE: 'kept',
+    }
+    const env = isolatedEnv('/tmp/fixture-home', runner)
+    expect(
+      Object.keys(env).filter((key) => /^(CI|GITHUB_|RUNNER_|GH_TOKEN|HACKWIN_CALLER)/.test(key)),
+    ).toEqual(['CIRCLE'])
+    expect(env).toMatchObject({
+      PATH: '/usr/bin:/bin',
+      LANG: 'C.UTF-8',
+      MY_GITHUB_NOTE: 'kept',
+      HOME: '/tmp/fixture-home',
+      GIT_CONFIG_NOSYSTEM: '1',
+    })
+    expect(env.GIT_DIR).toBeUndefined()
   })
 })
 

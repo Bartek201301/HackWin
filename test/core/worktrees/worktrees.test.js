@@ -99,7 +99,7 @@ describe('1.3c/worktrees: task worktrees of a clone', () => {
     ])
   })
 
-  test('the worktrees of merged tasks are removed and the others kept (A35)', async () => {
+  test('the worktrees of merged tasks are removed and the others kept, each saying whether its task is merged (A35)', async () => {
     const merged = addTask(12, 'login-form')
     const open = addTask(13, 'api')
     const closedUnmerged = addTask(14, 'dropped')
@@ -115,9 +115,9 @@ describe('1.3c/worktrees: task worktrees of a clone', () => {
 
     expect(result.removed).toEqual([merged])
     expect(result.kept).toEqual([
-      { path: open, reason: 'its pull request is not merged' },
-      { path: closedUnmerged, reason: 'its pull request is not merged' },
-      { path: mergedDirty, reason: 'it has uncommitted changes or untracked files' },
+      { path: open, reason: 'its pull request is not merged', merged: false },
+      { path: closedUnmerged, reason: 'its pull request is not merged', merged: false },
+      { path: mergedDirty, reason: 'it has uncommitted changes or untracked files', merged: true },
     ])
     expect(existsSync(merged)).toBe(false)
     expect(existsSync(open)).toBe(true)
@@ -136,7 +136,19 @@ describe('1.3c/worktrees: task worktrees of a clone', () => {
     const result = await removeMergedWorktrees(createGit({ cwd: merged, env: repo.env }), github)
     expect(result).toEqual({
       removed: [],
-      kept: [{ path: merged, reason: 'it is the current worktree' }],
+      kept: [{ path: merged, reason: 'it is the current worktree', merged: true }],
+    })
+  })
+
+  test('a locked worktree of a merged task is kept with merged: true', async () => {
+    const merged = addTask(12, 'login-form')
+    repo.git(repo.clone, 'worktree', 'lock', merged)
+    const { github } = githubWithClosedPulls([
+      { number: 40, branch: 'task/12-login-form', merged: true },
+    ])
+    expect(await removeMergedWorktrees(git, github)).toEqual({
+      removed: [],
+      kept: [{ path: merged, reason: 'it is locked', merged: true }],
     })
   })
 

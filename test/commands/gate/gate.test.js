@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs
 import { join } from 'node:path'
 import { INHIBITOR_WHO } from '../../../src/commands/gate/awake.js'
 import { emptyState, gateFiles, pullRecord } from '../../../src/commands/gate/state.js'
-import { accounts, createFixture } from '../../harness/index.js'
+import { DEFAULT_FAKE_REPO, accounts, createFixture } from '../../harness/index.js'
 import {
   ADMIN_BYPASS,
   ONE_APPROVAL,
@@ -282,7 +282,7 @@ describe('1.6a/header: the header of a starting Gate', () => {
       'resolver: none',
       'poll: every 60 s',
       'queue: 0 pull requests',
-      'status issue: not created yet',
+      `status issue: #1 https://github.com/${DEFAULT_FAKE_REPO}/issues/1`,
     ])
     expect(header).toContain(
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',

@@ -31,11 +31,19 @@ export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
  */
 
 /**
+ * The environment of a project command: the whole environment of the child, `process.env` by
+ * default. A caller that must keep a variable from the project's code, such as the token of a
+ * CI run, passes an environment without it.
+ * @typedef {Record<string, string | undefined>} ProjectEnv
+ */
+
+/**
  * @typedef {object} RunOptions
  * @property {string} cwd The top-level directory of the checkout or worktree to run in.
  * @property {Config} config
  * @property {number} [timeoutMs] PROJECT_TIMEOUT_MS by default.
  * @property {string} [logFile] Receives the whole output; its directory is created.
+ * @property {ProjectEnv} [env] The environment of the command; `process.env` by default.
  */
 
 /**
@@ -44,7 +52,7 @@ export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
  * @param {RunOptions} options
  * @returns {Promise<ProjectRun | { skipped: true, notice: string }>}
  */
-export async function runInstall({ cwd, config, timeoutMs, logFile }) {
+export async function runInstall({ cwd, config, timeoutMs, logFile, env }) {
   const install = projectCommand(config, 'install')
   const manifests = config.hackwin.paths?.manifests ?? []
   if (!(await hasManifest(cwd, manifests))) {
@@ -54,7 +62,7 @@ export async function runInstall({ cwd, config, timeoutMs, logFile }) {
       notice: `install skipped: no file matches paths.manifests (${globs})`,
     }
   }
-  return runCommand(install, { cwd, timeoutMs, logFile })
+  return runCommand(install, { cwd, timeoutMs, logFile, env })
 }
 
 /**
@@ -62,8 +70,8 @@ export async function runInstall({ cwd, config, timeoutMs, logFile }) {
  * @param {RunOptions} options
  * @returns {Promise<ProjectRun>}
  */
-export async function runCheck({ cwd, config, timeoutMs, logFile }) {
-  return runCommand(projectCommand(config, 'check'), { cwd, timeoutMs, logFile })
+export async function runCheck({ cwd, config, timeoutMs, logFile, env }) {
+  return runCommand(projectCommand(config, 'check'), { cwd, timeoutMs, logFile, env })
 }
 
 /**
@@ -73,7 +81,7 @@ export async function runCheck({ cwd, config, timeoutMs, logFile }) {
  * @param {RunOptions & { files: string[] }} options `files` is the task's `acceptance_tests`.
  * @returns {Promise<{ ok: boolean, missing: string[], run: ProjectRun | null }>}
  */
-export async function runAcceptanceTests({ cwd, config, files, timeoutMs, logFile }) {
+export async function runAcceptanceTests({ cwd, config, files, timeoutMs, logFile, env }) {
   const entries = files ?? []
   /** @type {string[]} */
   const missing = []
@@ -83,7 +91,7 @@ export async function runAcceptanceTests({ cwd, config, files, timeoutMs, logFil
   if (missing.length > 0) return { ok: false, missing, run: null }
   if (entries.length === 0) return { ok: true, missing, run: null }
   const command = withFiles(projectCommand(config, 'test'), entries)
-  const run = await runCommand(command, { cwd, timeoutMs, logFile })
+  const run = await runCommand(command, { cwd, timeoutMs, logFile, env })
   return { ok: run.ok, missing, run }
 }
 
@@ -92,10 +100,10 @@ export async function runAcceptanceTests({ cwd, config, files, timeoutMs, logFil
  * each file before and after. Every file the formatter changed is unformatted; its original
  * content is restored, so the check never changes the checkout. A file that no longer exists,
  * such as a deleted one, is not checked.
- * @param {{ cwd: string, config: Config, files: string[] }} options
+ * @param {{ cwd: string, config: Config, files: string[], env?: ProjectEnv }} options
  * @returns {Promise<{ ok: boolean, unformatted: string[], run: ProjectRun | null }>}
  */
-export async function formatCheck({ cwd, config, files }) {
+export async function formatCheck({ cwd, config, files, env }) {
   const format = projectCommand(config, 'format')
   /** @type {Map<string, Buffer>} */
   const before = new Map()
@@ -110,7 +118,7 @@ export async function formatCheck({ cwd, config, files }) {
   /** @type {ProjectRun} */
   let run
   try {
-    run = await runCommand(withFiles(format, [...before.keys()]), { cwd })
+    run = await runCommand(withFiles(format, [...before.keys()]), { cwd, env })
   } finally {
     for (const [path, content] of before) {
       const after = await fileContent(cwd, path)
@@ -126,11 +134,11 @@ export async function formatCheck({ cwd, config, files }) {
  * The generated file check (E10): runs `commands.generate` and fails when it changes a tracked
  * file. Changes that were in the checkout before the run do not count. Every tracked file the
  * command changed is restored. `ok` without a run when `commands.generate` is null.
- * @param {{ cwd: string, config: Config, git: Git }} options `git` may run in any worktree
- *   of the clone; the check runs in `cwd`.
+ * @param {{ cwd: string, config: Config, git: Git, env?: ProjectEnv }} options `git` may run in
+ *   any worktree of the clone; the check runs in `cwd`.
  * @returns {Promise<{ ok: boolean, changed: string[], run: ProjectRun | null }>}
  */
-export async function generatedFileCheck({ cwd, config, git }) {
+export async function generatedFileCheck({ cwd, config, git, env }) {
   const generate = config.hackwin.commands?.generate ?? null
   if (generate === null) return { ok: true, changed: [], run: null }
   if (typeof generate !== 'string' || generate.trim() === '') {
@@ -146,7 +154,7 @@ export async function generatedFileCheck({ cwd, config, git }) {
   /** @type {ProjectRun} */
   let run
   try {
-    run = await runCommand(generate, { cwd })
+    run = await runCommand(generate, { cwd, env })
   } finally {
     const after = await trackedChanges(repo, cwd)
     /** @type {string[]} */
@@ -194,12 +202,12 @@ function withFiles(command, files) {
 
 /**
  * @param {string} command
- * @param {{ cwd: string, timeoutMs?: number, logFile?: string }} options
+ * @param {{ cwd: string, timeoutMs?: number, logFile?: string, env?: ProjectEnv }} options
  * @returns {Promise<ProjectRun>}
  */
-async function runCommand(command, { cwd, timeoutMs = PROJECT_TIMEOUT_MS, logFile }) {
+async function runCommand(command, { cwd, timeoutMs = PROJECT_TIMEOUT_MS, logFile, env }) {
   if (logFile) mkdirSync(dirname(logFile), { recursive: true })
-  const result = await execShell(command, { cwd, timeoutMs, logFile })
+  const result = await execShell(command, { cwd, timeoutMs, logFile, env })
   return {
     ok: result.code === 0 && !result.timedOut,
     command,

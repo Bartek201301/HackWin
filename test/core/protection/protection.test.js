@@ -15,15 +15,14 @@ import {
 } from './rulesets.js'
 
 /**
- * A fake GitHub with these rule sets, and the Lead's client for it.
+ * The fake GitHub of the harness with these rule sets, and the Lead's client for it.
  * @param {any[]} rulesets
  * @param {{ offered?: boolean, defaultBranch?: string }} [options]
  */
 function leadWith(rulesets, { offered, defaultBranch } = {}) {
-  const fake = createFakeGitHub({ defaultBranch })
-  const served = serveRulesets(fake, rulesets, { offered })
+  const fake = createFakeGitHub({ defaultBranch, rulesets, rulesetsOffered: offered })
   const github = createGitHub({ executor: fake.as(accounts.lead.login), repo: fake.state.repo })
-  return { fake, github, ...served }
+  return { fake, github, rulesets: fake.state.rulesets }
 }
 
 /**
@@ -85,7 +84,7 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     })
     expect(fake.calls.map((call) => call.endpoint)).toEqual([
       'repos/{owner}/{repo}/rules/branches/main',
-      'repos/{owner}/{repo}/rulesets/24000001',
+      `repos/{owner}/{repo}/rulesets/${fake.state.rulesets[0].id}`,
     ])
   })
 
@@ -333,6 +332,18 @@ describe('1.3e/protection: the protection state read from GitHub', () => {
     const { github, fake } = leadWith([])
     await readProtection(github, { branch: 'release/1.0' })
     expect(fake.calls[0].endpoint).toBe('repos/{owner}/{repo}/rules/branches/release/1.0')
+  })
+
+  test('serveRulesets, which the Gate tests use, gives the rule sets to the fake GitHub of the harness', async () => {
+    const fake = createFakeGitHub()
+    const { rulesets, add } = serveRulesets(fake, [branchRulesBody()], { offered: true })
+    expect(rulesets).toBe(fake.state.rulesets)
+    add(updateRestrictionBody())
+    const github = createGitHub({ executor: fake.as(accounts.lead.login), repo: fake.state.repo })
+    expect((await readProtection(github, { branch: 'main' })).state).toBe('full-restricted')
+    serveRulesets(fake, [], { offered: false })
+    expect((await readProtection(github, { branch: 'main' })).state).toBe('soft')
+    expect(fake.unhandled).toEqual([])
   })
 
   test('the pinned check of setup is the one of docs/verification.md row 5', () => {

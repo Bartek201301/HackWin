@@ -21,12 +21,13 @@ Use English for code, comments, commits, issues and pull requests. Answer the hu
   `<N>` is the issue number, `<slug>` two to four lowercase words of the title joined by hyphens.
 - Run every command inside your task's worktree. Never work in the main checkout or in another worktree. The integrator uses the main checkout only to plan and to merge.
 - Bring main into your branch with `git merge origin/main`. Never rebase, never force push, never amend a pushed commit.
-- Never push to `main`. Never merge a pull request, your own included. Only the integrator merges, and only when the human asks.
+- Never push to `main`. Never merge a pull request, your own included. Only the integrator merges, and only when the human asks or, after its review, the Lead's session `lead-55` sends the integrator `merge #N` with the head SHA (plan sections 7 and 8).
 
 ## Checks
 
 - Format only the files you changed: `npm run format -- <files>`.
 - Before you open a pull request, run the full test suite, `npm test`, and the task's acceptance tests, `npm run test:ac -- <ids>`, on the commit you push. Both must pass.
+- A task whose acceptance criteria are all inspections has no test ids. It runs `npm test` only and skips `npm run test:ac`, which fails without an id, and its pull request says so.
 - Chain these commands with `&&`, never with `;`.
 - While `package.json` does not exist on your branch, these commands do not exist yet. Say so in the pull request.
 
@@ -46,7 +47,7 @@ Do these steps in order, each one only after the previous one succeeded:
 
 1. Commit.
 2. `git fetch origin && git merge origin/main`, resolving conflicts in your own files only.
-3. Run `npm test` and the task's acceptance tests.
+3. Run `npm test` and the task's acceptance tests (none for a task without test ids, see "Checks").
 4. Push the branch: `git push -u origin task/<N>-<slug>`.
 5. Open the pull request, not as a draft, from `.github/pull_request_template.md`, with `Closes #<N>`. Under the heading "Workflow notes", write what you observed about the workflow during the task: rules that blocked you, conflicts, missing interfaces, unclear instructions, time lost. Write only what you observed, or "none". The integrator copies these notes into `docs/test-log.md` when it merges.
 
