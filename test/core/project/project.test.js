@@ -308,6 +308,60 @@ describe('1.3c/project: every project command has a timeout and reports its log 
     expect(result.durationMs).toBeLessThan(5000)
   })
 
+  test('every project command runs with the environment the caller gives, process.env by default', async () => {
+    commit({ 'package.json': '{}\n', 'check.txt': 'all good\n', 'tests/a.test.txt': 'ok\n' })
+    const log = join(tools, 'env.log')
+    /** @param {string} name */
+    const probe = (name) =>
+      `echo ${name} "\${PROBE_GIVEN-unset}" "\${PROBE_SECRET-unset}" >> ${quoteShellArg(log)}`
+    const config = configOf({
+      generate: probe('generate'),
+      commands: {
+        install: probe('install'),
+        check: probe('check'),
+        test: probe('test'),
+        format: probe('format'),
+      },
+    })
+    const runAll = async (/** @type {Record<string, string | undefined> | undefined} */ env) => {
+      const cwd = repo.clone
+      expect(await runInstall({ cwd, config, env })).toMatchObject({ ok: true })
+      expect(await runCheck({ cwd, config, env })).toMatchObject({ ok: true })
+      const files = ['tests/a.test.txt']
+      expect(await runAcceptanceTests({ cwd, config, files, env })).toMatchObject({ ok: true })
+      expect(await formatCheck({ cwd, config, files: ['check.txt'], env })).toMatchObject({
+        ok: true,
+      })
+      const git = createGit({ cwd, env: repo.env })
+      expect(await generatedFileCheck({ cwd, config, git, env })).toMatchObject({ ok: true })
+      const lines = readFileSync(log, 'utf8').trim().split('\n')
+      writeFileSync(log, '')
+      // The test and format commands get the files appended after the redirection.
+      return lines.map((line) => line.split(' ').slice(0, 3).join(' '))
+    }
+
+    process.env.PROBE_SECRET = 'from-process'
+    try {
+      const { PROBE_SECRET, ...rest } = process.env
+      expect(await runAll({ ...rest, PROBE_GIVEN: 'given' })).toEqual([
+        'install given unset',
+        'check given unset',
+        'test given unset',
+        'format given unset',
+        'generate given unset',
+      ])
+      expect(await runAll(undefined)).toEqual([
+        'install unset from-process',
+        'check unset from-process',
+        'test unset from-process',
+        'format unset from-process',
+        'generate unset from-process',
+      ])
+    } finally {
+      delete process.env.PROBE_SECRET
+    }
+  })
+
   test('a missing command is a configuration error naming its key', async () => {
     const config = configOf({ commands: { check: '' } })
     const error = await runCheck({ cwd: repo.clone, config }).catch((e) => e)

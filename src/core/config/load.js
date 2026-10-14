@@ -30,6 +30,8 @@ export const OWNERS_FILE = 'owners.yml'
 
 /**
  * Fetch origin and read, parse and validate hackwin.yml and owners.yml from `ref` (CM9, A17).
+ * The fetch prunes, so that a branch deleted on GitHub leaves no remote-tracking ref behind for
+ * the command to act on, such as `take` choosing the base of a task's branch.
  * @param {Git} git
  * @param {{ ref?: string, fetch?: boolean }} [options]
  * @returns {Promise<Config>} RemoteError when the fetch fails; PreconditionError when hackwin.yml
@@ -42,7 +44,7 @@ export async function loadConfig(git, { ref = 'origin/main', fetch = true } = {}
         resolve: 'run hackwin in a clone of the team repository',
       })
     }
-    await git.fetch({ remote: 'origin' })
+    await git.fetch({ remote: 'origin', prune: true })
   }
   const sha = await git.tryRevParse(ref)
   const hackwinText = sha === null ? null : await git.showFile(sha, HACKWIN_FILE)

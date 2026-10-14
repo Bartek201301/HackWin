@@ -17,7 +17,7 @@ import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGitHub } from '../../src/core/github/index.js'
 import { NAME_ONLY_LOGINS, REDACTED, TOKEN_VARIABLE, accounts, redact } from './accounts.js'
-import { createFakeGitHub, httpError } from './fake-github.js'
+import { createFakeGitHub } from './fake-github.js'
 import { FIXTURE_REPOS, RESET_SHA, SANDBOX, fixtureRepo } from './fixture-repos.js'
 import { inspectFixtureRepo, withFixtureRepo } from './fixture-repo.js'
 import { guardExecutor, refusalOf } from './guard.js'
@@ -38,8 +38,8 @@ function tempDir() {
 }
 
 /**
- * A fake fixture repository: dirty, with the rule sets, branch rules and pinned issues answered
- * by handlers the way GitHub answers them.
+ * A fake fixture repository: dirty, with a rule set, branch rules and pinned issues, the rule
+ * sets held by the fake GitHub and the rest answered by handlers the way GitHub answers them.
  * @param {string} name
  * @param {{ rulesetsRefused?: boolean, collaborators?: Record<string, string> }} [options]
  */
@@ -61,21 +61,10 @@ function fakeFixtureRepo(name, { rulesetsRefused = false, collaborators } = {}) 
       { number: 42, title: 'Done', state: 'closed' },
     ],
     pulls: [{ number: 43, title: 'Open pull request', head: 'task/41-x', body: 'Closes #41' }],
+    rulesets: [{ id: 7, name: 'hackwin-branch-rules' }],
+    rulesetsOffered: !rulesetsRefused,
   })
-  let rulesets = [{ id: 7, name: 'hackwin-branch-rules', source_type: 'Repository' }]
   let rules = [{ id: 'BPR_1', pattern: 'main' }]
-  fake.on('GET repos/{owner}/{repo}/rulesets', () => {
-    if (rulesetsRefused) {
-      throw httpError(
-        403,
-        'Upgrade to GitHub Pro or make this repository public to enable this feature.',
-      )
-    }
-    return rulesets
-  })
-  fake.on('DELETE repos/{owner}/{repo}/rulesets/:id', ({ params }) => {
-    rulesets = rulesets.filter((ruleset) => ruleset.id !== Number(params.id))
-  })
   fake.on('POST graphql', ({ fields, body }) => {
     if (fields.query.includes('deleteBranchProtectionRule')) {
       rules = rules.filter((rule) => rule.id !== body.id)
@@ -92,7 +81,7 @@ function fakeFixtureRepo(name, { rulesetsRefused = false, collaborators } = {}) 
       },
     }
   })
-  return { fake, info, rulesets: () => rulesets, rules: () => rules }
+  return { fake, info, rulesets: () => fake.state.rulesets, rules: () => rules }
 }
 
 describe('1.3d/driver: the fixture repositories and accounts', () => {
@@ -503,6 +492,67 @@ describe('1.3d/driver: withFixtureRepo against the fake GitHub', () => {
     )
     expect(log).toMatch(/refused: hackwin-sandbox is for the human's live tests/)
     expect(log).toMatch(/scenario on hackwin-fixture-b passed/)
+  })
+
+  test('a scenario that acts only as the Lead checks only the Lead and cannot act as builder1', async () => {
+    const stateDir = tempDir()
+    // builder1 has no access here and no executor: a scenario of the Lead does not need it.
+    const { fake } = fakeFixtureRepo('hackwin-fixture-c', {
+      collaborators: { [accounts.lead.login]: 'admin' },
+    })
+    const result = await withFixtureRepo(
+      'hackwin-fixture-c',
+      async (repo) => {
+        expect(repo.logins).toEqual({
+          lead: accounts.lead.login,
+          builder1: accounts.builder1.login,
+          builder2: accounts.builder2.login,
+          solo: accounts.lead.login,
+        })
+        expect(repo.report.closedIssues).toEqual([41])
+        expect(await repo.github('solo').login()).toBe(accounts.lead.login)
+        for (const use of [
+          () => repo.github('builder1'),
+          () => repo.executor('builder1'),
+          () => repo.env('builder1'),
+        ]) {
+          expect(use).toThrow(/acts only as the Lead: name builder1 in the accounts option/)
+        }
+        await expect(repo.clone('builder1')).rejects.toThrow(/acts only as the Lead/)
+        expect(() => repo.github('builder2')).toThrow(/only against the fake GitHub/)
+        return 'done'
+      },
+      { stateDir, executors: { lead: fake.as(accounts.lead.login) }, accounts: ['lead'] },
+    )
+    expect(result).toBe('done')
+    expect(fake.calls.every((call) => call.login === accounts.lead.login)).toBe(true)
+    const log = readFileSync(join(stateDir, 'logs', 'hackwin-fixture-c.log'), 'utf8')
+    expect(log).toMatch(
+      /accounts: lead Bartek201301 \(admin\); builder1 not checked, the scenario acts only as the Lead/,
+    )
+
+    // solo is the Lead, and the Lead is still checked.
+    const notAdmin = fakeFixtureRepo('hackwin-fixture-c', {
+      collaborators: { [accounts.lead.login]: 'write' },
+    }).fake
+    await expect(
+      withFixtureRepo('hackwin-fixture-c', async () => {}, {
+        stateDir,
+        executors: { lead: notAdmin.as(accounts.lead.login) },
+        accounts: ['solo'],
+      }),
+    ).rejects.toThrow(/the Lead \(Bartek201301\) is not an admin/)
+
+    for (const accountsOption of [[], ['builder2'], ['someone']]) {
+      await expect(
+        withFixtureRepo('hackwin-fixture-c', async () => {}, {
+          stateDir,
+          executors: { lead: fake.as(accounts.lead.login) },
+          accounts: accountsOption,
+        }),
+      ).rejects.toThrow(/at least one account|only against the fake GitHub|not someone/)
+    }
+    expect(existsSync(join(stateDir, 'locks', 'hackwin-fixture-c.lock'))).toBe(false)
   })
 
   test('a failing scenario releases the lock, and a missing account or access fails by name', async () => {
