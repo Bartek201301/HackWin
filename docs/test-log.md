@@ -17,6 +17,25 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-14 · Phase 1 · Shared follow-up: config exports, rule sets in the fake GitHub, ship's log place, stricter isGreen (PR #59, issue #46)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/46-shared-follow-up`, created by the integrator from `4454ab8` and held until `lead-55` released it after the merge of #55. Its first commit sits on `53f9ba9`. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `cdce80a`, then a merge of `origin/main` at `556f6b0` (`df5102a`); PR #59 opened at 23:37:00 UTC.
+  - `lead-55` sent `merge #59` with the head SHA by SendMessage. Its review: all 17 items done, 16 of them tested (untested: the runner's prune in `isConfigured`, and a full `take` run). Nothing in main, in PR #58 or in the worktree of #22 relies on what changed. The plan's rows, sections 7 and 8, and `AGENTS.md` line 24 agree on who merges.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 25 files inside issue #46's paths, no lane file; no secret pattern; no conflict with `556f6b0`. Step 6, with the PR merged into `556f6b0`: `npm test` passed 518 of 518, and `npm run test:ac` passed 1.3b/config-exports (6), 1.3c/state (10), 1.3d/fake-github (13) and 1.3e/protection (31). Main had not moved, and the merge was pinned to the head SHA.
+  - For the first time, the live part of a test ran in the integrator's shell. Since item 17 a scenario that acts only as the Lead needs no `HACKWIN_TEST_BUILDER_TOKEN`, so 1.3e/protection ran on `hackwin-fixture-b` and `hackwin-fixture-private` as the Lead (`Bartek201301`). Its resets held, and the reset after the scenario deleted the three rule sets the scenario had created (harness log, 23:47 to 23:48 UTC).
+  - After the merge, from the Lead's routing: a new integrator issue #60 (reset retries, shared task constants, the marker and section 5.6 in the contracts, the lead session in the plan); a new lane A issue #61 (the CI token by environment, `join`'s field `merged`, the hooks' config loader); a scope change on #57 (paths `src/commands/ship/**`, `test/commands/ship/**` and `docs/verification.md`; ship's logs at `shipLogPath`; open question 8 of `docs/verification.md`); and one on #24 (the Gate uses the helpers of `src/core/state`).
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - Items 15 to 17 were posted on #46 at 23:19:59 UTC, after the session had read the comments. `lead-55` pointed the session to them; without that message it would have missed them.
+  - The Gate's tests (lane C) import `serveRulesets` from `test/core/protection/rulesets.js`, so it stays there as a wrapper.
+  - `npm run format -- owners.yml` rewrote every glob to single quotes (`.prettierrc.json` sets `singleQuote`). The only content change in `owners.yml` is the line `scripts/**`.
+  - `npm run format -- $FILES` failed in zsh, which does not split a variable into words; `xargs` worked. A few minutes lost.
+  - The first `npm run test:ac` on `df5102a` failed in 1.3e/protection: the reset after the live scenario failed in the `DELETE` of a rule set (`test/harness/reset.js:86`) with a `RemoteError`. The message is lost, because the session printed only the last lines and the next run emptied the run log. The next two runs passed. PR #42 saw the same kind of failure in that call. #60 item 1.
+  - Other sessions (worktrees of #10 and #21) ran vitest during one targeted run, at a load average of 19.4; nothing timed out.
+- Measured: PR open 11 min 38 s (23:37:00 to 23:48:38 UTC); 2 commits (one a merge of `origin/main`), 1 PR run (66 s), 0 conflicts; local merge test `npm test` 42.96 s; the run on main after the merge 61 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/59; head `df5102a`; merge commit `f5052ab`; runs `38655180340` (PR) and `38656331669` (main).
+
 ### 2026-10-14 · Phase 1 · Step 1.6b, gate: status issue (PR #56, issue #21)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/21-gate-status-issue`, created by the integrator from `97bd1c5` after the merges of #48 to #52; the session started at 22:45 UTC on 14 October. Its first commit sits on `4454ab8`. The integrator's planning session for the merge.
