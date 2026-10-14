@@ -2,16 +2,22 @@
 // queue until a task passes them all; then the steps that hand the task to the member's agent:
 // the cleanup of merged worktrees, the warnings, the claim, the worktree, the prompt and the
 // start of the agent.
+//
+// `take N` on the caller's own task resumes it (A12): a task in progress gets a continue prompt,
+// or the first prompt when an earlier `take` stopped before writing one, and a task in review
+// whose pull request the Gate labeled gate:failed gets a fix prompt. `take N --release` returns
+// the caller's task in progress to ready.
 
+import { access } from 'node:fs/promises'
 import { runInstall } from '../../core/project/index.js'
 import {
   BlockedError,
-  NotBuiltError,
   PreconditionError,
   UsageError,
+  quoteShellArg,
   runIn,
 } from '../../core/runtime/index.js'
-import { isJoinComplete, readLocal } from '../../core/state/index.js'
+import { isJoinComplete, promptPath, readLocal } from '../../core/state/index.js'
 import { toTask } from '../../core/tasks/index.js'
 import {
   checkHooksPath,
@@ -25,7 +31,9 @@ import { createBoard } from './board.js'
 import { CHECK_RULES, checkTask, chooseFromQueue } from './checks.js'
 import { claimTask, undoClaim } from './claim.js'
 import { writeTaskPrompt } from './prompt.js'
-import { linkLocalFiles, openCheckout, planCheckout } from './worktree.js'
+import { releaseTask } from './release.js'
+import { branchState, gateComment, modeOf, updateLine } from './resume.js'
+import { linkLocalFiles, openCheckout, planCheckout, updateCheckout } from './worktree.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config, Identity } from '../../core/config/index.js' */
@@ -35,8 +43,9 @@ import { linkLocalFiles, openCheckout, planCheckout } from './worktree.js'
 /** @import { Task, TaskBlock } from '../../core/tasks/index.js' */
 /** @import { CheckFailure, CheckScope, Skipped } from './checks.js' */
 /** @import { Claim } from './claim.js' */
-/** @import { WrittenPrompt } from './prompt.js' */
-/** @import { LinkedFiles, TaskCheckout } from './worktree.js' */
+/** @import { PromptKind, WrittenPrompt } from './prompt.js' */
+/** @import { TakeMode } from './resume.js' */
+/** @import { BranchUpdate, LinkedFiles, TaskCheckout } from './worktree.js' */
 
 const USAGE = 'hackwin take [N] [--release]'
 
@@ -47,18 +56,21 @@ const WAITING_LABELS = Object.freeze(['needs-owner', 'gate:failed', 'scope-viola
  * @typedef {object} Selection
  * @property {Task & { block: TaskBlock }} task
  * @property {Skipped[]} skipped
+ * @property {TakeMode} mode
  */
 
 /**
  * What the run has done so far, for the result and for --json.
  * @typedef {object} Progress
  * @property {Selection['task']} task
+ * @property {TakeMode} mode
  * @property {Skipped[]} skipped
  * @property {boolean} hooksRepaired
  * @property {string[]} removedWorktrees
  * @property {PullRequest[]} waitingPulls
  * @property {Claim} [claim]
  * @property {TaskCheckout} [checkout]
+ * @property {BranchUpdate} [update]
  * @property {{ ref: string, sha: string }} [main]
  * @property {LinkedFiles} [links]
  * @property {ProjectRun | { skipped: true, notice: string }} [install]
@@ -70,19 +82,16 @@ const WAITING_LABELS = Object.freeze(['needs-owner', 'gate:failed', 'scope-viola
  * @returns {Promise<CommandResult>}
  */
 export async function run(ctx) {
-  if (ctx.flags.release) {
-    throw new NotBuiltError(
-      'take',
-      'src/commands/take/index.js',
-      '`take --release` is not built yet',
-    )
-  }
   const number = issueNumber(ctx.args[0])
+  if (ctx.flags.release && number === null) {
+    throw new UsageError(`take --release needs the number of the task; usage: ${USAGE}`)
+  }
   const { config, identity } = prepared(ctx)
   const main = await mainCheckout(ctx.git)
   const local = await requireJoin(ctx, identity.login, main)
 
-  // Step 1. The runner fetched origin before this command started (CM9).
+  // Step 1. The runner fetched origin before this command started (CM9), the remote task
+  // branches included.
   const hooksRepaired = await activateHooks(ctx)
 
   /** @type {CheckScope} */
@@ -93,6 +102,11 @@ export async function run(ctx) {
     board: createBoard(ctx.github, config),
     worktrees: await taskWorktrees(ctx.git),
   }
+  if (ctx.flags.release) {
+    const task = await requireTask(ctx, scope, /** @type {number} */ (number))
+    const { worktrees } = scope
+    return releaseTask(ctx, { task, identity, main, worktrees, hooksRepaired })
+  }
   const selection =
     number === null ? await takeFromQueue(scope) : await takeNumber(ctx, scope, number)
   if ('result' in selection) return selection.result
@@ -101,13 +115,32 @@ export async function run(ctx) {
 
 /**
  * `take N`: issue N must be an open task (a precondition, exit 2) that passes every check
- * (exit 1 with the first failure otherwise).
+ * (exit 1 with the first failure otherwise). On the caller's own task, `take N` is a resume or
+ * a fix (A12), for which checks 2, 4 and 5 do not count the task itself or its own pull request.
  * @param {CommandContext} ctx
  * @param {CheckScope} scope
  * @param {number} number
  * @returns {Promise<Selection>}
  */
 async function takeNumber(ctx, scope, number) {
+  const task = await requireTask(ctx, scope, number)
+  const mode = await modeOf(task, scope)
+  const failure = await checkTask(task, scope, { resume: mode.kind !== 'take' })
+  if (failure) {
+    const what = mode.kind === 'take' ? 'taken' : 'resumed'
+    throw blocked(`#${number} cannot be ${what}: ${failure.reason}`, failure)
+  }
+  return { task: withBlock(task), skipped: [], mode }
+}
+
+/**
+ * The precondition of `take N`: issue N is an open task issue (exit 2 otherwise).
+ * @param {CommandContext} ctx
+ * @param {CheckScope} scope
+ * @param {number} number
+ * @returns {Promise<Task>}
+ */
+async function requireTask(ctx, scope, number) {
   const resolve = { command: 'hackwin take', dir: scope.main }
   const issue = await ctx.github.getIssue(number)
   if (issue === null) throw new PreconditionError(`#${number} does not exist`, { resolve })
@@ -122,10 +155,7 @@ async function takeNumber(ctx, scope, number) {
     )
   }
   if (task.state === 'closed') throw new PreconditionError(`#${number} is closed`, { resolve })
-
-  const failure = await checkTask(task, scope)
-  if (failure) throw blocked(`#${number} cannot be taken: ${failure.reason}`, failure)
-  return { task: withBlock(task), skipped: [] }
+  return task
 }
 
 /**
@@ -161,7 +191,7 @@ async function takeFromQueue(scope) {
       },
     )
   }
-  return { task: withBlock(task), skipped }
+  return { task: withBlock(task), skipped, mode: { kind: 'take' } }
 }
 
 /**
@@ -174,41 +204,55 @@ async function takeFromQueue(scope) {
  * @param {Selection & { hooksRepaired: boolean }} selection
  * @returns {Promise<CommandResult>}
  */
-async function takeTask(ctx, scope, local, { task, skipped, hooksRepaired }) {
+async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired }) {
   const { config, identity, main } = scope
   for (const entry of skipped) ctx.out.line(`skipped ${skippedLine(entry)}`)
-  ctx.out.line(`selected #${task.number} ${task.title} (role ${task.block.role})`)
+  ctx.out.line(selectedLine(task, mode))
 
   // Step 2.
   const cleanup = await removeMergedWorktrees(ctx.git, ctx.github)
   for (const path of cleanup.removed) ctx.out.line(`removed the worktree of a merged task: ${path}`)
 
-  // Step 3.
-  const waitingPulls = await pullsWaitingFor(scope, identity.login)
+  // Step 3. The pull request of a fix is the one this run hands to the agent.
+  const handedBack = mode.kind === 'fix' ? mode.pull.number : null
+  const waitingPulls = (await pullsWaitingFor(scope, identity.login)).filter(
+    (pull) => pull.number !== handedBack,
+  )
   for (const pull of waitingPulls) ctx.out.warn(waitingText(pull))
 
   /** @type {Progress} */
   const progress = {
     task,
+    mode,
     skipped,
     hooksRepaired,
     removedWorktrees: cleanup.removed,
     waitingPulls,
   }
 
-  // Step 4.
-  const claim = await claimTask(ctx.github, task, identity.login)
-  progress.claim = claim
-  const role = claim.roleAdded ? `, labeled ${claim.roleAdded}` : ''
-  ctx.out.line(`claimed #${task.number}: in-progress, assigned to ${identity.login}${role}`)
+  // Step 4. A fix leaves the task in review (8.3); a resume claims again, which completes a
+  // claim left half done and changes nothing otherwise.
+  if (mode.kind !== 'fix') {
+    const claim = await claimTask(ctx.github, task, identity.login)
+    progress.claim = claim
+    ctx.out.line(claimLine(task, claim))
+  }
 
   // Step 5.
   const mainRef = `origin/${config.hackwin.project.default_branch}`
   const mainSha = await ctx.git.revParse(`refs/remotes/${mainRef}`)
   progress.main = { ref: mainRef, sha: mainSha }
-  const checkout = await createCheckout(ctx, scope, claim, { task, mainSha })
+  const checkout = await createCheckout(ctx, scope, progress.claim ?? null, { task, mainSha, mode })
   progress.checkout = checkout
   ctx.out.line(checkoutLine(checkout, mainRef, mainSha))
+
+  const update = await updateCheckout(ctx.git, checkout, { mainRef, mainSha })
+  progress.update = update
+  for (const ref of [update.remote, update.main]) {
+    const line = updateLine(checkout.branch, ref)
+    if (line?.warning) ctx.out.warn(line.text)
+    else if (line) ctx.out.line(line.text)
+  }
 
   progress.links = await linkLocalFiles(main, checkout.path)
   const links = linksLine(progress.links)
@@ -227,6 +271,23 @@ async function takeTask(ctx, scope, local, { task, skipped, hooksRepaired }) {
   // Step 6.
   const issue = await scope.board.issue(task.number)
   if (issue === null) throw new Error(`#${task.number} disappeared while it was taken`)
+  const kind = await promptKind(ctx, task, mode)
+  const state =
+    kind === 'first'
+      ? null
+      : await branchState(ctx.git.with({ cwd: checkout.path }), {
+          branch: checkout.branch,
+          mainRef,
+          mainSha,
+          update,
+        })
+  const handback =
+    mode.kind === 'fix'
+      ? {
+          pull: mode.pull,
+          comment: await gateComment(ctx.github, mode.pull, config.hackwin.team.lead),
+        }
+      : null
   progress.prompt = await writeTaskPrompt(ctx, {
     config,
     identity,
@@ -237,6 +298,9 @@ async function takeTask(ctx, scope, local, { task, skipped, hooksRepaired }) {
     worktree: checkout.path,
     branch: checkout.branch,
     mainSha,
+    kind,
+    state,
+    handback,
   })
 
   // Step 7.
@@ -244,27 +308,54 @@ async function takeTask(ctx, scope, local, { task, skipped, hooksRepaired }) {
 }
 
 /**
+ * The prompt a run composes: the first prompt for a take, and for a resume whose earlier `take`
+ * stopped before step 6, so that no prompt file exists yet; otherwise a continue prompt, or a
+ * fix prompt for a pull request the Gate handed back (A12).
+ * @param {CommandContext} ctx
+ * @param {Task} task
+ * @param {TakeMode} mode
+ * @returns {Promise<PromptKind>}
+ */
+async function promptKind(ctx, task, mode) {
+  if (mode.kind === 'take') return 'first'
+  if (mode.kind === 'fix') return 'fix'
+  try {
+    await access(promptPath(ctx.gitCommonDir, task.number))
+    return 'continue'
+  } catch (error) {
+    if (error.code === 'ENOENT') return 'first'
+    throw error
+  }
+}
+
+/**
  * Step 5: the worktree of the task, created or reused. When it cannot be created, the claim of
- * step 4 is undone and the run exits 2.
+ * step 4 is undone and the run exits 2. A fix opens the branch of its pull request.
  * @param {CommandContext} ctx
  * @param {CheckScope} scope
- * @param {Claim} claim
- * @param {{ task: Task, mainSha: string }} options
+ * @param {Claim | null} claim Null for a fix, which claims nothing.
+ * @param {{ task: Task, mainSha: string, mode: TakeMode }} options
  * @returns {Promise<TaskCheckout>}
  */
-async function createCheckout(ctx, scope, claim, { task, mainSha }) {
+async function createCheckout(ctx, scope, claim, { task, mainSha, mode }) {
+  const pull = mode.kind === 'fix' ? mode.pull : null
   /** @type {TaskCheckout | null} */
   let checkout = null
   try {
-    checkout = await planCheckout(ctx.git, { main: scope.main, task })
-    await openCheckout(ctx.git, checkout, mainSha)
-    return checkout
+    checkout = await planCheckout(ctx.git, { main: scope.main, task, branch: pull?.headRef })
+    if (pull === null || checkout.branch === pull.headRef) {
+      await openCheckout(ctx.git, checkout, mainSha)
+      return checkout
+    }
   } catch (error) {
-    let undone = 'the in-progress label and the assignment were undone'
-    try {
-      await undoClaim(ctx.github, claim)
-    } catch (undoError) {
-      undone = `the claim could not be undone (${undoError.message}): remove in-progress and your assignment on #${task.number} by hand`
+    let undone = 'the labels did not change'
+    if (claim) {
+      undone = 'the in-progress label and the assignment were undone'
+      try {
+        await undoClaim(ctx.github, claim)
+      } catch (undoError) {
+        undone = `the claim could not be undone (${undoError.message}): remove in-progress and your assignment on #${task.number} by hand`
+      }
     }
     const where = checkout ? ` at ${checkout.path}` : ''
     throw new PreconditionError(
@@ -276,6 +367,19 @@ async function createCheckout(ctx, scope, claim, { task, mainSha }) {
       },
     )
   }
+  // Only a fix whose task already has a worktree on another branch gets here.
+  const other = /** @type {TaskCheckout} */ (checkout)
+  const handedBack = /** @type {PullRequest} */ (pull)
+  throw new PreconditionError(
+    `the worktree of #${task.number} at ${other.path} is on ${other.branch}, but its pull request #${handedBack.number} comes from ${handedBack.headRef}`,
+    {
+      resolve: {
+        command: `git worktree remove ${quoteShellArg(other.path)}`,
+        dir: scope.main,
+      },
+      details: { path: other.path, branch: other.branch, pullBranch: handedBack.headRef },
+    },
+  )
 }
 
 /**
@@ -295,15 +399,16 @@ async function startAgent(ctx, identity, progress) {
   const start = startCommand(agent, { worktree: checkout.path, promptFile: prompt.file })
   const startLine = `start ${name} for #${task.number} in a new terminal: ${runIn(start.command, start.dir)}`
   const reason = printReason({ agent, caller: ctx.caller, json: ctx.json })
+  const promptLine = `${PROMPT_NAMES[prompt.kind]}: ${prompt.file}`
 
   if (reason !== null) {
     return {
-      lines: [`prompt: ${prompt.file}`, startLine],
+      lines: [promptLine, startLine],
       data: resultData(progress, { agent, mode: 'printed', reason, ...start }),
     }
   }
 
-  ctx.out.line(`prompt: ${prompt.file}`)
+  ctx.out.line(promptLine)
   ctx.out.line(`starting ${name} in ${checkout.path}`)
   const launch = await launchClaude({ worktree: checkout.path, prompt: prompt.text, env: ctx.env })
   if (!launch.started) {
@@ -365,6 +470,43 @@ async function activateHooks(ctx) {
   return true
 }
 
+/** How the output names the prompt file of each kind of prompt. */
+const PROMPT_NAMES = Object.freeze({
+  first: 'prompt',
+  continue: 'continue prompt',
+  fix: 'fix prompt',
+})
+
+/**
+ * The line that names the task and what this run does with it.
+ * @param {Selection['task']} task
+ * @param {TakeMode} mode
+ * @returns {string}
+ */
+function selectedLine(task, mode) {
+  const name = `#${task.number} ${task.title} (role ${task.block.role})`
+  if (mode.kind === 'take') return `selected ${name}`
+  if (mode.kind === 'fix') {
+    return `reopening ${name}: the Gate handed its pull request #${mode.pull.number} back (gate:failed)`
+  }
+  return mode.unassigned
+    ? `resuming ${name}: in progress without an assignee, a claim an earlier take left half done`
+    : `resuming ${name}: in progress, assigned to you`
+}
+
+/**
+ * @param {Task} task
+ * @param {Claim} claim
+ * @returns {string}
+ */
+function claimLine(task, claim) {
+  if (!claim.statusAdded && !claim.assigneeAdded && claim.roleAdded === null) {
+    return `#${task.number} stays in-progress, assigned to ${claim.login}`
+  }
+  const role = claim.roleAdded ? `, labeled ${claim.roleAdded}` : ''
+  return `claimed #${task.number}: in-progress, assigned to ${claim.login}${role}`
+}
+
 /**
  * Step 3: the caller's open pull requests that wait for them.
  * @param {CheckScope} scope
@@ -400,6 +542,9 @@ function checkoutLine(checkout, mainRef, mainSha) {
   if (checkout.how === 'create') {
     return `worktree: ${checkout.path} on ${checkout.branch}, new from ${mainRef} ${mainSha.slice(0, 12)}`
   }
+  if (checkout.how === 'from-remote') {
+    return `worktree: ${checkout.path} on ${checkout.branch}, new from origin/${checkout.branch}`
+  }
   const what = checkout.how === 'reuse-worktree' ? 'reused' : 'added for the existing branch'
   return `worktree: ${checkout.path} on ${checkout.branch}, ${what}`
 }
@@ -423,9 +568,19 @@ function linksLine({ linked, missing }) {
  * @returns {Record<string, unknown>}
  */
 function resultData(progress, start) {
-  const { task, claim, checkout, prompt, install } = progress
+  const { task, mode, claim, checkout, prompt, install } = progress
   return {
     task: taskData(task),
+    mode: mode.kind,
+    pullRequest:
+      mode.kind === 'fix'
+        ? {
+            number: mode.pull.number,
+            url: mode.pull.url,
+            branch: mode.pull.headRef,
+            labels: mode.pull.labels,
+          }
+        : null,
     skipped: progress.skipped.map(skippedData),
     queueEmpty: false,
     hooksRepaired: progress.hooksRepaired,
@@ -443,9 +598,11 @@ function resultData(progress, start) {
     },
     main: progress.main,
     worktree: checkout && { path: checkout.path, branch: checkout.branch, how: checkout.how },
+    update: progress.update,
     links: progress.links,
     install: install && ('skipped' in install ? install : installData(install)),
     prompt: prompt && {
+      kind: prompt.kind,
       file: prompt.file,
       changes: {
         from: prompt.changes.from,
