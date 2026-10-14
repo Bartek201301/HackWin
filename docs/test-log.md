@@ -17,6 +17,27 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-14 · Phase 1 · Step 1.5c, take: resume, release and fix prompt (PR #55, issue #17)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/17-take-resume-release`, created by the integrator from `97bd1c5` after the merges of #48 to #52; the session started at 22:45 UTC on 14 October. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9436130`, on `97bd1c5`, then a merge of `origin/main` at `53f9ba9` (`11612df`); PR #55 opened at 23:08:08 UTC.
+  - `lead-55` sent `merge #55` with the head SHA and its review by SendMessage. The review accepted three decisions: a resume merges `origin/main` (never a rebase, and it stops on a conflict or a dirty worktree); `--release` keeps the branch and the worktree; a task is the caller's own when the caller is its assignee or its pull request's author.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 14 files inside issue #17's paths, the ship paths of its scope change included; no secret pattern; no conflict with `50679a9`. Step 6, with the PR merged into `50679a9`: `npm test` passed 482 of 482, and `npm run test:ac` passed AC52 (4), AC54/take (1) and AC32/take (1). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge, from the Lead's review:
+    - a new lane B task, #57 (1.5f): `take` finds the Gate's comment by a marker, gives the continue prompt after `--release` when the worktree holds work, and names a detached or switched worktree;
+    - scope changes on #22 (a marker on every Gate comment, and `appendDigestLine` of PR #56), #24 (the Gate's own comments by the marker, two Gates at once, a status issue closed by hand, the start count across clones) and #46 (pruning before `take` decides, a pull request's head repository in the fake GitHub, a scenario that acts only as the Lead).
+- Problems, from the PR's "Workflow notes":
+  - `docs/build/contracts.md` has no interface for the Gate's failure comment, so `take` identifies it by its author, the Lead's account, which the Gate shares (A5). #22 and #57.
+  - The fake GitHub always reports its own repository as a pull request's head repository, so the fork tests needed a handler in lane B's test helpers (`rewritePulls`, `asFork`), which the `ship` test imports from there. #46 item 16.
+  - Item 6 of the scope change changed behavior that a merged 1.5b test asserted, so that test changed with it.
+  - `origin/main` moved during the task (PRs #51 and #53); the merge had no conflicts.
+- From the Lead's review, recorded for the PRD revision:
+  - Two decisions go past the wording of PRD 7.7: check 4 skips the task's own pull request on every `take`, not only on a resume; a branch that exists only on origin is checked out from origin.
+  - Gaps in the specification: nothing detects a second `take` while the first session still runs in the worktree; check 5 does not count a fix session (`in-review`); `--release` of a task whose pull request is open leaves that pull request mergeable by the Gate.
+- Measured: PR open 9 min 26 s (23:08:08 to 23:17:34 UTC); 2 commits (one a merge of `origin/main`), 1 PR run (88 s), 0 conflicts; local merge test `npm test` 35.08 s; the run on main after the merge 60 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/55; head `11612df`; merge commit `500211e`; runs `38652199585` (PR) and `38653164223` (main).
+
 ### 2026-10-14 · Phase 1 · Tooling: npm run test:ac through a Node script (PR #54, issue #35)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/35-test-ac-node-script`, created by the integrator from `4454ab8` after the merges of #47 and #51, beside the sessions of #10, #17 and #21. The integrator's planning session for the merge.
