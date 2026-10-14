@@ -13,14 +13,19 @@ const root = fileURLToPath(new URL('../../', import.meta.url))
 // longer is killed, so that a hanging run fails its case instead of holding the suite.
 const RUN_TIMEOUT = 180_000
 
-/** The environment of a nested test run, without the variables of the run around it. */
+/**
+ * The environment of a nested test run, without the variables of the run around it. Whether Vitest
+ * colours its output depends on the environment (CI, a coding agent, FORCE_COLOR), so a nested run
+ * prints no colours, on a developer's machine as on a CI runner.
+ */
 function childEnv(extra = {}) {
   /** @type {Record<string, string | undefined>} */
   const env = {}
   for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith('VITEST') && key !== 'HACKWIN_TEST_IDS') env[key] = value
+    if (key.startsWith('VITEST') || key === 'HACKWIN_TEST_IDS' || key === 'FORCE_COLOR') continue
+    env[key] = value
   }
-  return /** @type {NodeJS.ProcessEnv} */ ({ ...env, ...extra })
+  return /** @type {NodeJS.ProcessEnv} */ ({ ...env, NO_COLOR: '1', ...extra })
 }
 
 /**
@@ -77,8 +82,9 @@ afterAll(() => scratch.cleanup())
 /**
  * @param {string} config
  * @param {string[]} ids
+ * @param {string[]} [args] further arguments of Vitest
  */
-function vitestOnSamples(config, ids) {
+function vitestOnSamples(config, ids, args = []) {
   return spawnSync(
     process.execPath,
     [
@@ -88,6 +94,7 @@ function vitestOnSamples(config, ids) {
       join(root, config),
       '--root',
       scratch.dir,
+      ...args,
     ],
     {
       cwd: scratch.dir,
@@ -146,7 +153,9 @@ describe('1.3a/test-ac: npm run test:ac runs the tests of the named ids', caseTi
   })
 
   test('the offline suite of npm test leaves out the fixture tests', () => {
-    const result = vitestOnSamples('vitest.config.js', [])
+    // vitest.config.js names no reporter, and Vitest picks one by environment: `agent` under a
+    // coding agent, `default` and `github-actions` on GitHub Actions. So the run names it.
+    const result = vitestOnSamples('vitest.config.js', [], ['--reporter=default'])
     // X3 fails on purpose; what matters is which files ran.
     expect(result.stdout).toContain('sample.test.js')
     expect(result.stdout).not.toContain('sample.fixture.test.js')
