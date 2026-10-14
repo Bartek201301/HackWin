@@ -17,6 +17,33 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-14 · Phase 1 · Step 1.4c, Claude Code settings, hooks and command wrappers (PR #58, issue #10)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/10-claude-code-settings-hooks`, created by the integrator from `4454ab8` after the merges of #47 and #51. Its first commit sits on `53f9ba9`. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `962234d`, then a merge of `origin/main` at `500211e` (`360e0ab`); PR #58 opened at 23:25:22 UTC, and CI passed.
+  - `lead-55` reviewed the head `360e0ab` and found seven gaps in how the PreToolUse hook reads a command:
+    - control-flow words;
+    - an apostrophe in a here-document inside `$(...)`;
+    - process substitution;
+    - `stdbuf`;
+    - `gh api` routes that update the default branch without a pull request;
+    - the upstream of a bare `git push`;
+    - SessionStart output above Claude Code's cap of 10,000 characters.
+  - `939504a` fixed them and capped the summary at 9,000 characters, and a merge of `origin/main` at `f5052ab` followed (`dbaf19b`). The new tests had failed on the first head's code: 39 PreToolUse cases, and a summary of 70,488 characters. `lead-55` ran `commandsOf` at the new head on the reported forms, and each merge and push was found.
+  - `lead-55` sent `merge #58` with the head SHA by SendMessage. Its review: `.claude/settings.json` stays the Lead's file and out of `MANIFEST`; PreToolUse refuses with a JSON `deny` and exit 0, as the hooks reference requires.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 16 files inside issue #10's paths; no secret pattern; no conflict with `f5052ab`; `src/generate/manifest.js` does not name `.claude/settings.json`. Step 6, with the PR merged into `f5052ab`: `npm test` passed 611 of 611, and `npm run test:ac` passed AC55 (4), AC63/deny (28), AC71/wrapper (1), AC67/wrappers (2) and 1.4c/settings (5). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: a scope change on #11 (`setup` writes `.claude/settings.json` with `writeClaudeSettings`, because nothing else writes it), and worktrees for #11 and #61 at `653bb8c`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The waiting labels and the prefix "Scope change:" exist only in lane B, so `src/internal/hook/session-start.js` repeats them. #60 item 2.
+  - Contracts 3.4 maps a block to exit 1, but a Claude Code PreToolUse hook blocks only with exit 2 or a JSON decision; exit 1 lets the tool run. The hooks return exit 0 with a JSON `deny`. Contracts 3.6 does not record this difference.
+  - The issue says "recorded hook events", but decision 9 rules out a real session, so the events follow the documented form.
+  - The PR names what the hook knowingly does not see, such as aliases, shell variables, `| sh`, `eval` and `curl`. The Claude Code layer stays soft; the git hooks, CI, the Gate and D2 hold the hard rules.
+  - For the manual check per release (B9), from the Lead's review: a project skill named `status` replaces Claude Code's `/status`; `hackwin` must be on Claude Code's PATH, or the hooks exit 127, which Claude Code treats as not blocking.
+  - `origin/main` gained #54 and #55 during the task and #56 and #59 during the review round; no merge had a conflict. The last `npm test` ran at a load average of 12.23; nothing timed out.
+- Measured: PR open 29 min 38 s (23:25:22 to 23:55:00 UTC), including the Lead's review and one round of fixes; 4 commits (two merges of `origin/main`), 2 PR runs (69 s on `360e0ab`, 80 s on `dbaf19b`), 0 conflicts; local merge test `npm test` 51.46 s; the run on main after the merge 73 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/58; head `dbaf19b`; merge commit `653bb8c`; runs `38653982753` and `38656587311` (PR) and `38656958044` (main).
+
 ### 2026-10-14 · Phase 1 · Shared follow-up: config exports, rule sets in the fake GitHub, ship's log place, stricter isGreen (PR #59, issue #46)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/46-shared-follow-up`, created by the integrator from `4454ab8` and held until `lead-55` released it after the merge of #55. Its first commit sits on `53f9ba9`. The integrator's planning session for the merge.
