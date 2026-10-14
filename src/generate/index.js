@@ -4,6 +4,15 @@
 export { MANIFEST, generatedFiles, writeGeneratedFiles, staleGeneratedFiles } from './manifest.js'
 export { GIT_HOOKS, SHIM_FILES, renderShim, shimPath } from './githooks.js'
 export { generatedBy } from './header.js'
+export {
+  CI_EVENTS,
+  CI_JOB,
+  CI_NODE_VERSION,
+  WORKFLOW_FILE,
+  WORKFLOW_PATH,
+  installScript,
+  renderWorkflow,
+} from './workflow.js'
 
 /** @typedef {import('./manifest.js').GenerateInput} GenerateInput */
 /** @typedef {import('./manifest.js').GeneratedFileSpec} GeneratedFileSpec */

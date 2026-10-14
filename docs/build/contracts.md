@@ -384,7 +384,7 @@ How the reader decides, according to `docs/verification.md` rows 5 and 6:
 - `appliesToAdmins`: each of those four rules that is in force comes from at least one rule set without bypass actors, so it binds every account, the owner included. False when none is in force. A rule set whose `bypass_actors` GitHub does not return counts as having bypass actors.
 - `updateRestricted`: a rule `update` is in force from a rule set whose only bypass actors are the repository admin role (`RepositoryRole`, `actor_id` 5), and its `current_user_can_bypass` for the reading account is not `never`.
 - `checkPinned`: a required check `hackwin` with `integrationId` 15368 is in force. It is only reported: until the next PRD revision it does not change the state (issue #7).
-- `bypassable`: every rule in force that the reading account can bypass, its rule set's `current_user_can_bypass` being other than `never` or not returned, except the rule `update` of the update restriction. A rule other than `update` inside the update restriction's own rule set is listed. Empty when the Lead's account can skip no rule on the branch but the update restriction. It does not change the state. In `full-restricted` the Gate reads this field, never the rule sets, to decide whether it may merge with `--admin` (#23).
+- `bypassable`: every rule in force that the reading account can bypass, its rule set's `current_user_can_bypass` being other than `never` or not returned, except the rule `update` of the update restriction. A rule other than `update` inside the update restriction's own rule set is listed. Empty when the Lead's account can skip no rule on the branch but the update restriction. It does not change the state. Whenever the update restriction is active (`rules.updateRestricted`), in any protection state, the Gate reads `rules.bypassable`, never the rule sets: at start (1.6a, #20) and before each merge with `--admin` (1.6d, #23).
 
 Tests that call `readProtection` against the fake GitHub, which answers no rule set request, register both reads with `serveRulesets(fake, rulesets, { offered })` of `test/core/protection/rulesets.js`. The same file has the bodies of the two rule sets of section 5.4.
 
@@ -392,10 +392,25 @@ Tests that call `readProtection` against the fake GitHub, which answers no rule 
 
 | Export | Output |
 | --- | --- |
-| `createFixture(options)` | An offline fixture: a temporary bare origin and its main checkout, with its own HOME and git configuration; scripted states (files, commits, branches, task worktrees, a team of 1, 3 or 4 members, a joined clone); `cleanup()` |
-| `createFakeGitHub(state)` | `{ executor, state, on(request, handler) }`: an in-memory repository behind the executor seam that answers the requests of section 4.3. A lane registers handlers for its own calls from its own test files |
-| `withFixtureRepo(name, scenario)` | Runs a scenario on a fixture repository (section 6.4) under its lock, after the reset |
+| `createFixture(options)` | An offline fixture: a temporary bare origin and its main checkout, with its own HOME and git configuration; scripted states (files, commits, branches, task worktrees, a team of 1, 3 or 4 members, a joined clone); `cleanup()`. With `nodeProject: true` its `main` starts from the Node fixture |
+| `createFakeGitHub(state)` | `{ executor, state, on(request, handler), as, calls, unhandled, find, addCheckRun, setBranch }`: an in-memory repository behind the executor seam that answers the requests of section 4.3. A lane registers handlers for its own calls from its own test files. The other members are in the table below |
+| `withFixtureRepo(name, scenario, options)` | Runs a scenario on a fixture repository (section 6.4) under its lock, after the reset, and returns the scenario's result. `options`: `lockTimeoutMs`, how long to wait for another session's lock; `stateDir`, where the locks and run logs live; `logFile`, the run log in place of `<stateDir>/logs/<repository>.log`; `executors`, `{ lead, builder1 }` in place of the real gh, for the harness's own tests against the fake GitHub |
+| `inspectFixtureRepo(name, options)` | Reads the state of a fixture repository as the Lead, under its lock and through the guard, without a reset and without changing anything: `{ state, problems, calls }`, where `problems` lists what differs from the state a reset leaves. `options`: `lockTimeoutMs`, `stateDir` and `executors`, as for `withFixtureRepo` |
+| `nodeProjectFiles()` | The files of the Node fixture, each path relative to the project root with its content. The Node fixture is every file of the tree of the reset commit (section 6.4), kept as one text file, `test/harness/node-project.yml`, so that none of its files, such as `CLAUDE.md` or `.claude/`, acts as agent instructions or settings inside this repository |
+| `writeNodeProject(dir)` | Writes every file of the Node fixture into `dir`, a test's own directory |
+| `packNodeProject(dir)` | The text of `node-project.yml` for the files of `dir`, which must all be UTF-8 text: it makes the file again from a checkout of a new reset commit |
 | `accounts` | `lead`, `builder1`, `builder2`, `solo` (section 6.4) |
+
+The members of the fake GitHub besides `executor`, `state` and `on`:
+
+| Member | Content |
+| --- | --- |
+| `as(login)` | An executor that calls as another login, for example `accounts.builder2.login` |
+| `calls` | Every call, in order: `{ login, args, method, endpoint, body, code }`, with gh's exit code |
+| `unhandled` | The calls that no handler answered |
+| `find(number)` | The issue or pull request with this number, or undefined |
+| `addCheckRun(sha, run)` | Adds a check run for a commit |
+| `setBranch(branch, sha)` | Points a branch at a commit, as a push does |
 
 ## 5. Data formats
 
@@ -513,6 +528,7 @@ The reader (section 4.11) computes the state from the rules in force, not from t
 | `Bartek201301/hackwin-fixture-c` | Public | Lane C, and the integration tasks |
 | `Bartek201301/hackwin-fixture-private` | Private | The cases where GitHub refuses protection (AC2) and, if step 1.2 confirms it, push protection (AC80); the experiments of step 1.2 |
 
-- Before a test run the harness resets a fixture repository: it closes every open issue and pull request, deletes every label, branch rule and rule set, and resets `main` to the recorded commit `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` (all four; read back from GitHub on 10 October 2026). A lock per repository keeps two sessions off the same repository.
+- Before a test run the harness resets a fixture repository as the Lead (`test/harness/reset.js`), in this order: it deletes every rule set of the repository (an HTTP 403 is accepted on `hackwin-fixture-private` only, where GitHub offers no rule sets), deletes every branch rule on every pattern, closes every open pull request and then every open issue, unpins every pinned issue, deletes every branch but `main`, deletes every label, and resets `main` to the recorded commit `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` (all four; read back from GitHub on 10 October 2026), creating `main` when it is missing. The rules go first, so that no rule blocks a branch deletion or the reset of `main`. Then it reads the whole state back and fails when it does not hold: `main` at the recorded commit as the only branch, and no open issue or pull request, label, rule set, branch rule or pinned issue. The reset does not touch repository settings: secret scanning push protection, the default branch, collaborators and invitations stay as they are. A lock per repository keeps two sessions off the same repository.
 - No repository is ever deleted, and the `delete_repo` scope is never requested. Automated tests never touch `hackwin-sandbox`; it is for the human's live tests.
 - Accounts: `lead` is the gh login of the machine; `builder1` is `test-bot-builder`, with the token of section 6.1; `builder2` is `maljul`, a real teammate's account used only as a name in team configurations: it is never invited to any repository, and nobody acts as it on real GitHub, so every scenario in which it acts runs against the fake GitHub (plan section 9, decision 2; `AGENTS.md`, "GitHub repositories"); `solo` is the Lead's account.
+- `hackwin-test-builder3` is the third builder of a team of four, a name only like `maljul`: it is never invited, assigned or mentioned on real GitHub, and every scenario in which it acts runs against the fake GitHub (plan section 9, decision 2). GitHub answered 404 for this login on 12 October 2026 (PR #40), so nobody owns it today and anyone may register it later. The harness guard refuses, before gh runs, any call that would invite, assign or mention either name-only login (`NAME_ONLY_LOGINS` in `test/harness/accounts.js`).
