@@ -17,6 +17,28 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-14 · Phase 1 · Step 1.6b, gate: status issue (PR #56, issue #21)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/21-gate-status-issue`, created by the integrator from `97bd1c5` after the merges of #48 to #52; the session started at 22:45 UTC on 14 October. Its first commit sits on `4454ab8`. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `c5b45f3`, then a merge of `origin/main` at `53f9ba9` (`785c90a`); PR #56 opened at 23:09:52 UTC, and CI passed.
+  - The Lead's review sent the PR back to its session with four changes, made in `98e8488`:
+    - The machine field is gone. Each clone has a random 16-hex Gate id in `gate/gate-id`, published as `gate_id`, which decides whether a fresh heartbeat is this clone's own.
+    - The fenced digest is kept, for the cross-reference reason only.
+    - The code no longer claims that an edit sends no notification (row 9 of `docs/verification.md`: unknown).
+    - A 422 on a body write lowers the size to 3/4 and keeps it for the run, instead of matching an error text nobody measured.
+  - A merge of `origin/main` at `500211e` followed (`bfa3997`). `lead-55` sent `merge #56` with the head SHA by SendMessage.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 9 files inside issue #21's paths; no secret pattern; no conflict with `500211e`. Step 6, with the PR merged into `500211e`: `npm test` passed 501 of 501, and `npm run test:ac` passed AC62 (1) and 1.6b/status-issue (18). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge, a worktree for #22 (1.6c) at `556f6b0`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - No live test on `hackwin-fixture-c`: `withFixtureRepo` checks builder1 before every scenario, also one that acts only as the Lead, and `HACKWIN_TEST_BUILDER_TOKEN` was not set in the session. #46 item 17.
+  - A 422 for another reason also lowers the body size until the next start.
+  - The digest fence and the field `gate_id` differ from the template of PRD 9.6; recorded for the PRD revision.
+  - `origin/main` moved three times during the task (#47 and #51, then #53, then #54 and #55); no merge had a conflict.
+  - `npm test` passed at its first run each time, at one-minute load averages of 12.0, 7.3 and 10.0; no time was lost waiting.
+- Measured: PR open 17 min 6 s (23:09:52 to 23:26:58 UTC), including the Lead's review and one round of changes; 4 commits (two merges of `origin/main`), 2 PR runs (71 s on `785c90a`, 66 s on `bfa3997`), 0 conflicts; local merge test `npm test` 35.39 s; the run on main after the merge 71 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/56; head `bfa3997`; merge commit `556f6b0`; runs `38652371976` and `38653850510` (PR) and `38654140451` (main).
+
 ### 2026-10-14 · Phase 1 · Step 1.5c, take: resume, release and fix prompt (PR #55, issue #17)
 
 - Setup: one builder session of lane B (Claude Code) in the worktree `task/17-take-resume-release`, created by the integrator from `97bd1c5` after the merges of #48 to #52; the session started at 22:45 UTC on 14 October. The integrator's planning session for the merge.
