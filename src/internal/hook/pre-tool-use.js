@@ -7,11 +7,14 @@
 // - `gh pr merge` and a merge through `gh api`, in every session, the Lead's included: for the
 //   Lead's own sessions this and the deny rule are the only block against a merge outside the
 //   queue (E3, D2, 10.6);
-// - any push to the default branch (E2, E18).
+// - any push to the default branch (E2, E18), also a `git push` without a refspec whose upstream,
+//   `push.default` or `remote.<name>.push` leads to it, and a `gh api` call that updates it
+//   without a pull request.
 //
-// It refuses with the decision `deny` (event.js). It stays offline: the configuration comes from
-// the local origin/main, and only a call that needs it loads it, which applies CM12 as the git
-// hooks do (config.js). A merge is refused without it.
+// It reads commands as shell.js describes, which names what it does not see. It refuses with the
+// decision `deny` (event.js). It stays offline: the configuration comes from the local
+// origin/main, and only a call that needs it loads it, which applies CM12 as the git hooks do
+// (config.js). A merge is refused without it.
 
 import { resolve } from 'node:path'
 import { BlockedError } from '../../core/runtime/errors.js'
@@ -21,10 +24,10 @@ import { mainCheckout } from '../../core/worktrees/index.js'
 import { hookIdentity, loadHookConfig } from './config.js'
 import { denyToolCall, editedFile, eventDir, readHookEvent } from './event.js'
 import { isIgnored, locateFile } from './files.js'
-import { commandsOf, destinationOf, isMerge, pushOf } from './shell.js'
+import { branchUpdateOf, commandsOf, destinationOf, isMerge, pushOf } from './shell.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
-/** @import { Push } from './shell.js' */
+/** @import { BranchUpdate, Push } from './shell.js' */
 
 /**
  * @param {CommandContext} ctx
@@ -75,7 +78,8 @@ async function checkEdit(ctx, file) {
 }
 
 /**
- * Refuse a command line that merges a pull request (E3) or pushes to the default branch (E2).
+ * Refuse a command line that merges a pull request (E3) or changes the default branch without
+ * one: a push to it, or a `gh api` call that updates it (E2).
  * @param {CommandContext} ctx
  * @param {string} line
  * @param {string} dir The directory the command line starts in.
@@ -84,6 +88,8 @@ async function checkEdit(ctx, file) {
 async function checkCommand(ctx, line, dir) {
   /** @type {Array<{ push: Push, words: string[], dir: string }>} */
   const pushes = []
+  /** @type {Array<{ update: BranchUpdate, words: string[], dir: string }>} */
+  const updates = []
   let at = dir
   for (const words of commandsOf(line)) {
     if (isMerge(words)) {
@@ -103,39 +109,124 @@ async function checkCommand(ctx, line, dir) {
       at = resolve(at, words[1].replace(/^~(?=$|\/)/, ctx.env.HOME ?? '~'))
       continue
     }
+    const update = branchUpdateOf(words)
+    if (update !== null) {
+      updates.push({ update, words, dir: at })
+      continue
+    }
     const push = pushOf(words)
     if (push !== null) {
       pushes.push({ push, words, dir: push.dirs.reduce((d, c) => resolve(d, c), at) })
     }
   }
-  if (pushes.length === 0) return
+  if (pushes.length === 0 && updates.length === 0) return
 
   const config = await loadHookConfig(ctx)
   const defaultBranch = config.hackwin.project.default_branch
-  for (const { push, words, dir: pushDir } of pushes) {
-    const current = await currentBranchAt(ctx, pushDir)
-    const targets = push.refspecs
-      .map(destinationOf)
-      .map((branch) => (branch === 'HEAD' || branch === '@' ? current : branch))
-    // Without a refspec git pushes the current branch.
-    const toDefault =
-      push.all ||
-      (targets.length === 0 ? current === defaultBranch : targets.includes(defaultBranch))
-    if (!toDefault) continue
-    const task = current !== null && parseBranch(current).kind === 'task'
-    return denyToolCall(
-      new BlockedError(
-        `a push to ${defaultBranch} is blocked: ${defaultBranch} changes only through the Gate's merges of pull requests`,
-        {
-          rule: `E2: no direct push to ${defaultBranch}`,
-          objects: [`${words.join(' ')} in ${pushDir}`],
-          resolve: task
-            ? { command: 'hackwin ship', dir: await topLevelAt(ctx, pushDir) }
-            : { command: 'hackwin take', dir: await mainCheckout(ctx.git) },
-        },
-      ),
-    )
+  /** @type {Array<{ object: string, dir: string }>} */
+  const changes = []
+  for (const { update, words, dir: updateDir } of updates) {
+    if (update.branch !== null && update.branch !== defaultBranch) continue
+    const what =
+      update.branch === null
+        ? `${update.via} can update any branch, ${defaultBranch} included`
+        : `${update.via} updates ${defaultBranch}`
+    changes.push({ object: `${words.join(' ')}: ${what}`, dir: updateDir })
   }
+  for (const { push, words, dir: pushDir } of pushes) {
+    if ((await pushTargets(ctx, push, pushDir, defaultBranch)).includes(defaultBranch)) {
+      changes.push({ object: `${words.join(' ')} in ${pushDir}`, dir: pushDir })
+    }
+  }
+  if (changes.length === 0) return
+  const first = changes[0].dir
+  const current = await currentBranchAt(ctx, first)
+  return denyToolCall(
+    new BlockedError(
+      `a change of ${defaultBranch} without a pull request is blocked: ${defaultBranch} changes only through the Gate's merges of pull requests`,
+      {
+        rule: `E2: no direct push to ${defaultBranch}`,
+        objects: changes.map(({ object }) => object),
+        resolve:
+          current !== null && parseBranch(current).kind === 'task'
+            ? { command: 'hackwin ship', dir: await topLevelAt(ctx, first) }
+            : { command: 'hackwin take', dir: await mainCheckout(ctx.git) },
+      },
+    ),
+  )
+}
+
+/**
+ * The branches of the remote that a push updates. Without a refspec git decides from its
+ * configuration (git-push(1)): the push refspecs of the remote, else `push.default` with the
+ * current branch and its upstream. Settings of `git -c` win. The upstream counts also where
+ * `simple` would refuse a push to it, which then fails anyway.
+ * @param {CommandContext} ctx
+ * @param {Push} push
+ * @param {string} dir
+ * @param {string} defaultBranch
+ * @returns {Promise<string[]>}
+ */
+async function pushTargets(ctx, push, dir, defaultBranch) {
+  if (push.all) return [defaultBranch]
+  const current = await currentBranchAt(ctx, dir)
+  if (push.refspecs.length > 0) {
+    return push.refspecs
+      .map(destinationOf)
+      .flatMap((branch) => (branch === 'HEAD' || branch === '@' ? (current ?? []) : [branch]))
+  }
+  /** @param {string} key */
+  const setting = async (key) =>
+    push.config.get(key.toLowerCase()) ?? (await configAt(ctx, dir, key))[0] ?? null
+  const remote =
+    push.remote ??
+    (current === null ? null : await setting(`branch.${current}.pushRemote`)) ??
+    (await setting('remote.pushDefault')) ??
+    (current === null ? null : await setting(`branch.${current}.remote`)) ??
+    'origin'
+  const pushSpecs = push.config.has(`remote.${remote}.push`.toLowerCase())
+    ? [/** @type {string} */ (push.config.get(`remote.${remote}.push`.toLowerCase()))]
+    : await configAt(ctx, dir, `remote.${remote}.push`)
+  if (pushSpecs.length > 0) {
+    return pushSpecs.map(destinationOf).flatMap((branch) => {
+      if (branch === 'HEAD' || branch === '@') return current ?? []
+      if (!branch.includes('*')) return [branch]
+      const glob = new RegExp(`^${branch.split('*').map(escapeRegExp).join('.*')}$`)
+      return glob.test(defaultBranch) ? [defaultBranch] : []
+    })
+  }
+  const mode = (await setting('push.default')) ?? 'simple'
+  if (mode === 'nothing') return []
+  if (mode === 'matching') return [defaultBranch]
+  const upstream = current === null ? null : await setting(`branch.${current}.merge`)
+  return [current, upstream?.replace(/^refs\/heads\//, '')].filter((branch) => branch != null)
+}
+
+/**
+ * Every value of a git setting as the checkout of a directory sees it; empty when it is unset or
+ * the directory is not in a checkout.
+ * @param {CommandContext} ctx
+ * @param {string} dir
+ * @param {string} key
+ * @returns {Promise<string[]>}
+ */
+async function configAt(ctx, dir, key) {
+  try {
+    const result = await ctx.git
+      .with({ cwd: dir })
+      .run(['config', '--get-all', key], { allowFailure: true })
+    return result.code === 0 ? result.stdout.split('\n').filter((value) => value !== '') : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /**

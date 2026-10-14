@@ -23,6 +23,9 @@ const FILES = {
   'src/shared/feature.js': 'export const feature = "one"\n',
 }
 
+/** A commit message as a here document with an apostrophe, the form Claude Code usually writes. */
+const COMMIT = `git commit -m "$(cat <<'EOF'\nReset the counter\n\nDon't merge this by hand.\nEOF\n)"`
+
 /** builder1, who holds `counter` and `todos`, in the worktree of task 12. */
 async function builderScene(options = {}) {
   const hooks = await createHookFixture({ files: FILES, ...options })
@@ -99,6 +102,24 @@ describe('AC63/deny: the PreToolUse hook refuses a merge through gh pr merge and
     ['a merge inside sh -c', `sh -c 'gh pr merge 14 --merge'`],
     ['a merge in a command substitution', 'echo "$(gh pr merge 14 --merge)"'],
     ['gh by its absolute path', '/opt/homebrew/bin/gh pr merge 14 --merge'],
+    ['a merge in the then branch of an if', 'if gh pr checks 14; then gh pr merge 14 --merge; fi'],
+    ['a merge in the else branch', 'if false; then :; else gh pr merge 14 --merge; fi'],
+    ['a merge in a while body', 'while true; do gh pr merge 14 --merge && break; done'],
+    ['a merge in a for body', 'for n in 14 15; do gh pr merge $n --merge; done'],
+    ['a merge in a case branch', 'case go in go) gh pr merge 14 --merge;; esac'],
+    ['a merge in a group', 'gh pr checks 14 && { gh pr merge 14 --merge; }'],
+    ['a merge in a subshell', '(cd /tmp && gh pr merge 14 --merge)'],
+    ['a negated merge', '! gh pr merge 14 --merge'],
+    ['a merge in a function body', 'function land { gh pr merge 14 --merge; }; land'],
+    ['a merge after a here document with an apostrophe', `${COMMIT} && gh pr merge 14 --merge`],
+    ['a merge in a process substitution', 'cat <(gh pr merge 14 --merge)'],
+    ['a merge behind stdbuf', 'stdbuf -oL gh pr merge 14 --merge'],
+    ['a merge behind stdbuf with a separate mode', 'stdbuf -o L gh pr merge 14 --merge'],
+    ['a merge behind noglob', 'noglob gh pr merge 14 --merge'],
+    [
+      'an auto-merge through GraphQL',
+      `gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: "PR_kw1"}) { clientMutationId } }'`,
+    ],
   ])('%s is refused', async (_name, command) => {
     const { task, run } = await builderScene()
     const result = await run(bashCall(task.path, command))
@@ -238,11 +259,18 @@ describe('1.4c/pre-tool-use: pushes to the default branch', () => {
     ['git push origin --delete main'],
     ['git push --all origin'],
     ['git add . && git commit -m wip && git push -u origin main 2>&1'],
+    ['if git diff --quiet; then git push origin main; fi'],
+    ['for remote in origin; do git push $remote main; done'],
+    ['{ git push origin main; }'],
+    [`${COMMIT} && git push origin main`],
+    ['cat <(git push origin main)'],
+    ['stdbuf -oL git push origin main'],
+    ['git -c push.default=current push origin main'],
   ])('%s is refused from a task worktree', async (command) => {
     const { task, run } = await builderScene()
     const reason = denial(await run(bashCall(task.path, command)))
     expect(reason).toContain(
-      "hackwin: blocked: a push to main is blocked: main changes only through the Gate's merges of pull requests",
+      "hackwin: blocked: a change of main without a pull request is blocked: main changes only through the Gate's merges of pull requests",
     )
     expect(reason).toContain('rule: E2: no direct push to main')
     expect(reason).toContain(`to resolve: run \`hackwin ship\` in ${task.path}`)
@@ -255,6 +283,8 @@ describe('1.4c/pre-tool-use: pushes to the default branch', () => {
       'git push',
       'git push origin HEAD',
       'git push origin main:task/12-counter-step',
+      `${COMMIT} && git push -u origin task/12-counter-step`,
+      'git push origin task/12-counter-step > >(tee push.log)',
     ]) {
       expect(await run(bashCall(task.path, command)), command).toMatchObject({ output: null })
     }
@@ -271,6 +301,103 @@ describe('1.4c/pre-tool-use: pushes to the default branch', () => {
       const reason = denial(await run(bashCall(cwd, command)))
       expect(reason, command).toContain('rule: E2: no direct push to main')
       expect(reason, command).toContain(`to resolve: run \`hackwin take\` in ${clone.path}`)
+    }
+  })
+})
+
+describe('1.4c/pre-tool-use: a push without a refspec goes where git would send it', () => {
+  test('a task branch whose upstream is main is refused with push.default=upstream', async () => {
+    const { task, run } = await builderScene()
+    await task.git.run(['config', `branch.${task.branch}.remote`, 'origin'])
+    await task.git.run(['config', `branch.${task.branch}.merge`, 'refs/heads/main'])
+    await task.git.run(['config', 'push.default', 'upstream'])
+
+    for (const command of ['git push', 'git push origin']) {
+      const reason = denial(await run(bashCall(task.path, command)))
+      expect(reason, command).toContain('rule: E2: no direct push to main')
+      expect(reason, command).toContain(`- ${command} in ${task.path}`)
+    }
+  })
+
+  test('push.default=matching, set in the clone or with git -c, is refused', async () => {
+    const { task, run } = await builderScene()
+    expect(denial(await run(bashCall(task.path, 'git -c push.default=matching push')))).toContain(
+      'rule: E2',
+    )
+    await task.git.run(['config', 'push.default', 'matching'])
+    expect(denial(await run(bashCall(task.path, 'git push')))).toContain('rule: E2')
+    expect(await run(bashCall(task.path, 'git -c push.default=nothing push'))).toMatchObject({
+      output: null,
+    })
+  })
+
+  test('a push refspec of the remote that leads to main is refused', async () => {
+    const { task, run } = await builderScene()
+    await task.git.run(['config', 'remote.origin.push', 'HEAD:refs/heads/main'])
+    expect(denial(await run(bashCall(task.path, 'git push')))).toContain('rule: E2')
+
+    await task.git.run(['config', 'remote.origin.push', 'refs/heads/*:refs/heads/*'])
+    expect(denial(await run(bashCall(task.path, 'git push origin')))).toContain('rule: E2')
+
+    await task.git.run(['config', 'remote.origin.push', 'refs/heads/task/*:refs/heads/task/*'])
+    expect(await run(bashCall(task.path, 'git push'))).toMatchObject({ output: null })
+  })
+})
+
+describe('1.4c/pre-tool-use: gh api calls that update the default branch without a pull request', () => {
+  test.each([
+    [
+      'a REST merge into main',
+      'gh api -X POST repos/{owner}/{repo}/merges -f base=main -f head=task/12-counter-step',
+    ],
+    [
+      'a REST merge with the implicit POST',
+      'gh api repos/{owner}/{repo}/merges -f base=main -f head=x',
+    ],
+    [
+      'a REST merge whose base the command does not show',
+      'gh api repos/{owner}/{repo}/merges --input merge.json',
+    ],
+    [
+      'a change of the ref of main',
+      'gh api -X PATCH repos/{owner}/{repo}/git/refs/heads/main -f sha=0123abcd -F force=true',
+    ],
+    [
+      'a deletion of the ref of main',
+      'gh api --method DELETE /repos/{owner}/{repo}/git/refs/heads/main',
+    ],
+    [
+      'a creation of the ref of main',
+      'gh api repos/{owner}/{repo}/git/refs -f ref=refs/heads/main -f sha=0123abcd',
+    ],
+    [
+      'the GraphQL mutation mergeBranch',
+      `gh api graphql -f query='mutation { mergeBranch(input: {repositoryId: "R_1", base: "main", head: "x"}) { clientMutationId } }'`,
+    ],
+    [
+      'the GraphQL mutation updateRef',
+      `gh api graphql -f query='mutation { updateRef(input: {refId: "REF_1", oid: "0123abcd"}) { clientMutationId } }'`,
+    ],
+    [
+      'the GraphQL mutation updateRefs',
+      `gh api graphql -f query='mutation { updateRefs(input: {repositoryId: "R_1", refUpdates: []}) { clientMutationId } }'`,
+    ],
+  ])('%s is refused', async (_name, command) => {
+    const { task, run } = await builderScene()
+    const reason = denial(await run(bashCall(task.path, command)))
+    expect(reason).toContain('rule: E2: no direct push to main')
+    expect(reason).toContain(`to resolve: run \`hackwin ship\` in ${task.path}`)
+  })
+
+  test('reading the ref of main and updating another branch are not refused', async () => {
+    const { task, run } = await builderScene()
+    for (const command of [
+      'gh api repos/{owner}/{repo}/git/refs/heads/main',
+      'gh api repos/{owner}/{repo}/git/ref/heads/main --jq .object.sha',
+      'gh api -X POST repos/{owner}/{repo}/merges -f base=task/12-counter-step -f head=main',
+      'gh api -X PATCH repos/{owner}/{repo}/git/refs/heads/task/12-counter-step -f sha=0123abcd',
+    ]) {
+      expect(await run(bashCall(task.path, command)), command).toMatchObject({ output: null })
     }
   })
 })

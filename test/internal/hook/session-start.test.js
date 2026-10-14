@@ -220,6 +220,85 @@ describe('1.4c/session-start: what the summary holds', () => {
     expect(await readMainSeen(clone.commonDir, task.path)).not.toBeNull()
   })
 
+  test('a summary that would be too long for the context stays below 10,000 characters and says where the rest is', async () => {
+    const long = (text) => `${text} ${'and a long explanation '.repeat(20)}`.trim()
+    const { hooks, clone, task, start } = await sessionScene({
+      github: {
+        issues: [
+          {
+            number: 12,
+            title: 'Counter step',
+            labels: ['in-progress'],
+            comments: Array.from({ length: 30 }, (_, n) => ({
+              body: `Scope change: number ${n + 1}.\n\n${long('Reason:')}\n${long('Detail:')}`,
+              createdAt: `2026-10-20T09:${String(10 + n).padStart(2, '0')}:00Z`,
+            })),
+          },
+        ],
+        pulls: Array.from({ length: 40 }, (_, n) => ({
+          number: 100 + n,
+          title: long(`Pull request ${n}`),
+          head: `task/${200 + n}-other`,
+          headSha: 'a'.repeat(40),
+          author: builder1,
+          labels: ['gate:failed'],
+        })),
+      },
+    })
+    const taken = await clone.git.revParse('origin/main')
+    await writeMainSeen(clone.commonDir, task.path, taken, '2026-10-20T09:00:00+00:00')
+    // 150 commits with long subjects and 150 files reach main.
+    const bulk = await hooks.fixture.clone('bulk')
+    for (let n = 0; n < 150; n += 1) {
+      await bulk.git.run(['commit', '--quiet', '--allow-empty', '-m', long(`Commit ${n}`)])
+    }
+    await hooks.fixture.commit('Many files', {
+      dir: bulk.path,
+      files: Object.fromEntries(
+        Array.from({ length: 150 }, (_, n) => [`src/features/counter/file-${n}.js`, `${n}\n`]),
+      ),
+    })
+    await bulk.git.push({ refspecs: ['HEAD:refs/heads/main'] })
+    const head = await bulk.git.revParse('HEAD')
+
+    const result = await start()
+
+    expect(result.code).toBe(0)
+    expect(result.stdout.length).toBeLessThanOrEqual(9000)
+    const lines = linesOf(result)
+    const range = `${taken.slice(0, 12)}..${head.slice(0, 12)}`
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^- and \\d+ more; to see them, run \`git log --first-parent --oneline ${range}\` in ${task.path}$`,
+        ),
+      ),
+    )
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^- and \\d+ more files; to see them, run \`git diff --name-status ${range}\` in ${task.path}$`,
+        ),
+      ),
+    )
+    expect(lines).toContain(
+      `Not every scope change is shown in full here; to read them all, run \`gh issue view 12 --comments\` in ${task.path}.`,
+    )
+    // The newest scope change is kept whole; the oldest gives way.
+    expect(lines).toContain('> Scope change: number 30.')
+    expect(lines).not.toContain('> Scope change: number 1.')
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `^- and \\d+ more; to see them, run \`gh pr list --author ${builder1} --state open\` in ${task.path}$`,
+        ),
+      ),
+    )
+    expect(lines.at(-1)).toBe(
+      `Recorded ${head.slice(0, 12)} as the main commit this worktree has seen.`,
+    )
+  })
+
   test('without the join record it exits 2 and names hackwin join', async () => {
     const { hooks, fake } = await sessionScene()
     const { path } = await hooks.fixture.clone('not-joined')
