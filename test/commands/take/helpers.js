@@ -9,12 +9,51 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { expect } from 'vitest'
 import { main } from '../../../src/cli/main.js'
-import { yaml } from '../../harness/index.js'
+import { createFixture, hackwinObject, ownersObject, yaml } from '../../harness/index.js'
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 /** @typedef {import('../../harness/index.js').FakeGitHub} FakeGitHub */
 
 export const DEADLINE = '2026-10-25T12:00:00+02:00'
+
+/** The files that join leaves out of git in the main checkout (6.4). */
+export const GITIGNORE = 'CLAUDE.local.md\n.env.local\n.env.*.local\n'
+
+/**
+ * A fixture of a team of 3 whose hackwin.yml is changed by `edit`.
+ * @param {string} name
+ * @param {(hackwin: ReturnType<typeof hackwinObject>) => void} [edit]
+ * @param {Record<string, string>} [files]
+ */
+export function teamFixture(name, edit = () => {}, files = {}) {
+  const hackwin = hackwinObject(3)
+  edit(hackwin)
+  return createFixture({
+    name,
+    config: { hackwin: yaml(hackwin), owners: yaml(ownersObject()) },
+    files: { 'README.md': '# Fixture\n', '.gitignore': GITIGNORE, ...files },
+  })
+}
+
+/**
+ * The worktree of a task in a clone, and its git.
+ * @param {Fixture} fixture
+ * @param {string} clone The name of the clone's directory.
+ * @param {string} dir `<N>-<slug>`
+ */
+export function worktreeOf(fixture, clone, dir) {
+  const path = join(fixture.dir, `${clone}.worktrees`, dir)
+  return { path, git: fixture.gitAt(path) }
+}
+
+/**
+ * The prompt file of a task in a clone.
+ * @param {{ commonDir: string }} clone
+ * @param {number} issue
+ */
+export function promptFileOf(clone, issue) {
+  return join(clone.commonDir, 'hackwin', 'prompts', `${issue}.md`)
+}
 
 /**
  * The body of a task issue written by hand from the template (8.1).
@@ -194,4 +233,45 @@ export function expectInOrder(text, parts) {
     expect(next, `"${part}" after position ${at}`).toBeGreaterThan(at)
     at = next
   }
+}
+
+/**
+ * Make the fake GitHub report these pull requests as coming from a fork: their head repository
+ * becomes `repo`, as GitHub reports a pull request from a fork's branch of the same name. The
+ * fake itself always reports its own repository as the head.
+ * @param {FakeGitHub} fake
+ * @param {number[]} numbers
+ * @param {string} [repo]
+ */
+export function asFork(fake, numbers, repo = 'someone/fork') {
+  rewritePulls(fake, (list) =>
+    list.map((pull) =>
+      numbers.includes(pull.number)
+        ? { ...pull, head: { ...pull.head, repo: { full_name: repo } } }
+        : pull,
+    ),
+  )
+}
+
+/**
+ * Change the list of pull requests that the fake GitHub answers, for example to add a pull
+ * request of a fork that the fake does not hold.
+ * @param {FakeGitHub} fake
+ * @param {(list: any[]) => any[]} change Gets the fake's JSON of the pull requests.
+ */
+export function rewritePulls(fake, change) {
+  const request = 'GET repos/{owner}/{repo}/pulls'
+  let off = () => {}
+  const handler = async ({ login, query }) => {
+    off()
+    try {
+      const endpoint = `repos/{owner}/{repo}/pulls?${new URLSearchParams(query)}`
+      const result = await fake.as(login)(['api', '--method', 'GET', endpoint], {})
+      if (result.code !== 0) throw new Error(`fake GitHub: ${result.stderr}`)
+      return change(JSON.parse(result.stdout))
+    } finally {
+      off = fake.on(request, handler)
+    }
+  }
+  off = fake.on(request, handler)
 }

@@ -49,18 +49,22 @@ export const CHECK_RULES = Object.freeze({
 
 /**
  * Run the five checks on a task in their order and return the first failure, or null when the
- * task can be taken. A task with an invalid block fails check 2, since its role is unknown.
+ * task can be taken. A task with an invalid block fails check 2, since its role is unknown. For
+ * a resume of the caller's own task (7.7, A12), check 2 accepts the task in progress or in
+ * review, and check 5 does not count the task itself. Check 4 never counts the task itself or
+ * its own pull request.
  * @param {Task} task
  * @param {CheckScope} scope
+ * @param {{ resume?: boolean }} [options]
  * @returns {Promise<CheckFailure | null>}
  */
-export async function checkTask(task, scope) {
+export async function checkTask(task, scope, { resume = false } = {}) {
   return (
     checkRole(task, scope) ??
-    checkState(task, scope) ??
+    checkState(task, scope, resume) ??
     (await checkDependencies(task, scope)) ??
     (await checkCollisions(task, scope)) ??
-    (await checkSessions(scope))
+    (await checkSessions(scope, task))
   )
 }
 
@@ -122,12 +126,14 @@ function checkRole(task, { config, identity, main }) {
 }
 
 /**
- * Check 2: open, a valid block, not in progress, in review or cut, not labeled needs-lead.
+ * Check 2: open, a valid block, not in progress, in review or cut, not labeled needs-lead. A
+ * resume does not count the task's own status, in progress or in review.
  * @param {Task} task
  * @param {CheckScope} scope
+ * @param {boolean} resume
  * @returns {CheckFailure | null}
  */
-function checkState(task, { main }) {
+function checkState(task, { main }, resume) {
   const n = task.number
   const object = `#${n} ${task.title}`
   /** @type {Resolve} */
@@ -146,7 +152,7 @@ function checkState(task, { main }) {
   if (task.status === 'cut') {
     return { check: 2, reason: `#${n} is cut`, objects: [object], resolve: takeAnother }
   }
-  if (task.status === 'in-progress') {
+  if (task.status === 'in-progress' && !resume) {
     const who = task.assignees.length > 0 ? `, assigned to ${task.assignees.join(', ')}` : ''
     return {
       check: 2,
@@ -155,7 +161,7 @@ function checkState(task, { main }) {
       resolve: takeAnother,
     }
   }
-  if (task.status === 'in-review') {
+  if (task.status === 'in-review' && !resume) {
     return { check: 2, reason: `#${n} is in review`, objects: [object], resolve: takeAnother }
   }
   if (task.labels.includes('needs-lead')) {
@@ -202,6 +208,8 @@ async function checkDependencies(task, { board, main }) {
 /**
  * Check 4 (H3, H6): no open pull request changes a file inside the task's paths, and no other
  * task in progress has paths that overlap the task's paths. Paths on the `open` list are exempt.
+ * The task's own pull request, from its `task/` branch in this repository, is the task's work
+ * and no collision (7.7, A12); a pull request of a fork is never the task's own.
  * @param {Task} task
  * @param {CheckScope} scope
  * @returns {Promise<CheckFailure | null>}
@@ -213,6 +221,7 @@ async function checkCollisions(task, { config, board, main }) {
   const collisions = []
 
   for (const pull of await board.pulls()) {
+    if (pull.task === task.number) continue
     const paths = pull.paths.filter((path) => inTask(path) && !ownerOf(config, path).open)
     if (paths.length === 0) continue
     const more = paths.length > 1 ? `, and ${paths.length - 1} more` : ''
@@ -237,12 +246,16 @@ async function checkCollisions(task, { config, board, main }) {
 }
 
 /**
- * Check 5: the caller runs fewer tasks than their `sessions` value (E17).
+ * Check 5: the caller runs fewer tasks than their `sessions` value (E17). The task being taken
+ * does not count, so a resume of a task the caller runs passes (7.7, A12).
  * @param {CheckScope} scope
+ * @param {Task} [task]
  * @returns {Promise<CheckFailure | null>}
  */
-async function checkSessions({ identity, board, main, worktrees }) {
-  const running = runningTasks(await board.tasks(), identity.login)
+async function checkSessions({ identity, board, main, worktrees }, task) {
+  const running = runningTasks(await board.tasks(), identity.login).filter(
+    (other) => other.number !== task?.number,
+  )
   const { sessions } = identity.member
   if (running.length < sessions) return null
   const first = running[0]
