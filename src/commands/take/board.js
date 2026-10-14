@@ -2,7 +2,7 @@
 // pull requests and the files of each. Each list is read once per run and only when a step needs
 // it, so a task that fails an early check costs no pull request calls.
 
-import { toTask } from '../../core/tasks/index.js'
+import { parseBranch, toTask } from '../../core/tasks/index.js'
 
 /** @import { GitHub, Issue, PullRequest } from '../../core/github/index.js' */
 /** @import { Config } from '../../core/config/index.js' */
@@ -13,6 +13,8 @@ import { toTask } from '../../core/tasks/index.js'
  * @property {number} number
  * @property {string} title
  * @property {string[]} paths Every path the pull request changes; both paths of a rename.
+ * @property {number | null} task The issue of its `task/` branch when the branch is in this
+ *   repository; null for any other branch and for a branch of a fork.
  */
 
 /**
@@ -23,6 +25,8 @@ import { toTask } from '../../core/tasks/index.js'
  * @property {() => Promise<PullRequest[]>} openPulls The open pull requests, drafts included,
  *   by number.
  * @property {() => Promise<OpenPull[]>} pulls The open pull requests with the paths each changes.
+ * @property {(number: number) => Promise<PullRequest[]>} taskPulls The open pull requests of a
+ *   task: from a `task/` branch of this issue in this repository, never from a fork.
  */
 
 /**
@@ -39,6 +43,8 @@ export function createBoard(github, config) {
   let openPulls
   /** @type {Promise<OpenPull[]> | undefined} */
   let pulls
+  /** @type {Promise<string> | undefined} */
+  let repository
   /** @type {Map<number, Promise<Issue | null>>} */
   const issues = new Map()
 
@@ -47,6 +53,19 @@ export function createBoard(github, config) {
     (openPulls ??= github
       .listPullRequests({ state: 'open' })
       .then((list) => list.sort((a, b) => a.number - b.number)))
+  const thisRepository = () =>
+    (repository ??= github.repository().then((repo) => repo.nameWithOwner.toLowerCase()))
+
+  /**
+   * The issue of a pull request's `task/` branch in this repository, or null.
+   * @param {PullRequest} pull
+   * @returns {Promise<number | null>}
+   */
+  const taskOf = async (pull) => {
+    const branch = parseBranch(pull.headRef ?? '')
+    if (branch.kind !== 'task') return null
+    return pull.headRepo?.toLowerCase() === (await thisRepository()) ? branch.issue : null
+  }
 
   return {
     tasks() {
@@ -81,10 +100,20 @@ export function createBoard(github, config) {
             paths: (await github.listPullRequestFiles(pull.number)).flatMap((file) =>
               file.previousPath ? [file.path, file.previousPath] : [file.path],
             ),
+            task: await taskOf(pull),
           })),
         ),
       )
       return pulls
+    },
+
+    async taskPulls(number) {
+      /** @type {PullRequest[]} */
+      const own = []
+      for (const pull of await listOpenPulls()) {
+        if ((await taskOf(pull)) === number) own.push(pull)
+      }
+      return own
     },
   }
 }

@@ -3,18 +3,25 @@
 // the role and its paths, where to run, what changed on main, the finish rule, the security
 // rules and the personal settings. `take` writes it to `prompts/<issue>.md` (contracts 5.6) and
 // records the main commit it describes for the worktree (E5, I6).
+//
+// A resume (A12) gets a continue prompt, the seven parts plus the state of the branch, and a
+// task whose pull request the Gate handed back gets a fix prompt, the seven parts plus the
+// Gate's comment and the state of the branch.
 
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { changesOnMain } from '../../core/changes/index.js'
 import { latestMainSeen, promptPath, readMainSeen, writeMainSeen } from '../../core/state/index.js'
+import { HANDBACK_LABELS } from './resume.js'
 
 /** @import { CommandContext } from '../../cli/context.js' */
 /** @import { Config, Identity } from '../../core/config/index.js' */
 /** @import { ChangesOnMain } from '../../core/changes/index.js' */
-/** @import { Comment, Issue } from '../../core/github/index.js' */
+/** @import { Comment, Issue, PullRequest } from '../../core/github/index.js' */
 /** @import { LocalRecord, MainSeen } from '../../core/state/index.js' */
 /** @import { TaskBlock } from '../../core/tasks/index.js' */
+/** @import { BranchState } from './resume.js' */
+/** @import { RefUpdate } from './worktree.js' */
 
 /** The headings of the seven parts, in their order (7.7 step 6). */
 export const PROMPT_PARTS = Object.freeze([
@@ -27,11 +34,21 @@ export const PROMPT_PARTS = Object.freeze([
   '7. Personal settings',
 ])
 
+/** The headings of the parts that follow the seven, by the kind of prompt (A12). */
+export const EXTRA_PARTS = Object.freeze({
+  first: Object.freeze([]),
+  continue: Object.freeze(['8. The state of the branch']),
+  fix: Object.freeze(["8. The Gate's comment", '9. The state of the branch']),
+})
+
 /** A comment that starts with this is a scope change of the task (8.1). */
 export const SCOPE_CHANGE = 'Scope change:'
 
 /** The most changed files the prompt lists; the rest is counted. */
 export const MAX_CHANGED_FILES = 50
+
+/** The most commits and uncommitted changes the state of the branch lists; the rest is counted. */
+export const MAX_BRANCH_LINES = 30
 
 const TASK_MARKER = '# hackwin:task'
 
@@ -41,8 +58,24 @@ const TASK_MARKER = '# hackwin:task'
  */
 
 /**
+ * The kind of prompt: the first prompt of a task, a continue prompt for a resume, or a fix prompt
+ * for a pull request that the Gate handed back (A12).
+ * @typedef {'first' | 'continue' | 'fix'} PromptKind
+ */
+
+/**
+ * The pull request that the Gate handed back and the Gate's comment on it.
+ * @typedef {object} Handback
+ * @property {Pick<PullRequest, 'number' | 'url' | 'labels'>} pull
+ * @property {Comment | null} comment
+ */
+
+/**
  * Everything the prompt says.
  * @typedef {object} PromptInput
+ * @property {PromptKind} [kind] `first` by default.
+ * @property {BranchState | null} [state] The state of the branch, for a continue or fix prompt.
+ * @property {Handback | null} [handback] For a fix prompt.
  * @property {Pick<Issue, 'number' | 'title' | 'body' | 'url'>} issue
  * @property {TaskBlock} block
  * @property {Comment[]} scopeChanges Oldest first.
@@ -62,6 +95,7 @@ const TASK_MARKER = '# hackwin:task'
 
 /**
  * @typedef {object} WrittenPrompt
+ * @property {PromptKind} kind
  * @property {string} file The absolute path of `prompts/<issue>.md`.
  * @property {string} text
  * @property {ChangesOnMain} changes
@@ -83,10 +117,14 @@ const TASK_MARKER = '# hackwin:task'
  * @param {string} options.worktree
  * @param {string} options.branch
  * @param {string} options.mainSha The commit of the default branch that the prompt describes.
+ * @param {PromptKind} [options.kind] `first` by default.
+ * @param {BranchState | null} [options.state] For a continue or fix prompt.
+ * @param {Handback | null} [options.handback] For a fix prompt.
  * @returns {Promise<WrittenPrompt>}
  */
 export async function writeTaskPrompt(ctx, options) {
   const { config, identity, issue, block, local, main, worktree, branch, mainSha } = options
+  const { kind = 'first', state = null, handback = null } = options
   const dir = ctx.gitCommonDir
   const own = await readMainSeen(dir, worktree)
   const latest = own ? null : await latestMainSeen(dir)
@@ -106,6 +144,9 @@ export async function writeTaskPrompt(ctx, options) {
   const role = config.owners.roles[block.role]
 
   const text = composePrompt({
+    kind,
+    state,
+    handback,
     issue,
     block,
     scopeChanges: comments.filter((comment) => comment.body.trimStart().startsWith(SCOPE_CHANGE)),
@@ -127,15 +168,18 @@ export async function writeTaskPrompt(ctx, options) {
   await mkdir(dirname(file), { recursive: true })
   await writeFile(file, text)
   await writeMainSeen(dir, worktree, changes.to, ctx.clock.now())
-  return { file, text, changes, recorded }
+  return { kind, file, text, changes, recorded }
 }
 
 /**
- * The prompt text: a title, one line on how it relates to `AGENTS.md`, and the seven parts.
+ * The prompt text: a title, one line on how it relates to `AGENTS.md`, and the seven parts; a
+ * continue prompt adds the state of the branch, a fix prompt the Gate's comment and the state of
+ * the branch.
  * @param {PromptInput} input
  * @returns {string}
  */
 export function composePrompt(input) {
+  const kind = input.kind ?? 'first'
   const parts = [
     taskPart(input),
     rolePart(input),
@@ -145,17 +189,34 @@ export function composePrompt(input) {
     securityPart(),
     personalPart(input),
   ]
-  const sections = parts.map((lines, index) =>
-    [`## ${PROMPT_PARTS[index]}`, '', ...lines].join('\n'),
-  )
+  if (kind === 'fix') parts.push(handbackPart(input))
+  if (kind !== 'first') parts.push(statePart(input))
+  const headings = [...PROMPT_PARTS, ...EXTRA_PARTS[kind]]
+  const sections = parts.map((lines, index) => [`## ${headings[index]}`, '', ...lines].join('\n'))
   return [
     `# Task #${input.issue.number}: ${input.issue.title}`,
     '',
-    'You work on this one task in its own worktree. The rules of `AGENTS.md` apply; this prompt adds what is specific to the task.',
+    introOf(kind),
     '',
     sections.join('\n\n'),
     '',
   ].join('\n')
+}
+
+/**
+ * The line under the title: what the session does, and that `AGENTS.md` applies.
+ * @param {PromptKind} kind
+ * @returns {string}
+ */
+function introOf(kind) {
+  const rules = 'The rules of `AGENTS.md` apply; this prompt adds what is specific to the task.'
+  if (kind === 'continue') {
+    return `You continue this one task in its own worktree. An earlier session worked on it and stopped: do not start over, but read the state of the branch in part 8 and go on from there. ${rules}`
+  }
+  if (kind === 'fix') {
+    return `You fix this one task in its own worktree. Its pull request was handed back by the Gate: part 8 holds the Gate's comment, part 9 the state of the branch. ${rules}`
+  }
+  return `You work on this one task in its own worktree. ${rules}`
 }
 
 /**
@@ -299,6 +360,130 @@ function securityPart() {
     '- Never read or print `.env.local`, or any other env file except `.env.example`.',
     '- Leave every database and production config change to the Lead: never apply a migration and never change production configuration, also not outside the repository.',
   ]
+}
+
+/**
+ * The part of a fix prompt with the pull request that the Gate handed back and the Gate's
+ * comment (A12).
+ * @param {PromptInput} input
+ * @returns {string[]}
+ */
+function handbackPart({ handback }) {
+  if (!handback) throw new TypeError('a fix prompt needs the pull request the Gate handed back')
+  const { pull, comment } = handback
+  const labels = HANDBACK_LABELS.filter((label) => pull.labels.includes(label))
+  const where = pull.url ? ` (${pull.url})` : ''
+  const lines = [
+    `The Gate handed pull request #${pull.number}${where} back: it is labeled ${labels.map((label) => `\`${label}\``).join(', ')}.`,
+    '',
+  ]
+  if (comment === null) {
+    lines.push(
+      "The pull request has no comment of the Gate's account. Ask the Lead what the Gate reported before you change anything.",
+    )
+  } else {
+    const link = comment.url ? `, ${comment.url}` : ''
+    lines.push(`The Gate's comment, ${comment.createdAt}${link}:`, '')
+    lines.push(...comment.body.trim().replace(/\r\n?/g, '\n').split('\n').map(quoted))
+  }
+  lines.push(
+    '',
+    `Fix what the comment names, on this branch and inside your paths. Then finish as part 5 says: \`hackwin ship\` updates pull request #${pull.number}.`,
+  )
+  return lines
+}
+
+/**
+ * The part of a continue or fix prompt with the state of the branch: its commits, its remote
+ * branch, the uncommitted changes and what `take` did to bring it up to date (A12).
+ * @param {PromptInput} input
+ * @returns {string[]}
+ */
+function statePart({ state }) {
+  if (!state) throw new TypeError('a continue or fix prompt needs the state of the branch')
+  const { branch, head, main, remote, commits, changes, update } = state
+  const lines = [`- \`${branch}\` is at \`${head}\`.`]
+  for (const ref of [update.remote, update.main]) {
+    const line = updateText(ref)
+    if (line) lines.push(`- ${line}`)
+  }
+  lines.push(
+    main.contained
+      ? `- It contains \`${main.ref}\` at \`${main.sha}\`.`
+      : `- It does not contain \`${main.ref}\` at \`${main.sha}\`. \`hackwin ship\` merges it; resolve any conflict in your own files then.`,
+  )
+  lines.push(`- ${remoteText(remote)}`)
+
+  if (commits.length === 0) {
+    lines.push(`- It has no commit of its own yet.`)
+  } else {
+    lines.push(`- Its own commits, which \`${main.ref}\` lacks, newest first:`, '')
+    lines.push(
+      ...commits
+        .slice(0, MAX_BRANCH_LINES)
+        .map(({ sha, subject }) => `  - \`${sha.slice(0, 12)}\` ${subject}`),
+    )
+    if (commits.length > MAX_BRANCH_LINES) {
+      lines.push(`  - and ${commits.length - MAX_BRANCH_LINES} more`)
+    }
+    lines.push('')
+  }
+
+  if (state.merging) {
+    lines.push(
+      '- A merge is in progress in the worktree: resolve its conflicts and commit it, or undo it with `git merge --abort`.',
+    )
+  }
+  if (changes.length === 0) {
+    lines.push('- The worktree has no uncommitted changes and no untracked files.')
+  } else {
+    lines.push(
+      "- Uncommitted changes and untracked files in the worktree, as `git status --short` lists them. They are the earlier session's work: keep them unless the task says otherwise.",
+      '',
+      '```',
+      ...changes.slice(0, MAX_BRANCH_LINES),
+      ...(changes.length > MAX_BRANCH_LINES
+        ? [`and ${changes.length - MAX_BRANCH_LINES} more`]
+        : []),
+      '```',
+    )
+  }
+  return lines
+}
+
+/**
+ * What `take` did with one ref of the update, for the state of the branch; null when the branch
+ * already contained it or the ref does not exist.
+ * @param {RefUpdate} update
+ * @returns {string | null}
+ */
+function updateText({ ref, status, reason, conflicts }) {
+  if (status === 'fast-forward') return `\`take\` fast-forwarded it to \`${ref}\`.`
+  if (status === 'merged') return `\`take\` merged \`${ref}\` into it.`
+  if (status !== 'not-merged') return null
+  const files = conflicts.length > 0 ? `: ${conflicts.map((path) => `\`${path}\``).join(', ')}` : ''
+  return `\`take\` did not merge \`${ref}\`: ${reason}${files}.`
+}
+
+/**
+ * @param {BranchState['remote']} remote
+ * @returns {string}
+ */
+function remoteText({ ref, sha, ahead, behind }) {
+  if (sha === null) return `\`${ref}\` does not exist: the branch was never pushed.`
+  if (ahead === 0 && behind === 0) return `\`${ref}\` is at the same commit.`
+  const parts = []
+  if (ahead > 0) parts.push(`has ${commitCount(ahead)} that it lacks`)
+  if (behind > 0) parts.push(`lacks ${commitCount(behind)} of it`)
+  return `\`${ref}\` is at \`${sha}\`: the branch ${parts.join(', and ')}.`
+}
+
+/**
+ * @param {number} count
+ * @returns {string}
+ */
+function commitCount(count) {
+  return `${count} ${count === 1 ? 'commit' : 'commits'}`
 }
 
 /**

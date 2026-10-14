@@ -1,6 +1,7 @@
 // The Gate's local files under `<git-common-dir>/hackwin/gate/` (6.4): the state file
-// `state.json` of 9.6 (G4) and the heartbeat (G5). Both are written atomically: a temporary file
-// in the same directory, then a rename, so a crash never leaves half a file behind.
+// `state.json` of 9.6 (G4), the heartbeat (G5) and the id of this clone's Gate. They are written
+// atomically: a temporary file in the same directory, then a rename, so a crash never leaves half
+// a file behind.
 
 import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -17,6 +18,7 @@ export const GATE_SCHEMA = 1
  * @property {string} heartbeat `heartbeat`, renewed at every poll and stage change (G5).
  * @property {string} digest `digest.log`, one line per pull request run (9.6).
  * @property {string} lock `gate.lock`, held by the running Gate (7.5 step 2).
+ * @property {string} id `gate-id`, the id of this clone's Gate, which the status issue shows.
  * @property {string} logs `logs/`, the full logs of the stage commands.
  * @property {string} cache `cache/`, the dependency install cache (A11).
  * @property {string} worktrees `worktrees/`, the scratch worktrees.
@@ -35,6 +37,7 @@ export function gateFiles(gitCommonDir) {
     heartbeat: join(root, 'heartbeat'),
     digest: join(root, 'digest.log'),
     lock: join(root, 'gate.lock'),
+    id: join(root, 'gate-id'),
     logs: join(root, 'logs'),
     cache: join(root, 'cache'),
     worktrees: join(root, 'worktrees'),
@@ -195,6 +198,31 @@ export async function readHeartbeat(file) {
   if (!isObject(heartbeat) || heartbeat.schema !== GATE_SCHEMA) return null
   if (typeof heartbeat.heartbeat_at !== 'string') return null
   return /** @type {Heartbeat} */ (heartbeat)
+}
+
+/** A Gate id: 16 hex digits, random, made once per clone. */
+const GATE_ID = /^[0-9a-f]{16}$/
+
+/**
+ * The id of this clone's Gate, which tells its heartbeat in the status issue from another
+ * clone's. It is random and says nothing about the machine. The first call in a clone makes it;
+ * a missing or unreadable file gets a new one, and `created` says so.
+ * @param {string} file
+ * @param {Date} now
+ * @returns {Promise<{ id: string, created: boolean }>}
+ */
+export async function loadGateId(file, now) {
+  const text = await readText(file)
+  const record = text === null ? null : parseJson(text)
+  if (isObject(record) && record.schema === GATE_SCHEMA && GATE_ID.test(record.gate_id)) {
+    return { id: record.gate_id, created: false }
+  }
+  const id = randomBytes(8).toString('hex')
+  await writeAtomic(
+    file,
+    `${JSON.stringify({ schema: GATE_SCHEMA, gate_id: id, created_at: now.toISOString() })}\n`,
+  )
+  return { id, created: true }
 }
 
 /**

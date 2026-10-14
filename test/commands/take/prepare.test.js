@@ -10,60 +10,23 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { readMainSeen } from '../../../src/core/state/index.js'
+import { accounts, createFakeGitHub, hackwinObject, yaml } from '../../harness/index.js'
 import {
-  accounts,
-  createFakeGitHub,
-  createFixture,
-  hackwinObject,
-  ownersObject,
-  yaml,
-} from '../../harness/index.js'
-import { DEADLINE, agentBin, expectInOrder, take, task } from './helpers.js'
+  DEADLINE,
+  agentBin,
+  expectInOrder,
+  promptFileOf,
+  take,
+  task,
+  teamFixture,
+  worktreeOf,
+} from './helpers.js'
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 
 const LEAD = accounts.lead.login
 const BUILDER1 = accounts.builder1.login // counter, todos
 const BUILDER2 = accounts.builder2.login // greeting
-
-/** The files that join leaves out of git in the main checkout (6.4). */
-const GITIGNORE = 'CLAUDE.local.md\n.env.local\n.env.*.local\n'
-
-/**
- * A fixture of a team of 3 whose hackwin.yml is changed by `edit`.
- * @param {string} name
- * @param {(hackwin: ReturnType<typeof hackwinObject>) => void} [edit]
- * @param {Record<string, string>} [files]
- */
-function teamFixture(name, edit = () => {}, files = {}) {
-  const hackwin = hackwinObject(3)
-  edit(hackwin)
-  return createFixture({
-    name,
-    config: { hackwin: yaml(hackwin), owners: yaml(ownersObject()) },
-    files: { 'README.md': '# Fixture\n', '.gitignore': GITIGNORE, ...files },
-  })
-}
-
-/**
- * The worktree of a task in a clone, and its git.
- * @param {Fixture} fixture
- * @param {string} clone The name of the clone's directory.
- * @param {string} dir `<N>-<slug>`
- */
-function worktreeOf(fixture, clone, dir) {
-  const path = join(fixture.dir, `${clone}.worktrees`, dir)
-  return { path, git: fixture.gitAt(path) }
-}
-
-/**
- * The prompt file of a task in a clone.
- * @param {{ commonDir: string }} clone
- * @param {number} issue
- */
-function promptFileOf(clone, issue) {
-  return join(clone.commonDir, 'hackwin', 'prompts', `${issue}.md`)
-}
 
 describe('AC11: take <N> creates a worktree on a task/ branch whose base is the current origin/main, sets in-progress, and outputs a prompt that contains all seven parts of section 7.7 step 6', () => {
   test('in a terminal, take 7 claims the task, creates the worktree from the newest main and starts Claude Code in it with the prompt', async () => {
@@ -622,22 +585,27 @@ describe('1.5b/steps: hooks, cleanup of merged worktrees, waiting pull requests,
     expect(again.stdout).not.toContain('linked')
   })
 
-  test('step 5 adds a worktree for the branch an earlier take left', async () => {
+  test('step 5 adds a worktree for the branch an earlier take left, and a branch without commits of its own moves to the current origin/main', async () => {
     const fake = () =>
       createFakeGitHub({
         issues: [task(12, { role: 'counter', paths: ['src/features/counter/d/**'] })],
       })
     expect((await take(fixture, clone.path, fake(), BUILDER1, ['12'])).code).toBe(0)
     const worktree = worktreeOf(fixture, 'builder1', '12-task-12')
-    const base = await worktree.git.revParse('HEAD')
     await clone.git.worktreeRemove(worktree.path, { force: true })
-    await fixture.publish({ 'src/shared/types.js': 'export {}\n' }, { message: 'Types' })
+    const main = await fixture.publish(
+      { 'src/shared/types.js': 'export {}\n' },
+      { message: 'Types' },
+    )
 
     const result = await take(fixture, clone.path, fake(), BUILDER1, ['12'])
     expect(result.code).toBe(0)
     expect(result.stdout).toContain(
       `worktree: ${worktree.path} on task/12-task-12, added for the existing branch`,
     )
-    expect(await worktree.git.revParse('HEAD')).toBe(base)
+    expect(result.stdout).toContain(
+      `fast-forwarded task/12-task-12 to origin/main ${main.slice(0, 12)}`,
+    )
+    expect(await worktree.git.revParse('HEAD')).toBe(main)
   })
 })
