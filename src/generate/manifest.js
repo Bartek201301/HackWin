@@ -7,6 +7,7 @@
 import { chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { SHIM_FILES } from './githooks.js'
+import { WORKFLOW_FILE } from './workflow.js'
 
 /**
  * What a generator renders from. A later generator that needs more adds a field here.
@@ -35,7 +36,9 @@ import { SHIM_FILES } from './githooks.js'
  */
 
 /** Every generated file, in the order `setup` writes them. */
-export const MANIFEST = Object.freeze(/** @type {GeneratedFileSpec[]} */ ([...SHIM_FILES]))
+export const MANIFEST = Object.freeze(
+  /** @type {GeneratedFileSpec[]} */ ([...SHIM_FILES, WORKFLOW_FILE]),
+)
 
 /**
  * The generated files of a CLI version.
