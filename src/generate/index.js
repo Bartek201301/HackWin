@@ -13,9 +13,31 @@ export {
   installScript,
   renderWorkflow,
 } from './workflow.js'
+export {
+  WRAPPER_FILES,
+  WRAPPER_TIMEOUT_MS,
+  renderWrapper,
+  wrapperCommandLine,
+  wrapperPath,
+} from './wrappers.js'
+export {
+  CHECKED_TOOLS,
+  CLAUDE_HOOKS,
+  ENV_READ_RULES,
+  FORMATTED_TOOLS,
+  MERGE_RULES,
+  SETTINGS_PATH,
+  denyRules,
+  hookCommand,
+  isHackwinHandler,
+  mergeClaudeSettings,
+  pushRules,
+  writeClaudeSettings,
+} from './claude-settings.js'
 
 /** @typedef {import('./manifest.js').GenerateInput} GenerateInput */
 /** @typedef {import('./manifest.js').GeneratedFileSpec} GeneratedFileSpec */
 /** @typedef {import('./manifest.js').GeneratedFile} GeneratedFile */
 /** @typedef {import('./manifest.js').StaleFile} StaleFile */
 /** @typedef {import('./githooks.js').GitHook} GitHook */
+/** @typedef {import('./claude-settings.js').SettingsInput} SettingsInput */
