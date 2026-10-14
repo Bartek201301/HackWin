@@ -17,6 +17,25 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-14 · Phase 1 · Tooling: npm run test:ac through a Node script (PR #54, issue #35)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/35-test-ac-node-script`, created by the integrator from `4454ab8` after the merges of #47 and #51, beside the sessions of #10, #17 and #21. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `5ba252b`, on `4454ab8`, then a merge of `origin/main` at `53f9ba9` (`18fe6ee`); PR #54 opened at 23:04:38 UTC. CI failed on `18fe6ee` on Node 22 and 24, although `npm test` had passed in the session; the Lead's review found the cause in the CI log.
+  - A commit `205eff8` (23:10:15 UTC) changed only the test file. The nested runs get `NO_COLOR=1` and no `FORCE_COLOR`, and the nested run of `vitest.config.js` names its reporter. CI passed on `205eff8`.
+  - `lead-55` sent `merge #54` with the head SHA by SendMessage. This was the first merge under the human's delegation, so the integrator did not ask the human.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 4 files inside issue #35's paths; no secret pattern; no conflict with `53f9ba9`. Step 6, with the PR merged into `53f9ba9`: `npm test` passed 457 of 457, and `npm run test:ac` passed 1.3a/test-ac (7). The inspection criterion held: `test:ac` is `node scripts/test-ac.js`, no npm script contains `sh -c`, and `files` is still `bin` and `src`. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - Vitest picks its colours and its default reporter from the environment: `CI`, `GITHUB_ACTIONS`, and the agent variables `CLAUDECODE` and `AI_AGENT` that a Claude Code session sets. So a test that passes in a session can fail on the runner. Reproducing the failure needed `CLAUDECODE` and `AI_AGENT` unset as well as `CI=true GITHUB_ACTIONS=true`.
+  - The scope change ruled out `vitest.config.js`, so the timeouts live in the test file: a timeout for the describe block and one for `spawnSync`, because the test timeout cannot stop a nested run while `spawnSync` blocks the event loop.
+  - `owners.yml` names no role for `scripts/**`; `scripts/test-ac.js` falls to the integrator by the default rule. #46 item 12.
+  - The session ran a load test, 60 CPU-bound processes for about 100 s on the shared machine, without asking the human, while the sessions of #17 and #21 were testing. The Lead's review noted it; according to `lead-55` the session has since saved a rule to ask first (not checked by the integrator).
+- Measured:
+  - PR open 10 min 0 s (23:04:38 to 23:14:38 UTC). 3 commits (one a merge of `origin/main`), 2 PR runs (61 s failed on `18fe6ee`, 55 s passed on `205eff8`), 0 conflicts.
+  - Local merge test: `npm test` 28.68 s. The run on main after the merge: 64 s.
+  - The session's own measurements of `test/cli/test-ac.test.js`: 3.5 s on an idle machine (load average 3), and 25.0 s under its load test (load average 22 to 39).
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/54; head `205eff8`; merge commit `50679a9`; runs `38651827850` (red), `38652500469` (green) and `38652863227` (main).
+
 ### 2026-10-14 · Phase 1 · Step 1.4b, the CI workflow and internal ci (PR #51, issue #9)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/9-ci-workflow`, created by the integrator from `a0610d7` after the merges of #44, #43 and #45. The integrator's planning session for the merge. From this day the Lead's reviews and instructions reach the integrator from the Lead's session (`lead-55`) by SendMessage. The human confirmed this in the integrator's terminal, and merges still need the human's go there.
