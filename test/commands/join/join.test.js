@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   chmodSync,
   existsSync,
@@ -21,6 +21,35 @@ import { accounts, createFakeGitHub, httpError, teamConfig, yaml } from '../../h
 import { createHookFixture } from '../../internal/hook/hook-fixture.js'
 
 /** @typedef {import('../../harness/index.js').FakeGitHub} FakeGitHub */
+
+// removeMergedWorktrees as it is, unless a test rewords the reasons it gives for the worktrees it
+// keeps, as a later wording of src/core/worktrees might: join reads `merged`, not the reason.
+const keptReasons = vi.hoisted(() => ({ reword: false }))
+vi.mock('../../../src/core/worktrees/index.js', async (importOriginal) => {
+  /** @type {typeof import('../../../src/core/worktrees/index.js')} */
+  const actual = await importOriginal()
+  /** @type {Record<string, string>} */
+  const reworded = {
+    'its pull request is not merged': 'the task is still open',
+    'it is the current worktree': 'join runs in it',
+  }
+  return {
+    ...actual,
+    /** @type {typeof actual.removeMergedWorktrees} */
+    removeMergedWorktrees: async (git, github) => {
+      const result = await actual.removeMergedWorktrees(git, github)
+      if (!keptReasons.reword) return result
+      const kept = result.kept.map((entry) => ({
+        ...entry,
+        reason: reworded[entry.reason] ?? entry.reason,
+      }))
+      return { ...result, kept }
+    },
+  }
+})
+afterEach(() => {
+  keptReasons.reword = false
+})
 
 const LEAD = accounts.lead.login
 const BUILDER1 = accounts.builder1.login // counter, todos
@@ -622,5 +651,46 @@ describe("1.4e/worktrees: join removes the worktrees of merged tasks and shows t
     // The rest of join works on the main checkout of the clone.
     expect(existsSync(join(clone.path, 'CLAUDE.local.md'))).toBe(true)
     expect(existsSync(join(worktree, 'CLAUDE.local.md'))).toBe(false)
+  })
+
+  test('join tells the kept worktrees of merged tasks by the field merged, whatever the text of the reason', async () => {
+    const { fixture, env, answers } = await createJoinFixture({ nodeProject: false })
+    const clone = await fixture.clone('builder1')
+    const fake = createFakeGitHub({
+      pulls: [
+        { number: 11, title: 'Counter', head: 'task/1-counter', state: 'closed', merged: true },
+        { number: 12, title: 'Todos', head: 'task/2-todos' },
+      ],
+    })
+    await clone.git.fetch()
+    const worktrees = join(fixture.dir, 'builder1.worktrees')
+    for (const [branch, dir] of [
+      ['task/1-counter', '1-counter'],
+      ['task/2-todos', '2-todos'],
+    ]) {
+      await clone.git.worktreeAdd(join(worktrees, dir), {
+        branch,
+        createBranch: true,
+        startPoint: 'origin/main',
+      })
+    }
+    keptReasons.reword = true
+
+    const result = await runJoin(join(worktrees, '1-counter'), {
+      env,
+      fake,
+      args: ['--answers', answers],
+    })
+
+    expect(result.code).toBe(0)
+    expect(existsSync(join(worktrees, '1-counter'))).toBe(true)
+    expect(existsSync(join(worktrees, '2-todos'))).toBe(true)
+    const at = result.lines.indexOf('pass  worktrees: no worktree of a merged task to remove')
+    expect(at).toBeGreaterThanOrEqual(0)
+    expect(result.lines.slice(at + 1, at + 3)).toEqual([
+      `      kept ${join(worktrees, '1-counter')}: join runs in it`,
+      `pass  queue: empty: no open task of your roles (counter, todos) waits to be taken`,
+    ])
+    expect(result.stdout).not.toContain(join(worktrees, '2-todos'))
   })
 })
