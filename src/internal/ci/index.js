@@ -41,7 +41,7 @@ import { checkTaskLink, parseTaskBlock, parseTaskLink } from '../../core/tasks/i
 import { readPullEvent } from './event.js'
 import { checkMergedTree } from './merged.js'
 import { RULES, STEPS, fail, plural, report } from './steps.js'
-import { fetchAuth, githubWithToken, takeToken, withoutTokenInProcess } from './token.js'
+import { fetchAuth, githubWithToken, takeToken } from './token.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config } from '../../core/config/index.js' */
@@ -55,20 +55,9 @@ import { fetchAuth, githubWithToken, takeToken, withoutTokenInProcess } from './
  * @returns {Promise<CommandResult>}
  */
 export async function run(withToken) {
-  // Before anything runs: the token reaches only the gh calls and the fetch of checkPullRequest.
-  // The steps go on with a context whose environment, and whose git, holds no token, and while
-  // they run the environment of the process holds none either.
+  // Before anything runs: the token reaches only the gh calls and the fetch below. Every step
+  // goes on with a context whose environment, and whose git, holds no token.
   const { token, ctx } = takeToken(withToken)
-  return withoutTokenInProcess(() => checkPullRequest(ctx, token))
-}
-
-/**
- * The steps for the pull request of the event.
- * @param {CommandContext} ctx Its environment holds no token.
- * @param {string | null} token
- * @returns {Promise<CommandResult>}
- */
-async function checkPullRequest(ctx, token) {
   const github = githubWithToken(ctx.github, token)
   const event = await readPullEvent(ctx.env)
   const pull = await github.getPullRequest(event.number)
