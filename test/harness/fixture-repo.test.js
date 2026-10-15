@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -17,12 +18,12 @@ import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGitHub } from '../../src/core/github/index.js'
 import { NAME_ONLY_LOGINS, REDACTED, TOKEN_VARIABLE, accounts, redact } from './accounts.js'
-import { createFakeGitHub } from './fake-github.js'
+import { createFakeGitHub, httpError, rawResult } from './fake-github.js'
 import { FIXTURE_REPOS, RESET_SHA, SANDBOX, fixtureRepo } from './fixture-repos.js'
 import { inspectFixtureRepo, withFixtureRepo } from './fixture-repo.js'
 import { guardExecutor, refusalOf } from './guard.js'
 import { acquireLock } from './lock.js'
-import { resetFixtureRepo } from './reset.js'
+import { RESET_ATTEMPTS, resetFixtureRepo } from './reset.js'
 import { TEAM_SIZES, teamMembers } from './team.js'
 
 /** @type {string[]} */
@@ -435,6 +436,240 @@ describe('1.3d/driver: the reset of a fixture repository', () => {
     fake.state.items = []
     await resetFixtureRepo(createGitHub({ executor: fake.executor, repo: info.repo }), info)
     expect(fake.state.branches.main).toBe(RESET_SHA)
+  })
+})
+
+describe('1.3d/reset: deletions already done, calls made again, and the logs of failed runs', () => {
+  /** The calls of the fake with this method and endpoint. */
+  const callsOf = (
+    /** @type {ReturnType<typeof createFakeGitHub>} */ fake,
+    /** @type {string} */ method,
+    /** @type {string} */ endpoint,
+  ) => fake.calls.filter((call) => call.method === method && call.endpoint === endpoint)
+
+  test('a 404 on deleting a rule set, a branch or a label counts as done', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-b')
+    // Each object is gone by the time the reset deletes it, as after an earlier attempt whose
+    // answer was lost: GitHub answers 404.
+    fake.on('DELETE repos/{owner}/{repo}/rulesets/:id', ({ params }) => {
+      const index = fake.state.rulesets.findIndex((ruleset) => ruleset.id === Number(params.id))
+      fake.state.rulesets.splice(index, 1)
+      throw httpError(404, 'Not Found')
+    })
+    fake.on('DELETE repos/{owner}/{repo}/git/refs/heads/:branch*', ({ params }) => {
+      delete fake.state.branches[params.branch]
+      // The fake's own answer for a branch that does not exist is 422; both count as gone.
+      if (params.branch === 'spike/left') throw httpError(404, 'Not Found')
+      throw httpError(422, 'Reference does not exist')
+    })
+    fake.on('DELETE repos/{owner}/{repo}/labels/:name', ({ params }) => {
+      const index = fake.state.labels.findIndex((label) => label.name === params.name)
+      fake.state.labels.splice(index, 1)
+      throw httpError(404, 'Not Found')
+    })
+    /** @type {string[]} */
+    const lines = []
+    const github = createGitHub({ executor: fake.executor, repo: info.repo })
+    const report = await resetFixtureRepo(github, info, { log: (line) => lines.push(line) })
+    expect(report).toMatchObject({
+      deletedRulesets: [{ id: 7, name: 'hackwin-branch-rules' }],
+      deletedBranches: ['spike/left', 'task/41-x'],
+      deletedLabels: ['bug', 'documentation', 'ready'],
+      accepted: [
+        'rule set hackwin-branch-rules: HTTP 404, already gone',
+        'branch spike/left: HTTP 404, already gone',
+        'branch task/41-x: HTTP 422, already gone',
+        'label bug: HTTP 404, already gone',
+        'label documentation: HTTP 404, already gone',
+        'label ready: HTTP 404, already gone',
+      ],
+    })
+    expect(fake.state.rulesets).toEqual([])
+    expect(fake.state.branches).toEqual({ main: RESET_SHA })
+    expect(fake.state.labels).toEqual([])
+    expect(lines).toContain(
+      'reset Bartek201301/hackwin-fixture-b: branch spike/left: HTTP 404, already gone, accepted',
+    )
+    // Each deletion was made once: a 404 is not made again.
+    expect(callsOf(fake, 'DELETE', 'repos/{owner}/{repo}/rulesets/7')).toHaveLength(1)
+
+    // Another refusal of a deletion still fails the reset, with GitHub's message.
+    const refused = fakeFixtureRepo('hackwin-fixture-b')
+    refused.fake.on('DELETE repos/{owner}/{repo}/git/refs/heads/:branch*', () => {
+      throw httpError(422, 'Cannot delete this protected branch')
+    })
+    await expect(
+      resetFixtureRepo(
+        createGitHub({ executor: refused.fake.executor, repo: refused.info.repo }),
+        refused.info,
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringMatching(/Cannot delete this protected branch/),
+    })
+  })
+
+  test('a call that fails without an HTTP status, or with a 5xx, is made again and the reset then holds', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-b')
+    // The deletion takes effect, but its answer is cut: no HTTP status. The second attempt finds
+    // the rule set gone (404).
+    const offDelete = fake.on('DELETE repos/{owner}/{repo}/rulesets/:id', ({ params }) => {
+      offDelete()
+      const index = fake.state.rulesets.findIndex((ruleset) => ruleset.id === Number(params.id))
+      fake.state.rulesets.splice(index, 1)
+      return rawResult({ code: 1, stderr: 'unexpected end of JSON input\n' })
+    })
+    // The network fails once on the list of labels.
+    const offLabels = fake.on('GET repos/{owner}/{repo}/labels', () => {
+      offLabels()
+      return rawResult({ code: 1, stderr: 'net/http: TLS handshake timeout\n' })
+    })
+    // GitHub answers 502 and then 503 on the reset of main, before the third attempt passes.
+    const failures = [httpError(502, 'Bad Gateway'), httpError(503, 'Service Unavailable')]
+    const offMain = fake.on('PATCH repos/{owner}/{repo}/git/refs/heads/:branch*', () => {
+      const failure = failures.shift()
+      if (failures.length === 0) offMain()
+      throw failure
+    })
+    /** @type {string[]} */
+    const lines = []
+    const report = await resetFixtureRepo(
+      createGitHub({ executor: fake.executor, repo: info.repo }),
+      info,
+      { log: (line) => lines.push(line), retryDelayMs: 0 },
+    )
+    expect(report).toMatchObject({
+      deletedRulesets: [{ id: 7, name: 'hackwin-branch-rules' }],
+      deletedLabels: ['bug', 'documentation', 'ready'],
+      main: { before: 'c'.repeat(40), after: RESET_SHA },
+      accepted: ['rule set hackwin-branch-rules: HTTP 404, already gone'],
+    })
+    expect(fake.state.rulesets).toEqual([])
+    expect(fake.state.labels).toEqual([])
+    expect(fake.state.branches).toEqual({ main: RESET_SHA })
+    expect(callsOf(fake, 'DELETE', 'repos/{owner}/{repo}/rulesets/7')).toHaveLength(2)
+    expect(callsOf(fake, 'PATCH', 'repos/{owner}/{repo}/git/refs/heads/main')).toHaveLength(3)
+    const retries = lines.filter((line) => line.includes('; attempt '))
+    expect(retries).toEqual([
+      `reset ${info.repo}: GitHub call failed: gh api --method DELETE repos/{owner}/{repo}/rulesets/7: unexpected end of JSON input; attempt 2 of ${RESET_ATTEMPTS} in 0 ms`,
+      `reset ${info.repo}: GitHub call failed: gh api --method GET repos/{owner}/{repo}/labels?per_page=100&page=1: net/http: TLS handshake timeout; attempt 2 of ${RESET_ATTEMPTS} in 0 ms`,
+      `reset ${info.repo}: GitHub call failed: gh api --method PATCH repos/{owner}/{repo}/git/refs/heads/main: gh: Bad Gateway (HTTP 502); attempt 2 of ${RESET_ATTEMPTS} in 0 ms`,
+      `reset ${info.repo}: GitHub call failed: gh api --method PATCH repos/{owner}/{repo}/git/refs/heads/main: gh: Service Unavailable (HTTP 503); attempt 3 of ${RESET_ATTEMPTS} in 0 ms`,
+    ])
+  })
+
+  test('a call is made at most RESET_ATTEMPTS times, waiting longer each time; other failures are not made again', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-c')
+    fake.on('DELETE repos/{owner}/{repo}/labels/:name', () => {
+      throw httpError(503, 'Service Unavailable')
+    })
+    /** @type {string[]} */
+    const lines = []
+    await expect(
+      resetFixtureRepo(createGitHub({ executor: fake.executor, repo: info.repo }), info, {
+        log: (line) => lines.push(line),
+        retryDelayMs: 1,
+      }),
+    ).rejects.toMatchObject({ status: 503 })
+    expect(RESET_ATTEMPTS).toBeGreaterThanOrEqual(3)
+    expect(callsOf(fake, 'DELETE', 'repos/{owner}/{repo}/labels/bug')).toHaveLength(RESET_ATTEMPTS)
+    expect(lines.map((line) => /in (\d+) ms$/.exec(line)?.[1]).filter(Boolean)).toEqual(
+      Array.from({ length: RESET_ATTEMPTS - 1 }, (_, index) => String(2 ** index)),
+    )
+
+    // A 4xx other than a 404 on a deletion fails at once.
+    const conflict = fakeFixtureRepo('hackwin-fixture-c')
+    conflict.fake.on('PATCH repos/{owner}/{repo}/git/refs/heads/:branch*', () => {
+      throw httpError(422, 'Object does not exist')
+    })
+    await expect(
+      resetFixtureRepo(
+        createGitHub({ executor: conflict.fake.executor, repo: conflict.info.repo }),
+        conflict.info,
+        { retryDelayMs: 0 },
+      ),
+    ).rejects.toMatchObject({ status: 422 })
+    expect(
+      callsOf(conflict.fake, 'PATCH', 'repos/{owner}/{repo}/git/refs/heads/main'),
+    ).toHaveLength(1)
+
+    // A refusal of the guard has no HTTP status, and it is not made again either.
+    const other = fakeFixtureRepo('hackwin-fixture-c')
+    /** @type {import('./guard.js').GuardedCall[]} */
+    const calls = []
+    const guarded = guardExecutor(other.fake.executor, {
+      repo: 'Bartek201301/hackwin-fixture-a',
+      account: 'lead',
+      calls,
+    })
+    await expect(
+      resetFixtureRepo(createGitHub({ executor: guarded, repo: other.info.repo }), other.info, {
+        retryDelayMs: 0,
+      }),
+    ).rejects.toThrow(/refused by the test harness: this scenario calls only/)
+    expect(calls).toHaveLength(1)
+    expect(other.fake.calls).toEqual([])
+  })
+
+  test("after a failed run, the next run keeps that run's log and full error", async () => {
+    const stateDir = tempDir()
+    const logs = join(stateDir, 'logs')
+    const { fake } = fakeFixtureRepo('hackwin-fixture-b')
+    const executors = {
+      lead: fake.as(accounts.lead.login),
+      builder1: fake.as(accounts.builder1.login),
+    }
+    // A gh call of the scenario fails with two lines of output; the message names only the first.
+    fake.on('GET repos/{owner}/{repo}/environments', () =>
+      rawResult({ code: 1, stderr: 'unexpected EOF\nsecond line of gh\n' }),
+    )
+    await expect(
+      withFixtureRepo(
+        'hackwin-fixture-b',
+        async (repo) => {
+          await repo.github('lead').api('repos/{owner}/{repo}/environments')
+        },
+        { stateDir, executors },
+      ),
+    ).rejects.toThrow(/unexpected EOF/)
+    const failed = readFileSync(join(logs, 'hackwin-fixture-b.log'), 'utf8')
+    expect(failed).toMatch(
+      /lead gh api --method GET repos\/\{owner\}\/\{repo\}\/environments -> exit 1: unexpected EOF \| second line of gh/,
+    )
+    // The full error: its class and message, the stack, the status and gh's output.
+    expect(failed).toMatch(
+      /run on hackwin-fixture-b failed: RemoteError: GitHub call failed: gh api --method GET repos\/\{owner\}\/\{repo\}\/environments: unexpected EOF\n\s+at /,
+    )
+    expect(failed).toMatch(
+      /details: \{ status: null, tail: \[ 'unexpected EOF', 'second line of gh' \] \}/,
+    )
+    expect(failed).not.toMatch(/scenario on hackwin-fixture-b passed/)
+    const started = failed.slice(0, failed.indexOf(' ')).replaceAll(':', '-')
+
+    // The next run keeps it, and names where.
+    await withFixtureRepo('hackwin-fixture-b', async () => {}, { stateDir, executors })
+    const keptName = `hackwin-fixture-b.failed-${started}.log`
+    expect(readdirSync(logs).sort()).toEqual([keptName, 'hackwin-fixture-b.log'])
+    expect(readFileSync(join(logs, keptName), 'utf8')).toBe(failed)
+    const next = readFileSync(join(logs, 'hackwin-fixture-b.log'), 'utf8')
+    expect(next).toContain(
+      `the log of the previous run on hackwin-fixture-b, which did not pass, is kept in ${join(logs, keptName)}`,
+    )
+    expect(next).toMatch(/scenario on hackwin-fixture-b passed/)
+
+    // The log of a passed run is replaced by the next run, as before.
+    await withFixtureRepo('hackwin-fixture-b', async () => {}, { stateDir, executors })
+    expect(readdirSync(logs).sort()).toEqual([keptName, 'hackwin-fixture-b.log'])
+    expect(readFileSync(join(logs, 'hackwin-fixture-b.log'), 'utf8')).not.toContain('is kept in')
+
+    // A run that ended without a word, killed for example, is kept as well.
+    const interrupted = '2026-10-15T08:00:00.000Z lock of hackwin-fixture-b taken by process 1\n'
+    writeFileSync(join(logs, 'hackwin-fixture-b.log'), interrupted)
+    await withFixtureRepo('hackwin-fixture-b', async () => {}, { stateDir, executors })
+    expect(
+      readFileSync(join(logs, 'hackwin-fixture-b.failed-2026-10-15T08-00-00.000Z.log'), 'utf8'),
+    ).toBe(interrupted)
+    expect(readdirSync(logs)).toHaveLength(3)
   })
 })
 

@@ -4,19 +4,26 @@
 //
 // Every gh call goes through the guard (guard.js) and into the run log
 // `<git common dir>/hackwin-test/logs/<repository>.log`, with the token of `builder1` redacted.
+// A run that fails writes its full error there. The next run keeps the log of a run that did not
+// pass as `<repository>.failed-<start of that run>.log` before it starts its own.
 // Tests on fixture repositories are `*.fixture.test.js` and run only through `npm run test:ac`;
 // a missing repository, account or variable fails the test and names it.
 
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { inspect } from 'node:util'
 import { createGit } from '../../src/core/git/index.js'
 import { createGhExecutor, createGitHub } from '../../src/core/github/index.js'
 import { HackwinError } from '../../src/core/runtime/errors.js'
@@ -67,7 +74,8 @@ const DEFAULT_SCENARIO_ACCOUNTS = ['lead', 'builder1']
  * @typedef {object} FixtureRepoOptions
  * @property {number} [lockTimeoutMs] How long to wait for another session's lock.
  * @property {string} [stateDir] Where the locks and logs live; for the harness's own tests.
- * @property {string} [logFile] The run log, in place of `<stateDir>/logs/<repository>.log`.
+ * @property {string} [logFile] The run log, in place of `<stateDir>/logs/<repository>.log`. The
+ *   log of an earlier run that did not pass is kept next to it as `<name>.failed-<start>.log`.
  * @property {{ lead?: GhExecutor, builder1?: GhExecutor }} [executors] Executors in place of
  *   the real gh, for the harness's own tests against the fake GitHub.
  * @property {string[]} [accounts] The accounts the scenario acts as, of `lead`, `solo` and
@@ -115,14 +123,19 @@ export async function withFixtureRepo(name, scenario, options = {}) {
  * @returns {Promise<T>}
  */
 async function runLocked(info, stateDir, scenario, options, actsAs) {
-  // The run log holds the last run on the repository; only the lock's holder writes it.
+  // The run log holds the last run on the repository; only the lock's holder writes it. The log
+  // of a run that did not pass is kept under its own name first.
   const logFile = options.logFile ?? join(stateDir, 'logs', `${info.name}.log`)
   mkdirSync(dirname(logFile), { recursive: true })
+  const kept = keepUnpassedLog(logFile, info.name)
   writeFileSync(logFile, '')
   /** @param {string} line */
   const log = (line) =>
     appendFileSync(logFile, `${redact(`${new Date().toISOString()} ${line}`)}\n`)
   log(`lock of ${info.name} taken by process ${process.pid}`)
+  if (kept !== null) {
+    log(`the log of the previous run on ${info.name}, which did not pass, is kept in ${kept}`)
+  }
   const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'hackwin-fixture-repo-')))
   try {
     /** @type {GuardedCall[]} */
@@ -160,7 +173,7 @@ async function runLocked(info, stateDir, scenario, options, actsAs) {
           onCall: (call, stderr) =>
             log(
               `${call.account} gh ${call.args.join(' ')} -> ${call.refused ? `refused: ${call.refused}` : `exit ${call.code}`}${
-                call.code !== 0 && !call.refused ? `: ${stderr.trim().split('\n')[0] ?? ''}` : ''
+                call.code !== 0 && !call.refused ? `: ${stderr.trim().split('\n').join(' | ')}` : ''
               }`,
             ),
         },
@@ -208,7 +221,8 @@ async function runLocked(info, stateDir, scenario, options, actsAs) {
     log(`scenario on ${info.name} passed`)
     return result
   } catch (error) {
-    log(`run on ${info.name} failed: ${error?.message ?? error}`)
+    // The whole error: its stack, status, gh's output and causes, not only the message.
+    log(`run on ${info.name} failed: ${inspect(error, { depth: 8 })}`)
     throw redactError(error)
   } finally {
     rmSync(tempDir, { recursive: true, force: true })
@@ -246,6 +260,26 @@ export async function inspectFixtureRepo(name, options = {}) {
     rmSync(tempDir, { recursive: true, force: true })
     release()
   }
+}
+
+/**
+ * Keep the run log of a run that did not pass, failed or interrupted, so that the next run does
+ * not empty it: rename it to `<log>.failed-<start of that run>.log` in the same directory.
+ * @param {string} logFile
+ * @param {string} name The repository name.
+ * @returns {string | null} Where the log is kept, or null when there was none to keep.
+ */
+function keepUnpassedLog(logFile, name) {
+  if (!existsSync(logFile)) return null
+  const text = readFileSync(logFile, 'utf8')
+  if (text.trim() === '' || text.includes(` scenario on ${name} passed\n`)) return null
+  const started =
+    /^(\d{4}-\d\d-\d\dT[\d:.]+Z) /.exec(text)?.[1] ?? statSync(logFile).mtime.toISOString()
+  const base = `${logFile.replace(/\.log$/, '')}.failed-${started.replaceAll(':', '-')}`
+  let kept = `${base}.log`
+  for (let count = 2; existsSync(kept); count += 1) kept = `${base}-${count}.log`
+  renameSync(logFile, kept)
+  return kept
 }
 
 /**

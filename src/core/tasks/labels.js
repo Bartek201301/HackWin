@@ -73,6 +73,12 @@ export const LABELS = Object.freeze(
   ]).map((label) => Object.freeze(label)),
 )
 
+/**
+ * The labels on a pull request that wait for its author (7.7 step 3, 8.2): `take` warns about
+ * them and the session start summary lists them. In the order of 7.7 step 3.
+ */
+export const WAITING_LABELS = Object.freeze(['needs-owner', 'gate:failed', 'scope-violation'])
+
 /** The labels that carry the status of an open task (8.3). `cut` is the Lead's and stays. */
 export const STATUS_LABELS = Object.freeze(['ready', 'blocked', 'in-progress', 'in-review'])
 
