@@ -1,11 +1,15 @@
 // Intake (9.2; G7, G12, G17; A23, A53), at every poll after the fetch of origin. The Gate lists
-// the open pull requests into the default branch. A draft is ignored. For a head SHA it has not
-// seen, it removes the labels of the earlier run, fetches the head and runs the secret scan at
-// once, so that a secret reaches the Lead without waiting for the pull request's turn. With a
-// finding the pull request fails as at stage 4 and does not join the queue; without one it gets
-// `gate:queued` and joins the back of the queue, which keeps the order in which head SHAs joined.
-// A pull request closed without a merge leaves the queue, and its task, when still open, returns
-// to `in-progress` (8.3, A35). The pull requests of `retry` join the queue again (A43).
+// the open pull requests; a draft is ignored. For a head SHA it has not seen, it removes the
+// labels of the earlier run, fetches the head and runs the secret scan at once, so that a secret
+// reaches the Lead without waiting for the pull request's turn. Every head SHA is scanned once,
+// whatever the pull request's base (G12), but only a pull request into the default branch joins
+// the queue (the Lead's review of #64). With a finding the pull request fails as at stage 4 and
+// does not join the queue; without one a pull request into the default branch gets `gate:queued`
+// and joins the back of the queue, which keeps the order in which head SHAs joined. A pull
+// request from another repository or of no member is left alone with an attention item
+// (pulls.js, leaveAlone). A pull request closed without a merge leaves the queue, and its task,
+// when still open, returns to `in-progress` (8.3, A35). The pull requests of `retry` join the
+// queue again (A43). Once the Lead typed `quit`, intake starts no new work.
 //
 // Intake runs beside the run of the pull request at the head of the queue. A new head SHA of
 // that pull request replaces its record, and the run stops after its current stage; GitHub
@@ -14,12 +18,15 @@
 import { setTaskStatus } from '../../core/tasks/index.js'
 import { closeAttention } from './attention.js'
 import {
+  UNDER_WAY,
   currentConfig,
   endFailed,
   fetchHead,
   joinQueue,
+  leaveAlone,
   leaveQueue,
   messageOf,
+  outsiderOf,
   pullRef,
   removeGateLabels,
   scanHead,
@@ -42,9 +49,6 @@ const CLOSED_WITH_THE_PULL = Object.freeze([
   'repeated-failure',
 ])
 
-/** The labels of a run under way, which a draft drops. */
-const UNDER_WAY = Object.freeze(['gate:queued', 'gate:testing', 'gate:waiting-ci'])
-
 /**
  * One intake.
  * @param {Gate} gate
@@ -52,50 +56,110 @@ const UNDER_WAY = Object.freeze(['gate:queued', 'gate:testing', 'gate:waiting-ci
  * @returns {Promise<void>}
  */
 export async function intake(gate, tools) {
+  if (gate.stopping) return
   const { ctx, state } = gate
   const branch = gate.config.hackwin.project.default_branch
   const pulls = await ctx.github.listPullRequests({ state: 'open' })
   /** @type {Map<number, PullRequest>} */
   const open = new Map(pulls.map((pull) => [pull.number, pull]))
   for (const pull of pulls) tools.authors.set(pull.number, pull.author)
-  const taken = (/** @type {PullRequest} */ pull) => !pull.draft && pull.baseRef === branch
+  const queueable = (/** @type {PullRequest} */ pull) => !pull.draft && pull.baseRef === branch
 
   for (const key of Object.keys(state.prs)) {
+    if (gate.stopping) return
     const pr = Number(key)
     const pull = open.get(pr)
     const record = state.prs[key]
-    if (record.result === 'merged' || (pull && taken(pull))) continue
+    if (record.result === 'merged' || (pull && queueable(pull))) continue
     // A draft keeps the record of an ended run: the same head SHA does not run again.
     if (pull && record.result !== null) continue
     await guarded(gate, `#${pr}`, () =>
       tools.serial(pr, () => (pull ? leaveAsDraft(gate, pull) : leaveClosed(gate, pr, pulls))),
     )
   }
+  await closeItemsOfClosed(gate, tools, open)
 
   const fresh = pulls
-    .filter((pull) => taken(pull) && state.prs[String(pull.number)]?.head_sha !== pull.headSha)
+    .filter(
+      (pull) =>
+        !pull.draft &&
+        state.prs[String(pull.number)]?.head_sha !== pull.headSha &&
+        (pull.baseRef === branch || !tools.scanned.has(scanKey(pull))),
+    )
     .sort((a, b) => a.number - b.number)
   const config =
     fresh.length === 0 ? gate.config : await currentConfig(gate, `refs/remotes/origin/${branch}`)
   for (const pull of fresh) {
+    if (gate.stopping) return
     await guarded(gate, `#${pull.number}`, () =>
       tools.serial(pull.number, () => admit(gate, tools, config, pull)),
     )
   }
 
   for (const pr of [...gate.retries]) {
+    if (gate.stopping) return
     gate.retries.delete(pr)
     const pull = open.get(pr)
     const done = await guarded(gate, `retry #${pr}`, () =>
-      tools.serial(pr, () => requeue(gate, pr, pull && taken(pull) ? pull : null)),
+      tools.serial(pr, () => requeue(gate, pr, pull && queueable(pull) ? pull : null)),
     )
     if (!done) gate.retries.add(pr)
   }
 }
 
 /**
- * A new head SHA: the labels of the earlier run go, the head is fetched and scanned, and the pull
- * request joins the back of the queue or fails.
+ * The key of a head SHA that intake scanned without a finding and did not queue: the head of a
+ * pull request into another branch than the default branch. It is not scanned again while the
+ * Gate runs and the pull request targets that branch; retargeted to the default branch, it is
+ * scanned again and joins the queue.
+ * @param {PullRequest} pull
+ * @returns {string}
+ */
+function scanKey(pull) {
+  return `${pull.number}:${pull.headSha}`
+}
+
+/**
+ * Close the attention items, except a secret's, of the pull requests without a record that are
+ * no longer open: those the Gate left alone (9.6).
+ * @param {Gate} gate
+ * @param {Tools} tools
+ * @param {Map<number, PullRequest>} open
+ * @returns {Promise<void>}
+ */
+async function closeItemsOfClosed(gate, tools, open) {
+  const { ctx, state } = gate
+  const prs = new Set(
+    state.attention
+      .filter(
+        (item) =>
+          !item.resolved_at &&
+          CLOSED_WITH_THE_PULL.includes(item.type) &&
+          !open.has(Number(item.pr)) &&
+          !state.prs[String(item.pr)],
+      )
+      .map((item) => Number(item.pr)),
+  )
+  for (const pr of prs) {
+    if (gate.stopping) return
+    await guarded(gate, `#${pr}`, () =>
+      tools.serial(pr, async () => {
+        const pull = await ctx.github.getPullRequest(pr)
+        if (pull !== null && pull.state === 'open') return
+        closeAttention(gate, {
+          pr,
+          types: CLOSED_WITH_THE_PULL,
+          why: pull?.merged ? 'the pull request is merged' : 'the pull request is closed',
+        })
+      }),
+    )
+  }
+}
+
+/**
+ * A new head SHA: a pull request of no member or from another repository is left alone.
+ * Otherwise the labels of the earlier run go, the head is fetched and scanned, and the pull
+ * request fails, or joins the back of the queue when it targets the default branch.
  * @param {Gate} gate
  * @param {Tools} tools
  * @param {import('../../core/config/index.js').Config} config The configuration on main.
@@ -104,6 +168,11 @@ export async function intake(gate, tools) {
  */
 async function admit(gate, tools, config, pull) {
   const { ctx, state } = gate
+  const why = await outsiderOf(gate, tools, config, pull)
+  if (why !== null) {
+    await leaveAlone(gate, tools, pull, why)
+    return
+  }
   const pr = pull.number
   const sha = pull.headSha
   const startedAt = ctx.clock.now().getTime()
@@ -140,6 +209,10 @@ async function admit(gate, tools, config, pull) {
     })
     return
   }
+  if (pull.baseRef !== branch) {
+    tools.scanned.add(scanKey(pull))
+    return
+  }
   await setGateLabels(ctx.github, pr, ['gate:queued'])
   state.prs[String(pr)] = record
   joinQueue(state, pr)
@@ -163,7 +236,9 @@ async function leaveClosed(gate, pr, pulls) {
   const merged = pull?.merged === true
   /** @type {number | null} */
   let task = null
-  const named = pull === null || merged ? null : taskOf(pull)
+  // Only a pull request into the default branch had its task in review.
+  const branch = gate.config.hackwin.project.default_branch
+  const named = pull === null || merged || pull.baseRef !== branch ? null : taskOf(pull)
   if (named !== null && !pulls.some((other) => other.number !== pr && taskOf(other) === named)) {
     const issue = await ctx.github.getIssue(named)
     if (issue !== null && issue.state === 'open' && !issue.isPullRequest) {

@@ -13,8 +13,10 @@ import {
   changedPaths,
   currentConfig,
   fetchHead,
+  leaveAlone,
   listed,
   messageOf,
+  outsiderOf,
   scanHead,
   setGateLabels,
   takeCommand,
@@ -26,7 +28,7 @@ import {
 /** @import { Finding } from '../../core/secrets/index.js' */
 /** @import { TaskLinkReason } from '../../core/tasks/index.js' */
 /** @import { Gate } from './gate.js' */
-/** @import { Notifier } from './notify.js' */
+/** @import { Tools } from './pipeline.js' */
 /** @import { Failure } from './pulls.js' */
 /** @import { PullRecord } from './state.js' */
 
@@ -43,7 +45,7 @@ const MAX_DETAILS = 50
  * One run of a pull request through the stages, from the head SHA it started with.
  * @typedef {object} PullRun
  * @property {Gate} gate
- * @property {Notifier} notifier
+ * @property {Tools} tools
  * @property {number} pr
  * @property {string} sha The full head SHA under test.
  * @property {PullRecord} record The record the run started with.
@@ -118,6 +120,12 @@ async function taskLinkStage(run) {
   // A closed pull request leaves the queue at the next intake.
   if (pull === null || pull.state !== 'open') return STOP
   run.author = pull.author
+  // A pull request queued before its author left the team, or from a state of before this rule.
+  const why = await outsiderOf(run.gate, run.tools, run.config, pull)
+  if (why !== null) {
+    await run.act(() => leaveAlone(run.gate, run.tools, pull, why))
+    return STOP
+  }
   const link = await checkTaskLink(github, run.config, pull)
   if (link.ok) {
     run.task = link.issue
@@ -213,7 +221,7 @@ async function gatedStage(run) {
       kind.type === 'migration'
         ? `review the migration in ${files}, apply it by hand outside HackWin${ledger ? ` and record it in ${ledger}` : ''}; the Gate tests and merges the pull request like any other`
         : `review the production config change in ${files} and apply it by hand outside HackWin${ledger ? `, then record it in ${ledger}` : ''}; the Gate tests and merges the pull request like any other`
-    await raiseAttention(gate, run.notifier, { type: kind.type, pr, todo })
+    await raiseAttention(gate, run.tools.notifier, { type: kind.type, pr, todo })
   }
 }
 

@@ -123,16 +123,16 @@ export async function createScene({ configure, issues = [], files: mainFiles = {
     },
 
     /**
-     * Open a pull request into main as its author, as `ship` does.
-     * @param {{ branch: string, author: string, task?: number, body?: string, draft?: boolean }} pull
+     * Open a pull request as its author, as `ship` does; into main by default.
+     * @param {{ branch: string, author: string, task?: number, body?: string, draft?: boolean, base?: string }} pull
      * @returns {Promise<number>}
      */
-    async openPull({ branch, author: login, task: issue, body, draft = false }) {
+    async openPull({ branch, author: login, task: issue, body, draft = false, base = 'main' }) {
       const github = createGitHub({ executor: fake.as(login) })
       const created = await github.createPullRequest({
         title: `Work on ${branch}`,
         head: branch,
-        base: 'main',
+        base,
         body: body ?? `Closes #${issue}`,
       })
       if (draft) /** @type {any} */ (fake.find(created.number)).pull.draft = true

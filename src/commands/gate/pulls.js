@@ -4,11 +4,18 @@
 // action (G21), writes the digest line and leaves the queue.
 //
 // The Gate fetches a pull request's head by its full SHA into `refs/hackwin/pr/<PR>`, a ref of
-// its own outside the branches and remote branches of the Lead's clone. GitHub served such a fetch
-// of a commit that is not the tip of a branch (Bartek201301/HackWin, 2026-10-15), so the fetch
-// gets exactly the head SHA the Gate recorded, also when the author pushed again since.
+// its own outside the branches and remote branches of the Lead's clone, so the fetch gets exactly
+// the head SHA the Gate recorded, also when the author pushed again since. What was observed:
+// GitHub served a fetch by SHA of 98e8488 on Bartek201301/HackWin (2026-10-15), a commit that is
+// reachable from main and is not the tip of a branch. A head that only the pull request's own ref
+// reaches was not tried.
+//
+// The Gate tests only the pull requests of the team (the Lead's review of #64): one whose head
+// lies in another repository, such as a fork, or whose author is not a member in hackwin.yml
+// never goes through the stages. It gets an attention item that names it, and the Gate leaves it
+// alone.
 
-import { loadConfig } from '../../core/config/index.js'
+import { loadConfig, rolesOf } from '../../core/config/index.js'
 import { scanDiff } from '../../core/secrets/index.js'
 import { parseTaskLink } from '../../core/tasks/index.js'
 import { raiseAttention } from './attention.js'
@@ -22,6 +29,7 @@ import { appendDigestLine, formatDigestLine, hoursAndMinutes } from './digest.js
 /** @import { DigestEntry } from './digest.js' */
 /** @import { Gate } from './gate.js' */
 /** @import { Notifier } from './notify.js' */
+/** @import { Tools } from './pipeline.js' */
 /** @import { GateState, PullRecord } from './state.js' */
 
 /** The labels of a Gate run on a pull request (8.2); the Gate is their only writer. */
@@ -34,6 +42,9 @@ export const GATE_LABELS = Object.freeze([
   'needs-owner',
   'scope-violation',
 ])
+
+/** The labels of a run under way, which a pull request loses when it leaves the queue unended. */
+export const UNDER_WAY = Object.freeze(['gate:queued', 'gate:testing', 'gate:waiting-ci'])
 
 /** Where a `take` command of a next action runs (CM4). */
 export const IN_MAIN_CHECKOUT = 'in your main checkout of the repository'
@@ -277,4 +288,70 @@ export async function endFailed(gate, notifier, { pr, record, author, main, star
 /** @param {unknown} error */
 export function messageOf(error) {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * `owner/name` of the repository, in lower case, asked once per Gate.
+ * @param {Gate} gate
+ * @param {Tools} tools
+ * @returns {Promise<string>}
+ */
+export function thisRepository(gate, tools) {
+  tools.repository ??= gate.ctx.github.repository().then(
+    (repository) => repository.nameWithOwner.toLowerCase(),
+    (error) => {
+      tools.repository = null
+      throw error
+    },
+  )
+  return tools.repository
+}
+
+/**
+ * Why the Gate does not test a pull request, or null for one of the team: its head lies in
+ * another repository, such as a fork, or its author is not a member in hackwin.yml.
+ * @param {Gate} gate
+ * @param {Tools} tools
+ * @param {Config} config The configuration on main.
+ * @param {PullRequest} pull
+ * @returns {Promise<string | null>}
+ */
+export async function outsiderOf(gate, tools, config, pull) {
+  const repository = await thisRepository(gate, tools)
+  if (pull.headRepo?.toLowerCase() !== repository) {
+    const where = pull.headRepo === null ? 'a repository that no longer exists' : pull.headRepo
+    return `its head lies in ${where}, not in this repository, and the Gate tests only branches of this repository; close it, or move the change to a task branch of this repository`
+  }
+  const author = pull.author ?? 'an unknown account'
+  if (rolesOf(config, pull.author ?? '').length === 0) {
+    return `its author ${author} is not a member of the team in hackwin.yml, and the Gate tests only the pull requests of members; close it, or add ${author} to hackwin.yml first`
+  }
+  return null
+}
+
+/**
+ * Leave a pull request of no member, or from another repository, alone (the Lead's review of
+ * #64): no stage, label or comment, only an attention item that names it. A run under way for it
+ * ends, and it leaves the queue with the labels of that run; the record of an ended run stays.
+ * The item has the type `scope-violation`, the closest of the five types (G18): it closes when
+ * the pull request is closed, or when a later head SHA of it passes stage 3.
+ * @param {Gate} gate
+ * @param {Tools} tools
+ * @param {PullRequest} pull
+ * @param {string} why From outsiderOf.
+ * @returns {Promise<void>}
+ */
+export async function leaveAlone(gate, tools, pull, why) {
+  const { ctx, state } = gate
+  const pr = pull.number
+  if (state.prs[String(pr)]?.result === null) {
+    await removeGateLabels(ctx.github, pr, pull.labels, UNDER_WAY)
+    leaveQueue(state, pr)
+    delete state.prs[String(pr)]
+  }
+  await raiseAttention(gate, tools.notifier, {
+    type: 'scope-violation',
+    pr,
+    todo: `the Gate does not test #${pr}: ${why}`,
+  })
 }

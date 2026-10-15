@@ -28,6 +28,10 @@ import { STAGES, STOP, stageTitle } from './stages.js'
  * @property {Map<number, string | null>} authors The author of each open pull request, from the
  *   latest intake.
  * @property {Set<string>} waiting `<PR>:<sha>` of the head SHAs that passed every built stage.
+ * @property {Set<string>} scanned `<PR>:<sha>` of the head SHAs into another branch that intake
+ *   scanned without a finding.
+ * @property {Promise<string> | null} repository `owner/name` of this repository in lower case,
+ *   once asked (pulls.js, thisRepository).
  */
 
 /**
@@ -37,7 +41,14 @@ import { STAGES, STOP, stageTitle } from './stages.js'
  */
 export function createPipeline({ notifier = createNotifier() } = {}) {
   /** @type {Tools} */
-  const tools = { notifier, serial: createSerial(), authors: new Map(), waiting: new Set() }
+  const tools = {
+    notifier,
+    serial: createSerial(),
+    authors: new Map(),
+    waiting: new Set(),
+    scanned: new Set(),
+    repository: null,
+  }
   const last = STAGES[STAGES.length - 1]
   return {
     intake: (gate) => intake(gate, tools),
@@ -71,7 +82,7 @@ async function runPull(gate, tools, pr) {
   /** @type {PullRun} */
   const run = {
     gate,
-    notifier: tools.notifier,
+    tools,
     pr,
     sha,
     record,

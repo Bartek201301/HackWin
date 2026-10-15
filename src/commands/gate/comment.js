@@ -5,9 +5,14 @@
 //
 //   <!-- hackwin:gate-comment pr=12 sha=<full sha> stage=scope result=scope-violation -->
 //
-// GitHub does not render an HTML comment, and the API returns the body as written. The marker is
-// the first line of the body, so a reply that quotes a Gate comment carries no marker of its own.
-// `take` finds the Gate's comment with parseGateMarker or latestGateComment.
+// GitHub does not render an HTML comment, and the API returns the body as written. Only the exact
+// marker the Gate writes counts, at the very start of the body: no space, tab, byte order mark or
+// other character before it, the four keys in this order, nothing else up to the end of its line.
+// So a reply that quotes a Gate comment, or a marker in a code block, is no Gate comment.
+//
+// A marker that the Lead types by hand under the Lead's account cannot be told apart from the
+// Gate's (A5). A caller that acts on a Gate comment therefore also compares the marker's SHA with
+// the head SHA it acts on. `take` finds the Gate's comment with latestGateComment.
 
 /** @import { Comment } from '../../core/github/index.js' */
 
@@ -22,9 +27,15 @@ export const MARKER_NAME = 'hackwin:gate-comment'
  * @property {string} result The digest result, for example `scope-violation` (9.6).
  */
 
-const MARKER = /^<!-- hackwin:gate-comment ((?:[a-z]+=\S+ ?)+)-->$/
-const SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/
-const WORD = /^[a-z]+(-[a-z]+)*$/
+const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+const WORD = /^[a-z]+(?:-[a-z]+)*$/
+
+/**
+ * The marker at the start of a body. Every part is a fixed text or a run of one character class
+ * that the next fixed text ends, so the match takes time linear in the body's length.
+ */
+const MARKER =
+  /^<!-- hackwin:gate-comment pr=([1-9]\d{0,9}) sha=([0-9a-f]{40}(?:[0-9a-f]{24})?) stage=([a-z]+(?:-[a-z]+)*) result=([a-z]+(?:-[a-z]+)*) -->(?:\r?\n|$)/
 
 /**
  * The marker line of a Gate comment.
@@ -32,7 +43,9 @@ const WORD = /^[a-z]+(-[a-z]+)*$/
  * @returns {string}
  */
 export function formatGateMarker({ pr, sha, stage, result }) {
-  if (!Number.isInteger(pr) || pr <= 0) throw new TypeError(`not a pull request number: ${pr}`)
+  if (!Number.isInteger(pr) || pr <= 0 || pr > 9_999_999_999) {
+    throw new TypeError(`not a pull request number: ${pr}`)
+  }
   if (!SHA.test(sha)) throw new TypeError(`not a full SHA: ${sha}`)
   for (const value of [stage, result]) {
     if (!WORD.test(value)) throw new TypeError(`not a stage or result word: ${value}`)
@@ -41,37 +54,35 @@ export function formatGateMarker({ pr, sha, stage, result }) {
 }
 
 /**
- * The marker of a comment body, or null when its first line is not the marker of a Gate comment.
+ * The marker of a comment body, or null when the body does not start with the exact marker of a
+ * Gate comment.
  * @param {string | null | undefined} body
  * @returns {GateMarker | null}
  */
 export function parseGateMarker(body) {
-  const first = (body ?? '').replace(/\r\n?/g, '\n').split('\n')[0].trim()
-  const match = MARKER.exec(first)
+  const match = MARKER.exec(body ?? '')
   if (!match) return null
-  /** @type {Record<string, string>} */
-  const fields = {}
-  for (const pair of match[1].trim().split(' ')) {
-    const [key, value] = pair.split('=')
-    if (Object.hasOwn(fields, key)) return null
-    fields[key] = value
-  }
-  const { pr, sha, stage, result } = fields
-  if (!/^[1-9]\d*$/.test(pr ?? '') || !SHA.test(sha ?? '')) return null
-  if (!WORD.test(stage ?? '') || !WORD.test(result ?? '')) return null
+  const [, pr, sha, stage, result] = match
   return { pr: Number(pr), sha, stage, result }
 }
 
 /**
- * The newest Gate comment about this pull request, with its marker, or null.
+ * The newest Gate comment about this pull request, with its marker, or null: a comment of the
+ * Lead's account, under which the Gate acts (A5), whose marker names the pull request. A marker
+ * in a comment of any other account never counts. The Lead's own comments carry no marker, but
+ * one the Lead types by hand counts as the Gate's, so a caller also compares `marker.sha` with
+ * the head SHA it acts on.
  * @param {Comment[]} comments Oldest first, as `listComments` returns them.
- * @param {number} pr
+ * @param {{ pr: number, lead: string }} wanted `lead` is `team.lead` of hackwin.yml.
  * @returns {{ comment: Comment, marker: GateMarker } | null}
  */
-export function latestGateComment(comments, pr) {
+export function latestGateComment(comments, { pr, lead }) {
+  const account = lead.toLowerCase()
   for (let index = comments.length - 1; index >= 0; index -= 1) {
-    const marker = parseGateMarker(comments[index].body)
-    if (marker !== null && marker.pr === pr) return { comment: comments[index], marker }
+    const comment = comments[index]
+    if (comment.author?.toLowerCase() !== account) continue
+    const marker = parseGateMarker(comment.body)
+    if (marker !== null && marker.pr === pr) return { comment, marker }
   }
   return null
 }
