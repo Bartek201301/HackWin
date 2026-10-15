@@ -21,6 +21,14 @@ export const ATTENTION_TYPES = Object.freeze([
   'secret',
 ])
 
+/** The attention types that close when the pull request is merged or closed (9.6). */
+export const CLOSED_WITH_THE_PULL = Object.freeze([
+  'migration',
+  'production-config',
+  'scope-violation',
+  'repeated-failure',
+])
+
 /** The terminal bell (G26), rung when no notification is shown. */
 export const BELL = '\u0007'
 

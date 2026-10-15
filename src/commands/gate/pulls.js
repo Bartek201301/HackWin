@@ -8,7 +8,9 @@
 // the head SHA the Gate recorded, also when the author pushed again since. What was observed:
 // GitHub served a fetch by SHA of 98e8488 on Bartek201301/HackWin (2026-10-15), a commit that is
 // reachable from main and is not the tip of a branch. A head that only the pull request's own ref
-// reaches was not tried.
+// reaches was not tried. Every stage works from the full head SHA recorded for its run, never
+// from this ref: the fetch of a run that intake superseded can move the ref back to an older
+// head (the Lead's review of #64).
 //
 // The Gate tests only the pull requests of the team (the Lead's review of #64): one whose head
 // lies in another repository, such as a fork, or whose author is not a member in hackwin.yml
@@ -16,6 +18,7 @@
 // alone.
 
 import { loadConfig, rolesOf } from '../../core/config/index.js'
+import { RemoteError } from '../../core/runtime/index.js'
 import { scanDiff } from '../../core/secrets/index.js'
 import { parseTaskLink } from '../../core/tasks/index.js'
 import { raiseAttention } from './attention.js'
@@ -30,7 +33,20 @@ import { appendDigestLine, formatDigestLine, hoursAndMinutes } from './digest.js
 /** @import { Gate } from './gate.js' */
 /** @import { Notifier } from './notify.js' */
 /** @import { Tools } from './pipeline.js' */
+/** @import { PullRun } from './stages.js' */
 /** @import { GateState, PullRecord } from './state.js' */
+
+/** A stage's answer that ends the run without a result. */
+export const STOP = Symbol('stop')
+
+/** Stage 9's answer when main moved since the merge test: the run goes back to stage 6 (G20). */
+export const REPEAT = Symbol('repeat from stage 6')
+
+/** The first wait before a failed GitHub or network call is made again; each later wait doubles, up to a poll interval. */
+const FIRST_RETRY_WAIT_MS = 5000
+
+/** How many items a comment lists at most. */
+export const MAX_DETAILS = 50
 
 /** The labels of a Gate run on a pull request (8.2); the Gate is their only writer. */
 export const GATE_LABELS = Object.freeze([
@@ -52,10 +68,12 @@ export const IN_MAIN_CHECKOUT = 'in your main checkout of the repository'
 /**
  * Why a run failed, as a stage returns it.
  * @typedef {object} Failure
- * @property {'failed' | 'needs-owner' | 'scope-violation'} result The digest result (9.6).
+ * @property {'failed' | 'needs-owner' | 'scope-violation' | 'flaky'} result The digest result
+ *   (9.6).
  * @property {string[]} labels The labels beside `gate:failed`.
  * @property {string} reason
  * @property {string[]} details One list item each in the comment.
+ * @property {import('./comment.js').CommentLog} [log] The command and the last lines of its log.
  * @property {string} next The next action.
  * @property {string} note The note of the digest line.
  * @property {{ type: string, todo: string }} [attention]
@@ -73,6 +91,19 @@ export const IN_MAIN_CHECKOUT = 'in your main checkout of the repository'
  */
 export function pullRef(pr) {
   return `refs/hackwin/pr/${pr}`
+}
+
+/**
+ * Fetch the default branch into its remote-tracking ref. Throws a RemoteError when the fetch
+ * fails.
+ * @param {Gate} gate
+ * @returns {Promise<string>} The full SHA of main.
+ */
+export async function fetchMain(gate) {
+  const branch = gate.config.hackwin.project.default_branch
+  const tracking = `refs/remotes/origin/${branch}`
+  await gate.git.fetch({ remote: 'origin', refspecs: [`+refs/heads/${branch}:${tracking}`] })
+  return gate.git.revParse(tracking)
 }
 
 /**
@@ -215,6 +246,71 @@ export function listed(items, max = 5) {
 }
 
 /**
+ * `1 file`, `2 files`.
+ * @param {number} n
+ * @param {string} one
+ * @param {string} many
+ * @returns {string}
+ */
+export function count(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/**
+ * The first MAX_DETAILS items, then how many more.
+ * @param {string[]} items
+ * @returns {string[]}
+ */
+export function capped(items) {
+  if (items.length <= MAX_DETAILS) return items
+  return [...items.slice(0, MAX_DETAILS), `and ${items.length - MAX_DETAILS} more`]
+}
+
+/**
+ * Do the work of a stage that calls GitHub or the network, and do it again with increasing waits
+ * while it fails with a RemoteError (7.5, failure behavior), until it succeeds, the Lead types
+ * `quit` or intake takes the pull request away. Any other error ends the run.
+ * @template T
+ * @param {PullRun} run
+ * @param {string} title The stage as the line names it: `stage 1, fetch`.
+ * @param {() => Promise<T>} work
+ * @returns {Promise<T | typeof STOP>}
+ */
+export async function retrying(run, title, work) {
+  const { gate, pr } = run
+  const longest = gate.config.hackwin.gate.poll_seconds * 1000
+  for (let wait = FIRST_RETRY_WAIT_MS; ; wait = Math.min(wait * 2, longest)) {
+    try {
+      return await work()
+    } catch (error) {
+      if (!(error instanceof RemoteError)) throw error
+      gate.line(
+        `#${pr} ${title}: failed, the Gate tries again in ${Math.round(wait / 1000)} s: ${messageOf(error)}`,
+      )
+      await pause(run, wait)
+      if (gate.stopping || run.superseded()) return STOP
+    }
+  }
+}
+
+/**
+ * Wait inside a run: until the time has passed, the Lead typed `quit`, or an intake took the
+ * pull request away from the run, whichever comes first.
+ * @param {PullRun} run
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+export async function pause(run, ms) {
+  const { gate } = run
+  const timer = gate.ctx.clock.sleep(ms).then(() => 'time')
+  const stopped = gate.stopped.then(() => 'stop')
+  for (;;) {
+    const woke = await Promise.race([timer, stopped, run.tools.nextIntake().then(() => 'intake')])
+    if (woke !== 'intake' || run.superseded()) return
+  }
+}
+
+/**
  * A duration for the digest line: `42s`, `3m05s` or `1h02m`.
  * @param {number} ms
  * @returns {string}
@@ -263,6 +359,7 @@ export async function endFailed(gate, notifier, { pr, record, author, main, star
       title: failure.title,
       reason: failure.reason,
       details: failure.details,
+      log: failure.log,
       next: failure.next,
       main,
     }),

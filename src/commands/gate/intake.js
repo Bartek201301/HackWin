@@ -16,7 +16,7 @@
 // writes for one pull request run one after another (Tools.serial).
 
 import { setTaskStatus } from '../../core/tasks/index.js'
-import { closeAttention } from './attention.js'
+import { CLOSED_WITH_THE_PULL, closeAttention } from './attention.js'
 import {
   UNDER_WAY,
   currentConfig,
@@ -40,14 +40,6 @@ import { addsSecret, pullRecord } from './state.js'
 /** @import { Gate } from './gate.js' */
 /** @import { Tools } from './pipeline.js' */
 /** @import { PullRecord } from './state.js' */
-
-/** The attention types that close when the pull request is merged or closed (9.6). */
-const CLOSED_WITH_THE_PULL = Object.freeze([
-  'migration',
-  'production-config',
-  'scope-violation',
-  'repeated-failure',
-])
 
 /**
  * One intake.
@@ -157,6 +149,23 @@ async function closeItemsOfClosed(gate, tools, open) {
 }
 
 /**
+ * A new head SHA that a run found, as stage 10 does when the head moved after the merge test: it
+ * is admitted as at intake, after the work for the pull request that started earlier.
+ * @param {Gate} gate
+ * @param {Tools} tools
+ * @param {PullRequest} pull
+ * @returns {Promise<void>}
+ */
+export async function admitHead(gate, tools, pull) {
+  const branch = gate.config.hackwin.project.default_branch
+  const config = await currentConfig(gate, `refs/remotes/origin/${branch}`)
+  await tools.serial(pull.number, async () => {
+    if (gate.state.prs[String(pull.number)]?.head_sha === pull.headSha) return
+    await admit(gate, tools, config, pull)
+  })
+}
+
+/**
  * A new head SHA: a pull request of no member or from another repository is left alone.
  * Otherwise the labels of the earlier run go, the head is fetched and scanned, and the pull
  * request fails, or joins the back of the queue when it targets the default branch.
@@ -229,7 +238,8 @@ async function admit(gate, tools, config, pull) {
  */
 async function leaveClosed(gate, pr, pulls) {
   const { ctx, state } = gate
-  if (!state.prs[String(pr)]) return
+  // The Gate's own merge: its run ends the record (stage 11).
+  if (!state.prs[String(pr)] || state.prs[String(pr)].result === 'merged') return
   const pull = await ctx.github.getPullRequest(pr)
   // The list was older than this answer.
   if (pull !== null && pull.state === 'open') return
@@ -305,6 +315,8 @@ async function requeue(gate, pr, pull) {
   await setGateLabels(ctx.github, pr, ['gate:queued'])
   record.stage = 'intake'
   record.result = null
+  // The Lead's retry tries the head again, CI reruns included (G14).
+  record.ci_reruns = 0
   joinQueue(state, pr)
   gate.line(`retry #${pr}: the head ${record.head_sha} joined the back of the queue`)
 }

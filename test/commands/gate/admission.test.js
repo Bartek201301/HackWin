@@ -82,7 +82,7 @@ describe('1.6c/outsiders: the Gate tests only the pull requests of the team', ()
     })
     const member = await s.openPull({ branch: 'task/114-counter-own', author: BUILDER1, task: 114 })
     await s.start()
-    await s.until(() => s.out.includes(`#${member} passed stages 1 to 6`), "the member's run")
+    await s.until(() => s.out.includes(`#${member} passed stages 1 to 7`), "the member's run")
 
     expect(s.out).toContain(
       `ATTENTION scope-violation #${fork}: the Gate does not test #${fork}: its head lies in ${FORK}, not in this repository, and the Gate tests only branches of this repository; close it, or move the change to a task branch of this repository`,
@@ -202,7 +202,7 @@ describe('1.6c/intake: every open head SHA is scanned, whatever its base', () =>
 
     await s.as(BUILDER1).updatePullRequest(clean, { base: 'main' })
     await s.poll()
-    await s.until(() => s.out.includes(`#${clean} passed stages 1 to 6`), 'the retargeted run')
+    await s.until(() => s.out.includes(`#${clean} passed stages 1 to 7`), 'the retargeted run')
     await s.quit()
     expect(s.state().queue).toEqual([clean])
     expect(s.comments(clean)).toEqual([])
