@@ -2,9 +2,12 @@
 // request that the Gate handed back with the Gate's comment, and the state of the branch that a
 // continue prompt and a fix prompt describe.
 
+import { latestGateComment } from '../gate/comment.js'
+
 /** @import { Git } from '../../core/git/index.js' */
 /** @import { Comment, GitHub, PullRequest } from '../../core/github/index.js' */
 /** @import { Task } from '../../core/tasks/index.js' */
+/** @import { GateMarker } from '../gate/comment.js' */
 /** @import { CheckScope } from './checks.js' */
 /** @import { BranchUpdate, RefUpdate } from './worktree.js' */
 
@@ -66,18 +69,45 @@ export async function modeOf(task, { board, identity }) {
 }
 
 /**
- * The Gate's comment on a pull request it handed back: the newest comment of the Lead's account,
- * under which the Gate acts (5.4, A5). A failed Gate run leaves exactly one comment (G21), so the
- * newest one is that of the last failed run.
+ * The Gate's comment on the head of a pull request it handed back.
+ * @typedef {object} GateReport
+ * @property {string | null} head The head SHA of the pull request, which the comment must name.
+ * @property {Comment | null} comment Null when the Gate has no comment on that head.
+ * @property {GateMarker | null} marker The marker of the comment: its stage and result.
+ */
+
+/**
+ * The Gate's comment on the current head of a pull request it handed back (G21): the newest Gate
+ * comment of the pull request, found by its marker (`latestGateComment` of the Gate), and only
+ * when the marker names the head SHA. The Gate, the Lead and the Lead's builder sessions all
+ * write as the Lead's account (A5), so a later comment that the Lead writes by hand does not
+ * replace it, and a marker that the Lead types by hand counts only on the head it names.
  * @param {GitHub} github
  * @param {PullRequest} pull
  * @param {string} lead The Lead's login, `team.lead` of hackwin.yml.
- * @returns {Promise<Comment | null>}
+ * @returns {Promise<GateReport>}
  */
 export async function gateComment(github, pull, lead) {
-  const wanted = lead.toLowerCase()
+  const head = pull.headSha || null
   const comments = await github.listComments(pull.number)
-  return comments.findLast((comment) => comment.author?.toLowerCase() === wanted) ?? null
+  const found = latestGateComment(comments, { pr: pull.number, lead })
+  if (found === null || head === null || found.marker.sha !== head) {
+    return { head, comment: null, marker: null }
+  }
+  return { head, comment: found.comment, marker: found.marker }
+}
+
+/**
+ * The earlier work on a reused branch: its commits that the default branch lacks, and whether its
+ * worktree has uncommitted changes or untracked files. Null when it has neither.
+ * @param {Git} git Git in the worktree.
+ * @param {string} mainSha
+ * @returns {Promise<{ commits: number, uncommitted: boolean } | null>}
+ */
+export async function earlierWork(git, mainSha) {
+  const commits = Number(await git.output(['rev-list', '--count', `${mainSha}..HEAD`]))
+  const uncommitted = !(await git.isClean())
+  return commits > 0 || uncommitted ? { commits, uncommitted } : null
 }
 
 /**
