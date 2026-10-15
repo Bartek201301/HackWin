@@ -2,7 +2,7 @@
 // fake GitHub that knows the test accounts, answers `gh version` and the user lookups of step 3,
 // and records every call, so a test can tell that GitHub was left unchanged.
 
-import { lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { Readable } from 'node:stream'
 import { main } from '../../../src/cli/main.js'
@@ -120,8 +120,8 @@ export async function runSetup(fixture, fake, options = {}) {
 }
 
 /**
- * Every file of a checkout outside `.git`, with its content and executable bit, and every
- * directory, so that a test can tell that nothing changed.
+ * Every file of a checkout outside `.git`, with its content and executable bit, every directory
+ * and every symlink with its target, so that a test can tell that nothing changed.
  * @param {string} root
  * @returns {Record<string, string>}
  */
@@ -134,9 +134,11 @@ export function snapshot(root) {
     const file = join(root, path)
     const stats = lstatSync(file)
     const key = relative(root, file)
-    entries[key] = stats.isDirectory()
-      ? 'directory'
-      : `${(stats.mode & 0o111) !== 0 ? 'x' : '-'} ${readFileSync(file, 'utf8')}`
+    entries[key] = stats.isSymbolicLink()
+      ? `link to ${readlinkSync(file)}`
+      : stats.isDirectory()
+        ? 'directory'
+        : `${(stats.mode & 0o111) !== 0 ? 'x' : '-'} ${readFileSync(file, 'utf8')}`
   }
   return entries
 }

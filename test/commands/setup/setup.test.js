@@ -326,7 +326,7 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     expect(writes(fake)).toEqual([])
   })
 
-  test('AC6/files: a failure while writing the files removes the files written so far', async () => {
+  test('AC6/files: a settings file that is not JSON stops setup before it writes anything', async () => {
     const { fixture, fake } = await createSetupFixture({
       files: { [SETTINGS_PATH]: '{ "permissions": ' },
     })

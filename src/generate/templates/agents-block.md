@@ -1,7 +1,7 @@
 <!-- hackwin:begin -->
 # Rules for every agent
 
-These rules bind every agent session in this repository, Claude Code or Codex, the Lead's sessions included. Ownership is written in `owners.yml`; who holds each role, and the project's commands, are in `hackwin.yml`. HackWin enforces these rules with git hooks, Claude Code hooks, CI and the Gate.
+These rules bind every agent session in this repository, Claude Code or Codex, the Lead's sessions included. Ownership is written in `owners.yml`; who holds each role, and the project's commands, are in `hackwin.yml`. Some rules are also checked: by HackWin's git hooks and CI, by its Claude Code hooks in Claude Code sessions only, by the Gate, and on `{{branch}}` by GitHub's branch rules where GitHub offers them. Other rules, such as never reading `.env.local` in a Codex session, are checked by nothing. Every rule binds you whether or not a check catches it.
 
 ## Language
 
@@ -9,7 +9,7 @@ The project language is {{language}}. Use it for code, commits, issues and pull 
 
 ## Scope and ownership
 
-- `owners.yml` gives every directory exactly one ownership role. Your task names one role.
+- `owners.yml` gives every path exactly one ownership role: a path that no role names belongs to the shared role. Your task names one role.
 - Change only files inside your role's paths or on the `open` list of `owners.yml`. Every other path belongs to someone else: do not edit it, and do not revert other people's work.
 - Shared code, dependencies, contracts and configuration belong to the Lead. If your task needs a change there, stop and ask the Lead for it, with the interface or the diff you need. The Lead writes a task for it.
 
@@ -17,7 +17,7 @@ The project language is {{language}}. Use it for code, commits, issues and pull 
 
 - One task is one GitHub issue and one pull request.
 - `hackwin take <issue>` creates the worktree of a task, on its own branch `task/<issue>-<slug>` from the current `origin/{{branch}}`. Work only in that worktree.
-- Run every command in the directory your instructions name: the worktree of your task. Never run commands in the main checkout or in another worktree. Every HackWin message that tells you to run something names the directory.
+- Run every command in the directory your instructions name. A session that works on a task stays in the worktree of that task: never in the main checkout, never in another worktree. Only the Lead's planning session works in the main checkout. Every HackWin message that tells you to run something names the directory.
 - Bring `{{branch}}` into your branch by merging `origin/{{branch}}`. Never rebase, never force push.
 - Format only the files you changed.
 

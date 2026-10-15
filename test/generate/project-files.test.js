@@ -128,7 +128,62 @@ describe('1.4d/files: the files of the template', () => {
       "While the update restriction on `trunk` is active, GitHub shows every pull request as `BLOCKED`, the Lead's included. This is expected: the Gate merges it.",
     )
     expect(block).not.toMatch(/\{\{|`main`|origin\/main/)
+    // It claims only the checks that exist, and binds the agent beyond them.
+    expect(block).not.toContain('HackWin enforces these rules')
+    expect(block).toContain("on `trunk` by GitHub's branch rules where GitHub offers them")
+    expect(block).toContain('never reading `.env.local` in a Codex session, are checked by nothing')
+    expect(block).toContain('Every rule binds you whether or not a check catches it.')
+    // Every path has one role (A16); the Lead's planning session works in the main checkout (3.2).
+    expect(block).toContain(
+      '`owners.yml` gives every path exactly one ownership role: a path that no role names belongs to the shared role.',
+    )
+    expect(block).toContain("Only the Lead's planning session works in the main checkout.")
     expect(languageName('not a language')).toBe('not a language')
+  })
+})
+
+describe('1.4d/links: symlinks among the team files', () => {
+  /** @param {string} target */
+  const link = (path, target, resolved = target) => ({ path, target, resolved })
+
+  test('1.4d/links: a CLAUDE.md that links to AGENTS.md is kept', () => {
+    const changes = planProjectFiles(
+      (path) => (path === 'CLAUDE.md' ? TEMPLATE['AGENTS.md'] : null),
+      INPUT,
+      (path) => (path === 'CLAUDE.md' ? link('CLAUDE.md', 'AGENTS.md') : null),
+    )
+    expect(changes.find((change) => change.path === 'CLAUDE.md')).toEqual({
+      path: 'CLAUDE.md',
+      action: 'keep',
+    })
+  })
+
+  test('1.4d/links: a file that would be written through another link is refused', () => {
+    const linkOf = (/** @type {string} */ path) =>
+      path === 'CLAUDE.md' ? link('CLAUDE.md', 'docs/ai.md') : null
+    expect(() => planProjectFiles(() => null, INPUT, linkOf)).toThrow(
+      'hackwin writes CLAUDE.md, but CLAUDE.md is a symbolic link to docs/ai.md',
+    )
+    const underDocs = (/** @type {string} */ path) =>
+      path.startsWith('docs/') ? link('docs', '../shared-docs', null) : null
+    expect(() => planProjectFiles(() => null, INPUT, underDocs)).toThrow(
+      'docs/hackwin/before-the-event.md lies under docs, which is a symbolic link to ../shared-docs',
+    )
+  })
+
+  test('1.4d/links: a kept file may be a link', () => {
+    const linkOf = (/** @type {string} */ path) =>
+      path === '.agents/skills/research/SKILL.md'
+        ? link(
+            path,
+            '../../../.claude/skills/research/SKILL.md',
+            '.claude/skills/research/SKILL.md',
+          )
+        : null
+    const changes = planProjectFiles((path) => TEMPLATE[path] ?? null, INPUT, linkOf)
+    expect(
+      changes.find((change) => change.path === '.agents/skills/research/SKILL.md')?.action,
+    ).toBe('keep')
   })
 })
 

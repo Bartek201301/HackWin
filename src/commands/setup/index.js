@@ -115,7 +115,8 @@ async function setUp(ctx, questions) {
   })
   const hackwinText = renderHackwinConfig(hackwin)
   const ownersText = renderOwners(ownership.owners)
-  validateConfig(parseHackwinConfig(hackwinText), parseOwners(ownersText))
+  const checked = parseHackwinConfig(hackwinText)
+  validateConfig(checked, parseOwners(ownersText))
 
   const result = await bootstrap(ctx, {
     branch,
@@ -124,6 +125,7 @@ async function setUp(ctx, questions) {
     language: project.language,
     hackwin: hackwinText,
     owners: (await ownersUnchanged(ctx.repoRoot, ownership.owners)) ? null : ownersText,
+    secretPatterns: checked.gate.secret_patterns,
   })
   for (const notice of result.notices) ctx.out.warn(notice)
 

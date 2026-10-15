@@ -9,6 +9,9 @@
 
 import { readFileSync } from 'node:fs'
 import { HASH_MARKERS, HTML_MARKERS, blockOf, withBlock } from './blocks.js'
+import { linkError } from './links.js'
+
+/** @import { Link } from './links.js' */
 
 /**
  * What the files are rendered from.
@@ -30,7 +33,8 @@ import { HASH_MARKERS, HTML_MARKERS, blockOf, withBlock } from './blocks.js'
 /**
  * @typedef {object} ProjectFileSpec
  * @property {string} path
- * @property {(existing: string | null, input: ProjectInput) => ProjectFileChange} plan
+ * @property {(existing: string | null, input: ProjectInput, link: Link | null) => ProjectFileChange} plan
+ *   `link` is the symlink on the way to the file, or null.
  */
 
 /**
@@ -121,6 +125,25 @@ function wholeTemplate(name, markers) {
   return () => ({ block: blockOf(whole, markers), whole })
 }
 
+/**
+ * `CLAUDE.md`, which imports `AGENTS.md`. A `CLAUDE.md` that is a symlink to `AGENTS.md` gives
+ * Claude Code the same rules and stays as it is.
+ * @returns {ProjectFileSpec}
+ */
+function claudeFile() {
+  const spec = blockFile('CLAUDE.md', HTML_MARKERS, () => {
+    const block = [HTML_MARKERS.begin, '@AGENTS.md', HTML_MARKERS.end].join('\n')
+    return { block, whole: `${block}\n` }
+  })
+  return {
+    path: spec.path,
+    plan: (existing, input, link) =>
+      link?.path === spec.path && link.resolved === 'AGENTS.md'
+        ? { path: spec.path, action: 'keep' }
+        : spec.plan(existing, input, link),
+  }
+}
+
 const RESEARCH_SKILL = template('research-skill.md')
 
 /** The files of this module, in the order `setup` writes them. */
@@ -130,10 +153,7 @@ export const PROJECT_FILES = Object.freeze(
       const block = renderAgentsBlock(input)
       return { block, whole: `${block}\n\n${PROJECT_RULES_LINE}\n` }
     }),
-    blockFile('CLAUDE.md', HTML_MARKERS, () => {
-      const block = [HTML_MARKERS.begin, '@AGENTS.md', HTML_MARKERS.end].join('\n')
-      return { block, whole: `${block}\n` }
-    }),
+    claudeFile(),
     blockFile(
       '.github/pull_request_template.md',
       HTML_MARKERS,
@@ -182,13 +202,20 @@ export const PROJECT_FILES = Object.freeze(
 )
 
 /**
- * What `setup` does with each file of PROJECT_FILES in a checkout.
+ * What `setup` does with each file of PROJECT_FILES in a checkout. A file that would be written or
+ * removed through a symlink is refused before anything changes.
  * @param {(path: string) => string | null} read The text of a file of the checkout, or null.
  * @param {ProjectInput} input
+ * @param {(path: string) => Link | null} [linkOf] The symlink on the way to a file, or null.
  * @returns {ProjectFileChange[]}
  */
-export function planProjectFiles(read, input) {
-  return PROJECT_FILES.map((spec) => spec.plan(read(spec.path), input))
+export function planProjectFiles(read, input, linkOf = () => null) {
+  return PROJECT_FILES.map((spec) => {
+    const link = linkOf(spec.path)
+    const change = spec.plan(read(spec.path), input, link)
+    if (change.action !== 'keep' && link !== null) throw linkError(spec.path, link)
+    return change
+  })
 }
 
 /**

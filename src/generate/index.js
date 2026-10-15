@@ -45,6 +45,7 @@ export {
   renderAgentsBlock,
 } from './project-files.js'
 export { CONFIG_FILES, renderHackwinConfig, renderOwners } from './config-files.js'
+export { linkError, linkOn, refuseLinks } from './links.js'
 
 /** @typedef {import('./manifest.js').GenerateInput} GenerateInput */
 /** @typedef {import('./manifest.js').GeneratedFileSpec} GeneratedFileSpec */
@@ -55,3 +56,4 @@ export { CONFIG_FILES, renderHackwinConfig, renderOwners } from './config-files.
 /** @typedef {import('./blocks.js').Markers} Markers */
 /** @typedef {import('./project-files.js').ProjectInput} ProjectInput */
 /** @typedef {import('./project-files.js').ProjectFileChange} ProjectFileChange */
+/** @typedef {import('./links.js').Link} Link */
