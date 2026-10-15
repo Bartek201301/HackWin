@@ -558,7 +558,7 @@ The Gate, the Lead and the Lead's builder sessions all write on GitHub as the Le
 The module's `failureComment` builds the whole body of a failed run's comment, marker first; only the Gate uses it.
 
 - **Whose marker.** A marker is the Gate's only when the comment's author is `team.lead`. A marker that the Lead types by hand under that account cannot be told apart from the Gate's (A5). A caller that acts on a Gate comment therefore also compares `marker.sha` with the head SHA it acts on.
-- **Who reads it.** `take` (#57, lane B) reads the Gate's comment of a pull request with `latestGateComment` and uses it only when `marker.sha` is the pull request's current head SHA (scope change on #57); until #57 is merged, `gateComment` in `src/commands/take/resume.js` takes the newest comment by `team.lead`. The Gate's restart (#24, lane C) recognizes the Gate's own comments by the marker, not by their author, so that no comment is repeated (AC22).
+- **Who reads it.** `take` (#57, lane B) reads the Gate's comment of a pull request with `latestGateComment` and uses it only when `marker.sha` is the pull request's current head SHA (scope change on #57); until #57 is merged, `gateComment` in `src/commands/take/resume.js` takes the newest comment by `team.lead`. The Gate's restart (#24, lane C) recognizes its own comments the same way, so that no comment is repeated (AC22): by the marker in comments by `team.lead` (`latestGateComment`, or `parseGateMarker` with the same author check), never by the author alone or by a marker in another account's comment, and it compares `marker.sha` with the head SHA where it acts on one.
 
 ## 6. Decisions of plan section 9
 
