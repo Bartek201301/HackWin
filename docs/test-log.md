@@ -17,6 +17,31 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.6f, status (PR #73, issue #25)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/25-status`, created by the integrator from `15d3b88` after the merge of #69; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `f9ac273`, on `15d3b88`; PR #73 opened at 06:22:20 UTC, and CI passed. A merge of `origin/main` at `2a9d7e1` (`f3e10ad`) brought the runner's `unreachable` hook of #71 (PR #72).
+  - The Lead's review round brought `229ed9a`:
+    - every string from GitHub is cleaned before it is printed, and in `--json`;
+    - only issues written by team members count as tasks, and tasks labeled `needs-lead` are left out of "next" (a decision of the Lead as reviewer, recorded for the PRD; #74 makes the rule shared);
+    - true wording for a closed or unreadable status issue;
+    - `BLOCKED` is expected with `update_restricted` in the states `full`, `soft` and `full-restricted`.
+  - `lead-55` sent `merge #73` with the head SHA by SendMessage. Its review:
+    - AC31 (with AC31/status), AC44, AC60 and AC61 are asserted, plus 1.6f/terminal, 1.6f/members, 1.6f/states and 1.6f/blocked-notice.
+    - `status` makes only GET calls and writes only `sessions/status.json`.
+    - The path for an unreachable GitHub works end to end through #72.
+    - It probed `cleanText` at the head: ESC, BEL, OSC 8, C1 and bidi controls come out as a visible `\uXXXX`, and a line break becomes a space.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 11 files inside issue #25's paths; no secret pattern; no conflict with `2a9d7e1`. Step 6, with the PR merged into `2a9d7e1` and no other vitest process: `npm test` passed 788 of 788, and `npm run test:ac` passed AC31 (3), AC44 (3), AC60 (2) and AC61 (1). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The runner blocked one part: with GitHub unreachable, `prepareContext` failed before the module of `status` loaded. The session asked `lead-55`, which agreed the interface and had the integrator open #71. `AGENTS.md` says "stop and tell the human"; `lead-55` told the session to build the rest. The PR's note that the wiring is pending dates from before the merge of #72; the Lead's review found the path working at the head.
+  - The review found that any account can write a task issue on a public repository. That is routed to #74 (the shared rule), #75 (`take`), #76 (`internal ci`), and scope changes on #24 (the Gate) and #27 (a wave-3 scenario). A later lane C task switches the member filter of `status` to the helper of #74.
+  - The fake GitHub has no milestones; the session registered `GET .../issues/<N>` in its own test helper.
+  - For the PRD revision: `status.json` keeps the heartbeat time of the status issue, while the data table says the time of the call; a wave has two sources (milestone and block); pull requests into another branch are not listed.
+  - The session's `npm test` took 172 s.
+- Measured: PR open 23 min 40 s (06:22:20 to 06:46:00 UTC), including the Lead's review and one round of fixes; 3 commits (one a merge of `origin/main`), 2 PR runs (85 s on `f9ac273`, 97 s on `229ed9a`), 0 conflicts; local merge test `npm test` 181.40 s; the run on main after the merge 104 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/73; head `229ed9a`; merge commit `6b6ba40`; runs `38692010329` and `38693707880` (PR) and `38694400000` (main).
+
 ### 2026-10-15 · Phase 1 · Shared follow-up 3: the runner's unreachable hook, contracts 5.6 and 5.7 (PR #72, issue #71)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/71-shared-follow-up-3`, created by the integrator from `15d3b88` after the merge of #69; `lead-55` opened the session and added to its first message that 5.7 lists every stage and result a Gate comment can carry. The integrator's planning session for the merge.
