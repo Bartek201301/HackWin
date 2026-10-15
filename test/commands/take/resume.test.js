@@ -257,9 +257,9 @@ describe("AC52: take <N> on the caller's own in-progress task reopens the worktr
           comments: [
             {
               body: gateFailure(elsewhere, {
-                stage: 'merge-test',
-                result: 'failed',
-                reason: '`npm run check` failed.',
+                stage: 'conflicts',
+                result: 'needs-owner',
+                reason: 'the head conflicts with main in 1 file.',
               }),
               author: LEAD,
             },
@@ -299,9 +299,9 @@ describe("AC52: take <N> on the caller's own in-progress task reopens the worktr
       "## 8. The Gate's comment",
       `The Gate handed pull request #20 (https://github.com/${fake.state.repo}/pull/20) back: it is labeled \`gate:failed\`, \`needs-owner\`.`,
       `The Gate's comment on the head \`${elsewhere}\` of pull request #20, `,
-      'The run failed at the stage `merge-test` with the result `failed`:',
-      '> **HackWin Gate: failed at stage merge-test.**',
-      '>\n> **Reason:** `npm run check` failed.',
+      'The run failed at the stage `conflicts` with the result `needs-owner`:',
+      '> **HackWin Gate: failed at stage conflicts.**',
+      '>\n> **Reason:** the head conflicts with main in 1 file.',
       '>\n> **Next action:** fix it on the branch and run `hackwin ship`.',
       '`hackwin ship` updates pull request #20.',
       '## 9. The state of the branch',
@@ -696,7 +696,7 @@ describe("1.5f/gate-comment: the fix prompt carries the Gate's comment on the he
           comments: [
             {
               body: gateFailure(earlier, {
-                stage: 'merge-test',
+                stage: 'task-link',
                 result: 'failed',
                 reason: 'the run of an earlier head.',
               }),
@@ -757,9 +757,9 @@ describe("1.5f/gate-comment: the fix prompt carries the Gate's comment on the he
           comments: [
             {
               body: gateFailure(tested, {
-                stage: 'merge-test',
+                stage: 'secrets',
                 result: 'failed',
-                reason: '`npm run check` failed.',
+                reason: 'the head adds 1 line that matches a secret pattern.',
               }),
               author: LEAD,
             },
@@ -777,7 +777,7 @@ describe("1.5f/gate-comment: the fix prompt carries the Gate's comment on the he
       `The Gate has no comment on the head \`${head}\` of pull request #20. Ask the Lead what the Gate reported before you change anything.`,
       '## 9. The state of the branch',
     ])
-    expect(prompt).not.toContain('npm run check')
+    expect(prompt).not.toContain('secret pattern')
     fixture.cleanup()
   })
 })
