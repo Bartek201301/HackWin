@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseGateMarker } from '../../../src/commands/gate/comment.js'
+import {
+  MAX_COMMENT_LENGTH,
+  failureComment,
+  parseGateMarker,
+} from '../../../src/commands/gate/comment.js'
 import { parseDigestLine } from '../../../src/commands/gate/digest.js'
+import { isOutage } from '../../../src/commands/gate/pulls.js'
+import { PreconditionError, RemoteError } from '../../../src/core/runtime/index.js'
 import { httpError, rawResult } from '../../harness/index.js'
 import { isPending, readJson } from './helpers.js'
 import { BUILDER1, STATUS_MS, createScene, task } from './scene.js'
@@ -302,5 +308,171 @@ describe('1.6e/heartbeat-gaps: a heartbeat later than gate.heartbeat_stale_secon
       { from: last, to: new Date(Date.parse(last) + 600_000).toISOString() },
     ])
     expect(s.out).toContain(`heartbeat gap: no heartbeat from ${last} to `)
+  })
+})
+
+describe('1.6e/refusals: an outage is waited out, a refusal ends the run, and every end is visible', () => {
+  test('which errors are an outage', () => {
+    const remote = (/** @type {number | undefined} */ status, message = 'GitHub call failed') =>
+      new RemoteError(message, { status, tail: [] })
+    expect(isOutage(remote(undefined))).toBe(true)
+    expect(isOutage(remote(502))).toBe(true)
+    expect(isOutage(remote(429))).toBe(true)
+    expect(isOutage(remote(401))).toBe(true)
+    expect(isOutage(remote(403, 'GitHub call failed: HTTP 403: API rate limit exceeded'))).toBe(
+      true,
+    )
+    expect(isOutage(remote(403, 'GitHub call failed: HTTP 403: Resource not accessible'))).toBe(
+      false,
+    )
+    expect(isOutage(remote(404))).toBe(false)
+    expect(isOutage(remote(422))).toBe(false)
+    const login = new PreconditionError('gh is not logged in to GitHub', {
+      resolve: { command: 'gh auth login', dir: 'any directory' },
+    })
+    expect(isOutage(login)).toBe(true)
+    expect(isOutage(new PreconditionError('the directory /x does not exist'))).toBe(false)
+    expect(isOutage(new SyntaxError('Unexpected end of JSON input'))).toBe(false)
+  })
+
+  test(
+    'a refusal of GitHub at a stage fails the run with gate-error and an attention item, and the next one merges',
+    async () => {
+      const s = await scene({ issues: [task(170, 'counter'), task(172, 'todos')] })
+      const refused = await shipped(s, {
+        issue: 170,
+        files: { 'src/features/counter/x.js': 'export const x = 1\n' },
+      })
+      const next = await shipped(s, {
+        issue: 172,
+        role: 'todos',
+        files: { 'src/features/todos/y.js': 'export const y = 1\n' },
+      })
+      const remove = s.fake.on('GET repos/{owner}/{repo}/pulls/:number', () => {
+        remove()
+        throw httpError(422, 'Validation Failed')
+      })
+      await s.start()
+      await s.ended(refused.pr, 'failed')
+      await s.ended(next.pr, 'merged')
+      await s.quit()
+      const [comment] = s.comments(refused.pr)
+      expect(comment.body).toContain(
+        'GitHub refused a call with HTTP 422, which waiting does not change, and stopped the run at this stage (`gate-error`)',
+      )
+      expect(s.out).toContain(
+        `ATTENTION repeated-failure #${refused.pr}: stage 2, task link of #${refused.pr} failed with gate-error (`,
+      )
+      expect(s.out).not.toContain('runs the stage again')
+      expect(s.state().attention).toEqual([
+        expect.objectContaining({ pr: refused.pr, stage: 'task-link', resolved_at: null }),
+      ])
+      expect(parseDigestLine(s.digest()[0])?.note).toMatch(/^gate-error: /)
+    },
+    SLOW,
+  )
+
+  test(
+    'an end that GitHub refuses still leaves the queue, with the label, a digest line and an attention item',
+    async () => {
+      const s = await scene({ issues: [task(174, 'todos'), task(176, 'counter')] })
+      // Not a task branch: stage 2 fails, and GitHub refuses the comment.
+      await s.push('feature/loose', {
+        files: { 'src/features/counter/l.js': 'export const l = 1\n' },
+      })
+      const loose = await s.openPull({ branch: 'feature/loose', author: BUILDER1, task: 176 })
+      const next = await shipped(s, {
+        issue: 174,
+        role: 'todos',
+        files: { 'src/features/todos/n.js': 'export const n = 1\n' },
+      })
+      s.fake.on('POST repos/{owner}/{repo}/issues/:number/comments', () => {
+        throw httpError(422, 'Validation Failed')
+      })
+      await s.start()
+      await s.ended(next.pr, 'merged')
+      await s.until(() => s.state().prs[String(loose)]?.result === 'failed', 'the end of the run')
+      await s.quit()
+      expect(s.comments(loose)).toEqual([])
+      expect(s.labels(loose)).toContain('gate:failed')
+      expect(s.labels(loose)).not.toContain('gate:testing')
+      expect(s.out).toContain(
+        `#${loose}: the run stopped on an error at task-link and left the queue without a comment: `,
+      )
+      expect(s.out).toContain(
+        `ATTENTION repeated-failure #${loose}: the run of #${loose} stopped on an error at task-link and could not end through GitHub (`,
+      )
+      const line = s
+        .digest()
+        .map(parseDigestLine)
+        .find((entry) => entry?.pr === loose)
+      expect(line).toMatchObject({ result: 'failed', stage: 'task-link' })
+      expect(line?.note).toMatch(/^abandoned: /)
+      expect(s.state().queue).toEqual([])
+    },
+    SLOW,
+  )
+
+  test(
+    'tries that go on for ten minutes raise one attention item, which closes when the stage passes',
+    async () => {
+      const s = await scene({ issues: [task(178, 'counter')] })
+      const pull = await shipped(s, {
+        issue: 178,
+        files: { 'src/features/counter/t.js': 'export const t = 1\n' },
+      })
+      const remove = s.fake.on('GET repos/{owner}/{repo}/pulls/:number', () => {
+        throw httpError(502, 'Server Error')
+      })
+      await s.start()
+      await s.advanceUntil(
+        () =>
+          s.out.includes(
+            `ATTENTION repeated-failure #${pull.pr}: GitHub or the network has failed`,
+          ),
+        'the attention item',
+      )
+      // The line comes before the write of the state file.
+      await s.until(() => s.state().attention.length > 0, 'the item in the state file')
+      expect(s.state().attention).toEqual([
+        expect.objectContaining({ pr: pull.pr, stage: 'task-link', resolved_at: null }),
+      ])
+      remove()
+      await s.advanceUntil(() => s.digest().length > 0, 'the end of the run')
+      await s.ended(pull.pr, 'merged')
+      await s.quit()
+      expect(
+        s.out
+          .split('\n')
+          .filter((line) => line.startsWith(`ATTENTION repeated-failure #${pull.pr}:`)),
+      ).toHaveLength(1)
+      expect(s.out).toContain(
+        `#${pull.pr}: the repeated-failure attention item is closed: #${pull.pr} passes stage 2, task link with head ${pull.head}`,
+      )
+    },
+    SLOW,
+  )
+
+  test('a comment stays within the length GitHub takes, whatever the log and the details hold', () => {
+    const sha = 'c'.repeat(40)
+    const body = failureComment({
+      marker: { pr: 7, sha, stage: 'merge-test', result: 'failed' },
+      title: 'stage 7, merge test',
+      reason: 'the check failed',
+      details: Array.from({ length: 200 }, (_, index) => `detail ${index} ${'d'.repeat(5_000)}`),
+      log: {
+        command: 'npm test',
+        outcome: 'exit 1',
+        tail: Array.from({ length: 20 }, (_, index) => `line ${index} ${'x'.repeat(100_000)}`),
+        file: '.git/hackwin/gate/logs/pr-7/check.log',
+      },
+      next: 'fix it',
+      main: 'd'.repeat(40),
+    })
+    expect(body.length).toBeLessThanOrEqual(MAX_COMMENT_LENGTH)
+    expect(parseGateMarker(body)).toEqual({ pr: 7, sha, stage: 'merge-test', result: 'failed' })
+    expect(body).toMatch(/^- and \d+ more$/m)
+    expect(body).toContain('**Next action:** fix it')
+    expect(body.split('\n').every((line) => line.length <= 1_200)).toBe(true)
   })
 })

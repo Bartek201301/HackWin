@@ -34,7 +34,7 @@ import {
 /** @import { ChangedFile, Git } from '../../core/git/index.js' */
 /** @import { PullRequest } from '../../core/github/index.js' */
 /** @import { Finding } from '../../core/secrets/index.js' */
-/** @import { TaskLinkReason } from '../../core/tasks/index.js' */
+/** @import { TaskLink, TaskLinkReason } from '../../core/tasks/index.js' */
 /** @import { Gate } from './gate.js' */
 /** @import { Tools } from './pipeline.js' */
 /** @import { Failure, REPEAT } from './pulls.js' */
@@ -124,7 +124,7 @@ async function taskLinkStage(run) {
     run.task = link.issue
     return
   }
-  return taskLinkFailure(link.reason, pull)
+  return taskLinkFailure(link, pull)
 }
 
 /**
@@ -334,21 +334,37 @@ const TASK_LINK = {
 }
 
 /**
- * The failure of stage 2 for each reason of the task link.
- * @param {TaskLinkReason | 'issue-not-open' | 'invalid-task-block'} reason
+ * The failure of stage 2 for each reason of the task link. For `invalid-task-block` the comment
+ * gives the reasons of `checkTaskLink`, which are safe to print (contracts 4.5): an issue that no
+ * member of the team wrote is no task, and the comment names the issue and its author (scope
+ * change on #24, #74).
+ * @param {Exclude<TaskLink, { ok: true }>} link
  * @param {PullRequest} pull
  * @returns {Failure}
  */
-function taskLinkFailure(reason, pull) {
+function taskLinkFailure(link, pull) {
+  const { reason } = link
   const branchTask = /^task\/(\d+)/.exec(pull.headRef)?.[1]
   const named = /^Closes #(\d+)\s*$/m.exec(pull.body ?? '')?.[1]
   const task = reason === 'issue-not-open' || reason === 'invalid-task-block' ? named : branchTask
+  if ('member' in link && !link.member) {
+    const author = link.author ?? 'an unknown account'
+    return {
+      result: 'failed',
+      labels: [],
+      reason: `the issue #${task} that the pull request names is no task: no member of the team wrote it (\`${reason}\`):`,
+      details: capped(link.errors),
+      next: `the author asks the Lead for a task, an issue that the Lead or a member of the team writes, and edits the body to hold exactly one line \`Closes #<task>\` that names it; then the Lead types \`retry ${pull.number}\` in the Gate terminal. The issue #${task} of ${author} stays no task.`,
+      note: `task link: #${task} written by ${author}, not a member`,
+    }
+  }
   const [text, next] = TASK_LINK[reason](pull, task ?? '<N>')
+  const errors = 'errors' in link ? link.errors : []
   return {
     result: 'failed',
     labels: [],
-    reason: `${text} (\`${reason}\`)`,
-    details: [],
+    reason: `${text} (\`${reason}\`)${errors.length > 0 ? ':' : ''}`,
+    details: capped(errors),
     next,
     note: `task link: ${reason}`,
   }

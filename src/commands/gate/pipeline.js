@@ -17,34 +17,39 @@
 // run that stopped inside stage 10 first asks GitHub whether its head was merged. No comment is
 // repeated either (pulls.js, endFailed).
 //
-// Failure behavior (7.5): when GitHub or the network fails inside a stage, the stage runs again
-// after a wait that doubles each time, up to a poll interval, until it gets through, the Lead
-// types `quit` or intake takes the pull request away. Any other error inside a run is a fault of
-// the Gate: the run fails with the reason `gate-error`, the full error stays in the Gate's log
-// directory, and the loop goes on with the next pull request. After a merge such a fault leaves
+// Failure behavior (7.5): while GitHub or the network is down (pulls.js, isOutage), a stage runs
+// again after a wait that doubles each time, up to a poll interval, until it gets through, the
+// Lead types `quit` or intake takes the pull request away; after LONG_RETRY_MS of tries the Lead
+// gets an attention item. A refusal of GitHub that waiting does not change, and any other error,
+// a fault of the Gate, fail the run with the reason `gate-error` and an attention item; the full
+// error stays in the Gate's log directory, and the loop goes on with the next pull request.
+// Before a run in stage 10 ends failed or is given up, GitHub's answer decides whether it merged
+// after all: then the run goes on after the merge, with stage 11. After a merge, a fault leaves
 // the pull request merged; the run then ends with the digest line of the merge and a note of what
-// was not done. A run that cannot even end through GitHub still leaves the queue.
+// was not done. A run that cannot even end through GitHub still leaves the queue, with the digest
+// line and an attention item (abandon).
 //
 // Every stage that passes ends the streaks of that stage and closes the repeated failure items
 // that its pass closes (repeated.js).
 
 import { join } from 'node:path'
+import { RemoteError } from '../../core/runtime/index.js'
 import { writeAtomic } from '../../core/state/index.js'
+import { raiseAttention } from './attention.js'
 import { inlineCode } from './comment.js'
 import { hasMergedLine } from './digest.js'
 import { admitHead, intake, tookOwnMerge } from './intake.js'
 import { stepTimeoutMs as stepTimeoutOf } from './merge-test.js'
 import { createNotifier } from './notify.js'
 import {
-  FIRST_RETRY_WAIT_MS,
   duration,
   endFailed,
-  isGitHubFailure,
+  isOutage,
   leaveQueue,
   messageOf,
-  nextWait,
-  pause,
+  retrySeries,
   retrying,
+  setGateLabels,
   withoutSecrets,
   writeDigest,
 } from './pulls.js'
@@ -160,7 +165,15 @@ async function runPull(gate, tools, pr) {
   try {
     await runStages(run)
   } catch (error) {
-    await abandon(run, error)
+    // Before a run in stage 10 is given up, GitHub's answer decides whether it merged.
+    const merged = await mergedMeanwhile(run)
+    if (merged === STOP) return
+    if (!merged) return abandon(run, error)
+    try {
+      await runStages(run)
+    } catch (again) {
+      await abandon(run, again)
+    }
   }
 }
 
@@ -173,10 +186,12 @@ async function runStages(run) {
   const { gate, pr, record } = run
   const { ctx } = gate
   const again = STAGES.indexOf(stageNamed('conflicts'))
+  const merge = STAGES.indexOf(stageNamed('merge'))
   const resumed = await resumeAt(run)
   if (resumed === STOP) return
   let index = resumed
-  let wait = FIRST_RETRY_WAIT_MS
+  /** @type {ReturnType<typeof retrySeries> | null} */
+  let tries = null
   while (index < STAGES.length) {
     const stage = STAGES[index]
     if (gate.stopping) return
@@ -188,18 +203,14 @@ async function runStages(run) {
     try {
       outcome = await stage.run(run)
     } catch (error) {
-      if (!isGitHubFailure(error)) {
-        outcome = await gateError(run, stage, error)
-      } else {
-        gate.line(
-          `#${pr} ${stageTitle(stage)}: GitHub or the network failed, the Gate runs the stage again in ${Math.round(wait / 1000)} s: ${messageOf(error)}`,
-        )
-        await pause(run, wait)
-        wait = nextWait(gate, wait)
+      if (isOutage(error)) {
+        tries ??= retrySeries(run, { stage: stage.name, title: stageTitle(stage) })
+        await tries.after(error, 'GitHub or the network failed, the Gate runs the stage again')
         continue
       }
+      outcome = await gateError(run, stage, error)
     }
-    wait = FIRST_RETRY_WAIT_MS
+    tries = null
     const seconds = Math.round((ctx.clock.now().getTime() - started) / 1000)
     record.stage_times[stage.name] = (record.stage_times[stage.name] ?? 0) + seconds
     if (outcome === STOP) return run.superseded() ? superseded(run) : undefined
@@ -210,6 +221,12 @@ async function runStages(run) {
     if (outcome) {
       const failure = { ...outcome, stage: stage.name, title: stageTitle(stage) }
       if (record.result === 'merged') return endMerged(run, failure)
+      const merged = await mergedMeanwhile(run)
+      if (merged === STOP) return run.superseded() ? superseded(run) : undefined
+      if (merged) {
+        index = merge
+        continue
+      }
       return endRun(run, failure)
     }
     recordPass(gate, { pr, sha: run.sha, stage: stage.name, title: stageTitle(stage) })
@@ -220,7 +237,8 @@ async function runStages(run) {
 /**
  * Where a run starts: stage 10 once its head is merged, otherwise stage 1. A run that stopped
  * inside stage 10 may have stopped after GitHub merged and before the state file said so, as when
- * the Gate was killed then; GitHub's answer decides.
+ * the Gate was killed then; GitHub's answer decides. An answer that cannot be read throws, and
+ * runPull asks once more before it gives the run up.
  * @param {PullRun} run
  * @returns {Promise<number | typeof STOP>}
  */
@@ -232,20 +250,56 @@ async function resumeAt(run) {
   const pull = await retrying(run, 'stage 10, merge', () => gate.ctx.github.getPullRequest(pr))
   if (pull === STOP) return STOP
   if (pull === null) return 0
-  let own = false
-  // After the work for the pull request that started earlier: intake may have taken it already.
-  const acted = await run.act(async () => {
-    own = tookOwnMerge(gate, pr, pull)
-  })
-  if (!acted || !own) return 0
-  await gate.save()
-  return merge
+  return (await takeMerge(run, pull)) ? merge : 0
 }
 
 /**
- * The failure of a run that an unexpected error stopped (`gate-error`, 7.5): the error and its
- * stack go to the Gate's log directory, and the comment names the stage and the message, with
- * every line that matches a secret pattern hidden.
+ * Whether GitHub merged the head of a run in stage 10 after all, before the run ends failed or
+ * is given up: the answer to the merge may have been lost, or not readable, after GitHub merged.
+ * When it did, the record is merged and the run goes on after the merge. Never throws: an answer
+ * that cannot be read leaves the question open, and the run ends as it would have.
+ * @param {PullRun} run
+ * @returns {Promise<boolean | typeof STOP>} STOP after `quit`, or when intake took the pull
+ *   request away.
+ */
+async function mergedMeanwhile(run) {
+  const { gate, pr, record } = run
+  if (record.result !== null || record.stage !== 'merge' || run.superseded()) return false
+  try {
+    const pull = await retrying(run, 'stage 10, merge', () => gate.ctx.github.getPullRequest(pr))
+    if (pull === STOP) return STOP
+    return pull !== null && (await takeMerge(run, pull))
+  } catch (error) {
+    gate.line(
+      `#${pr} stage 10, merge: GitHub's answer whether it merged head ${run.sha} is not readable: ${firstLine(messageOf(error))}`,
+    )
+    return false
+  }
+}
+
+/**
+ * Take GitHub's merge of the run's head as the Gate's own (intake.js, tookOwnMerge), after the
+ * work for the pull request that started earlier: intake may have taken it already.
+ * @param {PullRun} run
+ * @param {PullRequest} pull
+ * @returns {Promise<boolean>}
+ */
+async function takeMerge(run, pull) {
+  let own = false
+  const acted = await run.act(async () => {
+    own = tookOwnMerge(run.gate, run.pr, pull)
+  })
+  if (!acted || !own) return false
+  await run.gate.save()
+  return true
+}
+
+/**
+ * The failure of a run that an error stopped which waiting does not change (`gate-error`, 7.5):
+ * a refusal of GitHub (an HTTP status that `isOutage` does not wait out) or any other error,
+ * a fault of the Gate. The error and its stack go to the Gate's log directory, the comment names
+ * the stage and the message, with every line that matches a secret pattern hidden, and the Lead
+ * gets an attention item of the repeated failure type, which closes when the stage passes again.
  * @param {PullRun} run
  * @param {Stage} stage
  * @param {unknown} error
@@ -263,31 +317,42 @@ async function gateError(run, stage, error) {
   } catch {
     kept = null
   }
+  const status = error instanceof RemoteError ? error.status : undefined
+  const what =
+    status === undefined
+      ? 'an unexpected error of the Gate'
+      : `GitHub refused a call with HTTP ${status}, which waiting does not change, and`
   gate.line(
-    `#${pr} ${stageTitle(stage)}: an unexpected error of the Gate stopped the run (gate-error): ${message}${kept ? `; the full error is in ${kept}` : ''}`,
+    `#${pr} ${stageTitle(stage)}: ${what} stopped the run (gate-error): ${message}${kept ? `; the full error is in ${kept}` : ''}`,
   )
   return {
     result: 'failed',
     labels: [],
-    reason: `an unexpected error of the Gate stopped the run at this stage (\`gate-error\`): ${inlineCode(message)}${kept ? `. The full error stays on the Lead's laptop, in the Gate's directory: ${inlineCode(kept)}` : ''}`,
+    reason: `${what} stopped the run at this stage (\`gate-error\`): ${inlineCode(message)}${kept ? `. The full error stays on the Lead's laptop, in the Gate's directory: ${inlineCode(kept)}` : ''}`,
     details: [],
     next: `nothing for the author unless the error names the pull request. The Lead looks into the error and types \`retry ${pr}\` in the Gate terminal once its cause is fixed.`,
     note: `gate-error: ${message}`,
+    attention: {
+      type: 'repeated-failure',
+      todo: `${stageTitle(stage)} of #${pr} failed with gate-error (${message}); look into ${kept ?? 'the error in the Gate terminal'}, then type \`retry ${pr}\``,
+    },
   }
 }
 
 /**
  * End a failed run (9.2) through GitHub, after the work for the pull request that started
- * earlier, and only while intake has not taken the pull request away. When GitHub or the network
- * fails, the end is tried again with increasing waits; when the Lead types `quit` meanwhile, the
- * run stops and the restart runs it again. Any other error leaves the queue all the same.
+ * earlier, and only while intake has not taken the pull request away. While GitHub or the network
+ * is down, the end is tried again with increasing waits (retrySeries); when the Lead types `quit`
+ * meanwhile, the run stops and the restart runs it again. A refusal of GitHub or any other error
+ * gives the run up (abandon).
  * @param {PullRun} run
  * @param {StageFailure} failure
  * @returns {Promise<void>}
  */
 async function endRun(run, failure) {
   const { gate, tools, pr, record } = run
-  for (let wait = FIRST_RETRY_WAIT_MS; ; wait = nextWait(gate, wait)) {
+  const tries = retrySeries(run, { stage: failure.stage, title: failure.title })
+  for (;;) {
     try {
       const ended = await run.act(() =>
         endFailed(gate, tools.notifier, {
@@ -303,11 +368,11 @@ async function endRun(run, failure) {
       if (!ended) await superseded(run)
       return
     } catch (error) {
-      if (!isGitHubFailure(error)) return abandon(run, error, failure)
-      gate.line(
-        `#${pr} ${failure.title}: the end of the failed run did not reach GitHub, the Gate tries again in ${Math.round(wait / 1000)} s: ${messageOf(error)}`,
+      if (!isOutage(error)) return abandon(run, error, failure)
+      await tries.after(
+        error,
+        'the end of the failed run did not reach GitHub, the Gate tries again',
       )
-      await pause(run, wait)
       if (gate.stopping) return
       if (run.superseded()) return superseded(run)
     }
@@ -345,31 +410,68 @@ async function endMerged(run, failure) {
 }
 
 /**
- * The last resort of a run that an error stopped outside its stages, or whose end failed: it
- * leaves the queue with its record ended in the state file alone, so that the loop goes on.
+ * The last resort of a run that an error stopped outside its stages, or whose end GitHub refused:
+ * it leaves the queue, so that the loop goes on, and stays visible: the label `gate:failed` when
+ * GitHub takes it, the digest line, and an attention item of the repeated failure type for its
+ * stage, which closes when the stage passes again or the pull request is closed. It posts no
+ * comment. A newer head SHA that intake queued meanwhile keeps its place.
  * @param {PullRun} run
  * @param {unknown} error
  * @param {StageFailure} [failure] The failure the run tried to end with.
  * @returns {Promise<void>}
  */
 async function abandon(run, error, failure) {
-  const { gate, pr, record } = run
-  const message = firstLine(messageOf(error))
+  const { gate, tools, pr, record } = run
+  const message = withoutSecrets([firstLine(messageOf(error))], run.config)[0]
+  if (run.superseded()) {
+    gate.line(
+      `#${pr}: the run of head ${run.sha} stopped on an error, and the newer head stays queued: ${message}`,
+    )
+    return
+  }
   try {
-    // A newer head SHA that intake queued meanwhile keeps its place.
-    if (!run.superseded()) {
-      leaveQueue(gate.state, pr)
-      if (record.result !== 'merged') {
-        record.result = failure?.result ?? 'failed'
-        record.stage = failure?.stage ?? record.stage
+    leaveQueue(gate.state, pr)
+    const merged = record.result === 'merged'
+    if (!merged) {
+      record.result = failure?.result ?? 'failed'
+      record.stage = failure?.stage ?? record.stage
+    }
+    const stage = record.stage ?? 'intake'
+    let labelled = merged
+    if (!merged) {
+      try {
+        await setGateLabels(gate.ctx.github, pr, ['gate:failed'])
+        labelled = true
+      } catch {
+        // GitHub may be what failed; the line and the attention item say so.
       }
     }
     gate.line(
-      `#${pr}: the run stopped on an unexpected error and left the queue without its label, comment or digest line: ${message}; the Lead looks into it and types \`retry ${pr}\` once its cause is fixed`,
+      `#${pr}: the run stopped on an error at ${stage} and left the queue without a comment${labelled ? '' : ' and with the labels of the run'}: ${message}`,
     )
+    if (!merged) {
+      await raiseAttention(gate, tools.notifier, {
+        type: 'repeated-failure',
+        pr,
+        stage,
+        todo: `the run of #${pr} stopped on an error at ${stage} and could not end through GitHub (${message}); look at #${pr}${labelled ? '' : ', whose labels still show the run,'} and type \`retry ${pr}\` once the cause is fixed`,
+      })
+    }
+    if (!merged || !(await hasMergedLine(gate.files.digest, pr))) {
+      const now = gate.ctx.clock.now()
+      await writeDigest(gate, {
+        time: now.toISOString(),
+        pr,
+        author: run.author ?? '-',
+        result: record.result ?? 'failed',
+        stage,
+        duration: duration(now.getTime() - run.startedAt),
+        note: `abandoned: ${message}`,
+      })
+    }
     await gate.save()
   } catch (again) {
-    gate.line(`#${pr}: the state file was not written: ${messageOf(again)}`)
+    gate.line(`#${pr}: the end of the abandoned run was not written: ${messageOf(again)}`)
   }
 }
 

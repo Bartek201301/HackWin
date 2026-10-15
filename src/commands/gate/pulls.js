@@ -303,8 +303,9 @@ export function capped(items) {
 
 /**
  * Do the work of a stage that calls GitHub or the network, and do it again with increasing waits
- * while it fails with a RemoteError (7.5, failure behavior), until it succeeds, the Lead types
- * `quit` or intake takes the pull request away. Any other error ends the run.
+ * while GitHub or the network is down (7.5, failure behavior; `isOutage`), until it succeeds, the
+ * Lead types `quit` or intake takes the pull request away. Any other error, a refusal of GitHub
+ * included, ends the run.
  * @template T
  * @param {PullRun} run
  * @param {string} title The stage as the line names it: `stage 1, fetch`.
@@ -312,18 +313,60 @@ export function capped(items) {
  * @returns {Promise<T | typeof STOP>}
  */
 export async function retrying(run, title, work) {
-  const { gate, pr } = run
-  for (let wait = FIRST_RETRY_WAIT_MS; ; wait = nextWait(gate, wait)) {
+  const { gate } = run
+  const tries = retrySeries(run, { stage: run.record.stage ?? 'fetch', title })
+  for (;;) {
     try {
       return await work()
     } catch (error) {
-      if (!isGitHubFailure(error)) throw error
-      gate.line(
-        `#${pr} ${title}: failed, the Gate tries again in ${Math.round(wait / 1000)} s: ${messageOf(error)}`,
-      )
-      await pause(run, wait)
+      if (!isOutage(error)) throw error
+      await tries.after(error, 'failed, the Gate tries again')
       if (gate.stopping || run.superseded()) return STOP
     }
+  }
+}
+
+/** How long a run tries a call again before the Lead gets an attention item. */
+export const LONG_RETRY_MS = 10 * 60_000
+
+/**
+ * The waits between the tries of a call that GitHub or the network failed (7.5): 5 s first, then
+ * twice as long each time, up to a poll interval. Each failed try prints a line. Once the tries
+ * of one series have gone on for LONG_RETRY_MS, the Lead gets one attention item of the repeated
+ * failure type for the stage, which closes when the stage passes again (9.6).
+ * @param {PullRun} run
+ * @param {{ stage: string, title: string }} where The stage, by its name and as a line names it.
+ */
+export function retrySeries(run, { stage, title }) {
+  const { gate, pr } = run
+  const since = gate.ctx.clock.now().getTime()
+  let wait = FIRST_RETRY_WAIT_MS
+  let raised = false
+  return {
+    /**
+     * After a failed try: the line, the attention item when it is due, and the wait.
+     * @param {unknown} error
+     * @param {string} what What the line says before the wait, such as `failed, the Gate tries
+     *   again`.
+     * @returns {Promise<void>}
+     */
+    async after(error, what) {
+      gate.line(`#${pr} ${title}: ${what} in ${Math.round(wait / 1000)} s: ${messageOf(error)}`)
+      const ms = gate.ctx.clock.now().getTime() - since
+      if (!raised && ms >= LONG_RETRY_MS) {
+        raised = true
+        const [why] = withoutSecrets([messageOf(error)], run.config)
+        await raiseAttention(gate, run.tools.notifier, {
+          type: 'repeated-failure',
+          pr,
+          stage,
+          todo: `GitHub or the network has failed ${title} of #${pr} for ${duration(ms)} (${why}); the Gate goes on trying: check GitHub's status, the network and \`gh auth status\` on the Lead's laptop`,
+        })
+        await gate.save()
+      }
+      await pause(run, wait)
+      wait = nextWait(gate, wait)
+    },
   }
 }
 
@@ -339,14 +382,23 @@ export function nextWait(gate, wait) {
 }
 
 /**
- * True for a failure of GitHub or the network, which the Gate waits out (7.5, failure behavior):
- * a failed gh call or fetch, and gh that lost its login, which the Lead renews with
- * `gh auth login`. Any other error is a fault of the Gate.
+ * True when GitHub or the network is down, which the Gate waits out (7.5, failure behavior): a
+ * failed fetch or gh call without an HTTP status, a server error (5xx), a rate limit (HTTP 429,
+ * or a 403 whose answer names a rate limit), a login that GitHub no longer takes (HTTP 401), and
+ * gh that lost its login, which the Lead renews with `gh auth login`. Every other answer of
+ * GitHub is a refusal that waiting does not change, and any other error a fault of the Gate:
+ * both end the run with `gate-error`.
  * @param {unknown} error
  * @returns {boolean}
  */
-export function isGitHubFailure(error) {
-  if (error instanceof RemoteError) return true
+export function isOutage(error) {
+  if (error instanceof RemoteError) {
+    const { status } = error
+    if (status === undefined || status === null || status >= 500) return true
+    if (status === 429 || status === 401) return true
+    const said = [error.message, .../** @type {string[]} */ (error.details?.tail ?? [])]
+    return status === 403 && said.some((line) => /rate limit/i.test(line))
+  }
   if (!(error instanceof PreconditionError)) return false
   const resolve = /** @type {any} */ (error.resolve)
   return resolve?.command === 'gh auth login'

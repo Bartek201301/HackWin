@@ -229,7 +229,7 @@ describe('AC22: a Gate killed and started again merges once and comments once', 
       await s.ended(pull.pr, 'merged')
       expect(await second.quit()).toBe(0)
       expect(second.out).toContain(
-        `#${pull.pr}: GitHub merged head ${pull.head} before the Gate stopped, so the run goes on after the merge`,
+        `#${pull.pr}: GitHub merged head ${pull.head}, which the Gate had not recorded, so the run goes on after the merge`,
       )
       expect(s.merges()).toEqual([{ pr: pull.pr, sha: pull.head, admin: true, code: 0 }])
       expect(gateLabels(s.labels(pull.pr))).toEqual(['gate:merged'])
@@ -275,6 +275,96 @@ describe("1.6e/comments: only the Gate's own comment of the same head SHA and st
         result: 'failed',
       })
       expect(s.out).not.toContain('is on the pull request already')
+    },
+    SLOW,
+  )
+})
+
+/** An answer of GitHub to a read of a pull request, cut short. */
+const CUT = rawResult({ code: 0, stdout: '{"number": 1, "merged": tr', stderr: '' })
+
+describe('1.6e/merged-after-all: a run in stage 10 ends failed only when GitHub did not merge its head', () => {
+  test(
+    'GitHub merged, but its answer is not readable: the Gate asks again and finishes with stage 11',
+    async () => {
+      const s = await scene({
+        issues: [
+          task(128, 'counter'),
+          task(129, 'counter', undefined, { dependsOn: [128], status: 'blocked' }),
+        ],
+      })
+      const pull = await shipped(s, { issue: 128, file: 'src/features/counter/z.js' })
+      let cut = 0
+      const removeMerge = s.fake.on('pr merge', async ({ args }) => {
+        removeMerge()
+        const answer = await mergeAsGitHub(s, args)
+        // The read of the pull request right after the merge gets an answer cut short.
+        const removeRead = s.fake.on('GET repos/{owner}/{repo}/pulls/:number', () => {
+          removeRead()
+          cut += 1
+          return CUT
+        })
+        return answer
+      })
+      await s.start()
+      await s.ended(pull.pr, 'merged')
+      await s.quit()
+      expect(cut).toBe(1)
+      expect(s.out).toContain(
+        `#${pull.pr}: GitHub merged head ${pull.head}, which the Gate had not recorded, so the run goes on after the merge`,
+      )
+      expect(s.merges()).toEqual([{ pr: pull.pr, sha: pull.head, admin: true, code: 0 }])
+      expect(s.comments(pull.pr)).toEqual([])
+      expect(gateLabels(s.labels(pull.pr))).toEqual(['gate:merged'])
+      expect(/** @type {any} */ (s.fake.find(128)).state).toBe('closed')
+      expect(s.labels(129)).toContain('ready')
+      expect(s.digest().map(parseDigestLine)).toEqual([
+        expect.objectContaining({ pr: pull.pr, result: 'merged', stage: 'after-merge' }),
+      ])
+      expect(s.state().attention).toEqual([])
+    },
+    SLOW,
+  )
+
+  test(
+    'a restart that cannot read whether GitHub merged asks once more before it gives the run up, and finishes with stage 11',
+    async () => {
+      const s = await scene({ issues: [task(127, 'counter')] })
+      const branch = 'task/127-counter-work'
+      const head = await s.push(branch, {
+        files: { 'src/features/counter/y.js': 'export const y = 1\n' },
+      })
+      const pr = await s.openPull({ branch, author: BUILDER1, task: 127 })
+      await s.start()
+      await s.until(() => s.out.includes(`#${pr} passed stages 1 to 7`), 'stage 8')
+      await s.quit()
+      // As when the Gate stopped inside stage 10 after GitHub merged.
+      const state = s.state()
+      state.prs[String(pr)].stage = 'merge'
+      writeFileSync(s.files.state, JSON.stringify(state))
+      await mergeAsGitHub(s, ['pr', 'merge', String(pr), '--merge', '--match-head-commit', head])
+      // The next two reads of the pull request, by intake and by the resume, are cut short.
+      let cut = 0
+      const remove = s.fake.on('GET repos/{owner}/{repo}/pulls/:number', () => {
+        cut += 1
+        if (cut === 2) remove()
+        return CUT
+      })
+      await s.start()
+      await s.ended(pr, 'merged')
+      await s.quit()
+      expect(cut).toBe(2)
+      expect(s.out).toContain(
+        `#${pr}: GitHub merged head ${head}, which the Gate had not recorded, so the run goes on after the merge`,
+      )
+      expect(s.out).not.toContain('left the queue')
+      expect(s.merges()).toEqual([])
+      expect(s.comments(pr)).toEqual([])
+      expect(gateLabels(s.labels(pr))).toEqual(['gate:merged'])
+      expect(/** @type {any} */ (s.fake.find(127)).state).toBe('closed')
+      expect(s.digest().map(parseDigestLine)).toEqual([
+        expect.objectContaining({ pr, result: 'merged', stage: 'after-merge' }),
+      ])
     },
     SLOW,
   )
@@ -363,6 +453,16 @@ describe('1.6e/lock: the lock judges a holder by its pid and when its process st
         acquired: false,
         holder: record,
       })
+
+      // A step of the clock: the process seems to have started 30 s after the lock's time.
+      writeFileSync(
+        file,
+        JSON.stringify({
+          ...record,
+          process_started_by: new Date(window.earliest - 30_000).toISOString(),
+        }),
+      )
+      expect(await runningGate(file)).toMatchObject({ pid })
 
       // The same pid with a lock of a process that had started an hour earlier: another process.
       writeFileSync(

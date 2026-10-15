@@ -18,7 +18,7 @@
 import { join } from 'node:path'
 import { runAcceptanceTests, runCheck } from '../../core/project/index.js'
 import { readText } from '../../core/state/index.js'
-import { parseTaskBlock } from '../../core/tasks/index.js'
+import { toTask, writtenByTeam } from '../../core/tasks/index.js'
 import { inlineCode } from './comment.js'
 import { namedFlakyTests } from './flaky.js'
 import {
@@ -173,7 +173,9 @@ async function mainInstall(run, { timeoutMs, env }) {
 
 /**
  * The acceptance tests of the task the pull request names, read again from its issue: the block
- * may have changed since stage 2.
+ * may have changed since stage 2. The issue goes through `toTask`, so the rule of #74 holds here
+ * as in stage 2: an issue that no member of the team wrote is no task, also under a configuration
+ * of main that changed since (A17).
  * @param {PullRun} run
  * @returns {Promise<string[] | Failure | typeof STOP>}
  */
@@ -182,21 +184,28 @@ async function acceptanceTests(run) {
   if (task === null) throw new Error('stage 7 runs only after stage 2 found the task')
   const issue = await retrying(run, 'stage 7, merge test', () => gate.ctx.github.getIssue(task))
   if (issue === STOP) return STOP
-  const parsed = issue === null ? null : parseTaskBlock(issue.body, run.config)
-  if (parsed !== null && parsed.isTask && parsed.valid) return parsed.block.acceptance_tests
+  const parsed = issue === null ? null : toTask(issue, run.config)
+  if (parsed?.valid && parsed.block) return parsed.block.acceptance_tests
+  const outsider = issue !== null && !writtenByTeam(issue, run.config)
   const why =
-    parsed === null
+    issue === null
       ? 'does not exist'
-      : parsed.isTask && !parsed.valid
-        ? `has no valid task block: ${parsed.errors.join('; ')}`
-        : 'has no task block'
+      : outsider
+        ? `was written by ${issue.author ?? 'an unknown account'}, who is not a member of the team in hackwin.yml, so it is no task`
+        : parsed === null
+          ? 'has no task block'
+          : `has no valid task block: ${parsed.errors.join('; ')}`
   return {
     result: 'failed',
     labels: [],
     reason: `the task #${task} ${why}, so the Gate does not know its acceptance tests (8.1)`,
     details: [],
-    next: `ask the Lead to fix the task block of #${task}, then to type \`retry ${run.pr}\` in the Gate terminal`,
-    note: 'merge test: no valid task block',
+    next: outsider
+      ? `the author asks the Lead for a task, an issue that the Lead or a member of the team writes, and edits the body to name it; then the Lead types \`retry ${run.pr}\` in the Gate terminal`
+      : `ask the Lead to fix the task block of #${task}, then to type \`retry ${run.pr}\` in the Gate terminal`,
+    note: outsider
+      ? 'merge test: the task was not written by a member'
+      : 'merge test: no valid task block',
   }
 }
 

@@ -5,9 +5,10 @@
 // A pid alone does not name a process for good: after a reboot, or once the pids wrap around, an
 // unrelated process may get the pid of a Gate that crashed. So the lock also records by when its
 // process had started, from the elapsed time that `ps` reports, and it counts as held only while
-// a process with its pid runs that started no later than that. A restart then recovers with
-// `hackwin gate` alone (scope change on #24, from the Lead's review of PR #52). Where `ps` gives
-// no answer, and for a lock without that time, the pid alone decides.
+// a process with its pid runs that started no later than that, within a minute for a step of the
+// clock (CLOCK_SLACK_MS). A restart then recovers with `hackwin gate` alone (scope change on #24,
+// from the Lead's review of PR #52). Where `ps` gives no answer, and for a lock without that time,
+// the pid alone decides.
 //
 // A lock appears in one step: the record is written to a temporary file first and then linked to
 // the lock's name, which fails when a lock exists. So a reader never sees half a record.
@@ -129,8 +130,8 @@ export function isRunning(pid) {
 
 /**
  * True while the lock's process still holds it: a process with its pid runs, and it did not
- * start after the time the lock recorded. A process that started later got the pid of a Gate
- * that ended.
+ * start more than CLOCK_SLACK_MS after the time the lock recorded. A process that started later
+ * got the pid of a Gate that ended.
  * @param {LockRecord} record
  * @returns {Promise<boolean>}
  */
@@ -139,8 +140,16 @@ export async function holds(record) {
   const recorded = Date.parse(record.process_started_by ?? '')
   if (Number.isNaN(recorded)) return true
   const started = await processStartedAt(record.pid)
-  return started === null || started.earliest <= recorded
+  return started === null || started.earliest <= recorded + CLOCK_SLACK_MS
 }
+
+/**
+ * How much later than the lock's time a process may seem to have started and still hold it. The
+ * start is the clock's time now minus the elapsed time of `ps`, and on Linux `ps` counts the
+ * elapsed time on the clock since boot, so a step of the wall clock moves the start (the Lead's
+ * review of PR #80). A process that got the pid of a Gate after a reboot started much later.
+ */
+const CLOCK_SLACK_MS = 60_000
 
 /**
  * When a process started, from its elapsed time as `ps -o etime=` gives it (`[[dd-]hh:]mm:ss`,
