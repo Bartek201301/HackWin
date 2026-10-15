@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +8,10 @@ import { createNotifier, notificationCommand } from '../../../src/commands/gate/
 import { emptyState, pullRecord, saveState } from '../../../src/commands/gate/state.js'
 import { BUILTIN_PATTERNS } from '../../../src/core/secrets/index.js'
 import { BUILDER1, LEAD, STATUS_MS, createScene, task } from './scene.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('./scene.js').Scene} Scene */
 

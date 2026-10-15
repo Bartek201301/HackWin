@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { emptyState, gateFiles, pullRecord, saveState } from '../../../src/commands/gate/state.js'
@@ -14,6 +14,10 @@ import {
   until,
   waitForFile,
 } from './helpers.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 /** @typedef {import('../../../src/commands/gate/gate.js').Pipeline} Pipeline */

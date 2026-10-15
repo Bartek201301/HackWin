@@ -96,7 +96,8 @@ export function task(number, role, paths = [`src/features/${role}/**`], options 
  * @param {any[]} [options.issues] Task issues; pull requests and the status issue get numbers
  *   from 100 on.
  * @param {Record<string, string>} [options.files] More files of the first commit on main.
- * @param {number} [options.patience] How long `until` waits, in milliseconds of real time.
+ * @param {number} [options.patience] How long `until` waits, in milliseconds of real time: long,
+ *   so that a loaded machine does not fail a test; it only delays the report of a real failure.
  * @param {number} [options.stepTimeoutMs] How long a command of the merge test or the smoke test
  *   may run, in place of `gate.step_timeout_minutes`.
  * @param {Record<string, string>} [options.env] More variables of the Gate's environment.
@@ -105,7 +106,7 @@ export async function createScene({
   configure,
   issues = [],
   files: mainFiles = {},
-  patience = 15_000,
+  patience = 60_000,
   stepTimeoutMs,
   env,
 } = {}) {

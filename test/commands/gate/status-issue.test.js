@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { existsSync, rmSync } from 'node:fs'
 import {
   appendDigestLine,
@@ -31,6 +31,10 @@ import {
   rawResult,
 } from '../../harness/index.js'
 import { leadGitHub, manualClock, noKeepAwake, readJson, startDirect, until } from './helpers.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 /** @typedef {import('../../harness/index.js').FakeGitHub} FakeGitHub */

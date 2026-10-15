@@ -447,12 +447,14 @@ describe('1.6d/step-timeout: a command of the merge test that runs too long', ()
   test(
     'is stopped after the step timeout and fails the run with step-timeout',
     async () => {
-      // The pipeline's step timeout of one second stands in for `gate.step_timeout_minutes`.
+      // The pipeline's step timeout of five seconds stands in for `gate.step_timeout_minutes`. The
+      // shell prints the line before node starts, so the line is in the log also when a loaded
+      // machine starts node slowly; without the timeout the check would run for ten minutes.
       const s = await scene({
         issues: [task(320, 'counter')],
-        stepTimeoutMs: 1000,
+        stepTimeoutMs: 5000,
         configure: (hackwin) => {
-          hackwin.commands.check = `node -e ${quoteShellArg("console.log('waiting'); setTimeout(() => {}, 600000)")}`
+          hackwin.commands.check = `echo waiting && node -e ${quoteShellArg('setTimeout(() => {}, 600000)')}`
         },
       })
       const pull = await shipped(s, {
