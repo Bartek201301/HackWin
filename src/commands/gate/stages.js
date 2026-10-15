@@ -9,6 +9,7 @@ import { createMatcher, rolesOf, scopeCheck } from '../../core/config/index.js'
 import { formatFinding } from '../../core/secrets/index.js'
 import { checkTaskLink } from '../../core/tasks/index.js'
 import { closeAttention, raiseAttention } from './attention.js'
+import { codeSpan } from './comment.js'
 import { ciStage } from './ci.js'
 import { afterMergeStage, freshnessStage, mergeStage } from './merge.js'
 import { mergeTestStage } from './merge-test.js'
@@ -34,7 +35,7 @@ import {
 /** @import { ChangedFile, Git } from '../../core/git/index.js' */
 /** @import { PullRequest } from '../../core/github/index.js' */
 /** @import { Finding } from '../../core/secrets/index.js' */
-/** @import { TaskLinkReason } from '../../core/tasks/index.js' */
+/** @import { TaskLink, TaskLinkReason } from '../../core/tasks/index.js' */
 /** @import { Gate } from './gate.js' */
 /** @import { Tools } from './pipeline.js' */
 /** @import { Failure, REPEAT } from './pulls.js' */
@@ -124,7 +125,7 @@ async function taskLinkStage(run) {
     run.task = link.issue
     return
   }
-  return taskLinkFailure(link.reason, pull)
+  return taskLinkFailure(link, pull)
 }
 
 /**
@@ -158,7 +159,7 @@ async function scopeStage(run) {
     details: capped(
       violations.map(
         ({ path, role, holder }) =>
-          `\`${path}\`: role \`${role}\`, held by ${holder ?? 'no member'}`,
+          `${codeSpan(path)}: role \`${role}\`, held by ${holder ?? 'no member'}`,
       ),
     ),
     next: `take these files out of the pull request: ${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session restores them to their state on main and runs \`hackwin ship\`. A change that another role's files need is a task for that role, which the Lead writes (I14).`,
@@ -233,7 +234,7 @@ async function conflictStage(run) {
   const files = merge.conflicts.slice(0, MAX_DETAILS)
   const details = []
   for (const file of files) {
-    details.push(`\`${file}\`: ${await changedOnMain(gate.git, { base, main, file })}`)
+    details.push(`${codeSpan(file)}: ${await changedOnMain(gate.git, { base, main, file })}`)
   }
   if (merge.conflicts.length > files.length) {
     details.push(`and ${merge.conflicts.length - files.length} more files`)
@@ -291,7 +292,7 @@ export function secretFailure({ pr, findings, task, atIntake }) {
     result: 'failed',
     labels: [],
     reason: `the head adds ${count(findings.length, 'line or file', 'lines or files')} that match a secret pattern${atIntake ? ', found by the scan at intake' : ''} (G12, A41). A pushed branch of a public repository is public, so the secret is exposed already. File, line and pattern of each finding:`,
-    details: capped(where.map((text) => `\`${text}\``)),
+    details: capped(where.map(codeSpan)),
     next: `the Lead rotates the secret at once, then types \`ack ${pr}\` in the Gate terminal. The author removes it from the branch: ${takeCommand(task)} ${IN_MAIN_CHECKOUT} resumes the task; the session removes it and runs \`hackwin ship\`. The secret stays in the history of the pushed branch, so only the rotation makes it harmless.`,
     note: `secret: ${count(findings.length, 'finding', 'findings')}`,
     attention: {
@@ -304,11 +305,11 @@ export function secretFailure({ pr, findings, task, atIntake }) {
 /** @type {Record<TaskLinkReason | 'issue-not-open' | 'invalid-task-block', (pull: PullRequest, task: string) => [string, string]>} */
 const TASK_LINK = {
   'no-task-branch': (pull) => [
-    `the branch \`${pull.headRef}\` is not a task branch \`task/<N>-<slug>\`; only \`hackwin ship\` opens a pull request, from the branch of a task (8.4)`,
+    `the branch ${codeSpan(pull.headRef)} is not a task branch \`task/<N>-<slug>\`; only \`hackwin ship\` opens a pull request, from the branch of a task (8.4)`,
     `open the pull request with \`hackwin ship\` in the task's worktree, and close this one`,
   ],
   'spike-branch': (pull) => [
-    `the branch \`${pull.headRef}\` is a \`spike/\` branch, which is never merged (E16)`,
+    `the branch ${codeSpan(pull.headRef)} is a \`spike/\` branch, which is never merged (E16)`,
     `ask the Lead for a task for the change, start it with \`hackwin take <task>\` ${IN_MAIN_CHECKOUT}, open its pull request with \`hackwin ship\`, and close this one`,
   ],
   'no-closes-line': (pull, task) => [
@@ -320,7 +321,7 @@ const TASK_LINK = {
     `edit the body to keep only the line \`Closes #${task}\`, then ask the Lead to type \`retry ${pull.number}\` in the Gate terminal`,
   ],
   'branch-issue-mismatch': (pull, task) => [
-    `the line \`Closes #<N>\` names another issue than the branch \`${pull.headRef}\` (T1)`,
+    `the line \`Closes #<N>\` names another issue than the branch ${codeSpan(pull.headRef)} (T1)`,
     `edit the body to name the task of the branch, \`Closes #${task}\`, then ask the Lead to type \`retry ${pull.number}\` in the Gate terminal`,
   ],
   'issue-not-open': (pull, task) => [
@@ -334,21 +335,37 @@ const TASK_LINK = {
 }
 
 /**
- * The failure of stage 2 for each reason of the task link.
- * @param {TaskLinkReason | 'issue-not-open' | 'invalid-task-block'} reason
+ * The failure of stage 2 for each reason of the task link. For `invalid-task-block` the comment
+ * gives the reasons of `checkTaskLink`, which are safe to print (contracts 4.5): an issue that no
+ * member of the team wrote is no task, and the comment names the issue and its author (scope
+ * change on #24, #74).
+ * @param {Exclude<TaskLink, { ok: true }>} link
  * @param {PullRequest} pull
  * @returns {Failure}
  */
-function taskLinkFailure(reason, pull) {
+function taskLinkFailure(link, pull) {
+  const { reason } = link
   const branchTask = /^task\/(\d+)/.exec(pull.headRef)?.[1]
   const named = /^Closes #(\d+)\s*$/m.exec(pull.body ?? '')?.[1]
   const task = reason === 'issue-not-open' || reason === 'invalid-task-block' ? named : branchTask
+  if ('member' in link && !link.member) {
+    const author = link.author ?? 'an unknown account'
+    return {
+      result: 'failed',
+      labels: [],
+      reason: `the issue #${task} that the pull request names is no task: no member of the team wrote it (\`${reason}\`):`,
+      details: capped(link.errors.map(codeSpan)),
+      next: `the author asks the Lead for a task, an issue that the Lead or a member of the team writes, and edits the body to hold exactly one line \`Closes #<task>\` that names it; then the Lead types \`retry ${pull.number}\` in the Gate terminal. The issue #${task} of ${author} stays no task.`,
+      note: `task link: #${task} written by ${author}, not a member`,
+    }
+  }
   const [text, next] = TASK_LINK[reason](pull, task ?? '<N>')
+  const errors = 'errors' in link ? link.errors : []
   return {
     result: 'failed',
     labels: [],
-    reason: `${text} (\`${reason}\`)`,
-    details: [],
+    reason: `${text} (\`${reason}\`)${errors.length > 0 ? ':' : ''}`,
+    details: capped(errors.map(codeSpan)),
     next,
     note: `task link: ${reason}`,
   }

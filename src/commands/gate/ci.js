@@ -17,6 +17,8 @@
 import { join } from 'node:path'
 import { ACTIONS_APP_ID, REQUIRED_CHECK } from '../../core/protection/index.js'
 import { RemoteError } from '../../core/runtime/index.js'
+import { writeAtomic } from '../../core/state/index.js'
+import { codeSpan } from './comment.js'
 import { namedFlakyTests } from './flaky.js'
 import {
   IN_MAIN_CHECKOUT,
@@ -28,7 +30,6 @@ import {
   setGateLabels,
   takeCommand,
 } from './pulls.js'
-import { writeAtomic } from './state.js'
 
 /** @import { GitHub } from '../../core/github/index.js' */
 /** @import { Protection, RequiredCheck } from '../../core/protection/index.js' */
@@ -231,7 +232,7 @@ async function blame(run, failed, noRerun) {
   const known = run.config.hackwin.gate.known_flaky_tests
   const links = failed.map((check) => {
     const url = check.details_url ?? check.html_url
-    return `\`${check.name}\`: ${check.conclusion ?? 'failed'}${url ? `, ${url}` : ''}`
+    return `${codeSpan(check.name)}: ${check.conclusion ?? 'failed'}${url ? `, ${url}` : ''}`
   })
   const reruns = count(record.ci_reruns, 'rerun', 'reruns')
   const named = noRerun === null && known.length > 0 ? await flakyInLogs(run, failed) : []

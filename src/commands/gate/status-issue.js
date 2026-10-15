@@ -9,6 +9,16 @@
 // The digest sits in a fenced code block, so that GitHub links no `#<PR>` in it, which would add
 // a reference to the timeline of every pull request in the digest.
 //
+// Before each edit after the start, the Gate reads the status issue as `status` finds it, the
+// oldest open issue with the label (scope change on #24):
+//
+// - When it holds the fresh heartbeat of another Gate, without a stop time, two Gates run for
+//   the project, as when both started at the same moment and passed the check of G2 at the start,
+//   or both created an issue. This Gate then writes nothing more and stops (G2).
+// - When it is another issue than the one this Gate writes, the Gate writes it from then on.
+// - When none is open, the Lead closed this Gate's issue by hand: the Gate reopens it, or creates
+//   a new one when it is gone, and says so, since `status` reads only open issues.
+//
 // `status` (1.6f) finds the issue with findStatusIssue and reads its body with parseStatusBody.
 
 import { parse } from 'yaml'
@@ -164,16 +174,21 @@ export function parseStatusBody(body) {
  * keeps `limits` for its next writes, so no later write tries a size that was refused, also
  * when every try of this one was.
  * @param {GitHub} github
- * @param {{ issue: Issue | null, status: GateStatus, limits: { maxLength: number } }} write
+ * @param {{ issue: Issue | null, status: GateStatus, limits: { maxLength: number }, reopen?: boolean }} write
+ *   With `reopen`, the edit also opens the issue again and pins it.
  * @returns {Promise<{ issue: Issue, created: boolean, pinError: string | null, dropped: DigestEntry[] }>}
  */
-export async function writeStatusIssue(github, { issue, status, limits }) {
+export async function writeStatusIssue(github, { issue, status, limits, reopen = false }) {
   for (let attempt = 1; ; attempt += 1) {
     const { body, dropped } = formatStatusBody(status, { maxLength: limits.maxLength })
     try {
       if (issue !== null) {
-        const edited = await github.updateIssue(issue.number, { body })
-        return { issue: edited, created: false, pinError: null, dropped }
+        const edited = await github.updateIssue(issue.number, {
+          body,
+          ...(reopen ? { state: 'open' } : {}),
+        })
+        const pinError = reopen ? await pin(github, edited.number) : null
+        return { issue: edited, created: false, pinError, dropped }
       }
       const created = await github.createIssue({
         title: STATUS_TITLE,
@@ -231,26 +246,70 @@ export function otherGateHeartbeat(status, { gateId, newId, local, now, staleSec
 }
 
 /**
+ * Another Gate's heartbeat in the status issue, as the Gate found it before an edit.
+ * @typedef {object} OtherGate
+ * @property {number} issue
+ * @property {string} heartbeat_at
+ * @property {string | null} gate_id
+ */
+
+/**
  * The Gate's writer of the status issue (G25): an edit at the start, which clears the stop time,
  * then one per `gate.status_issue_seconds`, and one at `quit`, which sets the stop time. Each
  * edit carries the time of its own heartbeat, which it first writes into the local heartbeat,
- * and everything that changed since the last one. A failed edit waits for the next interval;
- * without an issue it then looks for one by its label again before it creates one, in case
- * GitHub created the issue but the answer was lost. A refused body lowers the size of every
- * later edit of this run (writeStatusIssue). An edit records itself in `state.status_issue`,
- * which the next write of the state file keeps.
+ * and everything that changed since the last one. Each edit after the start first reads the
+ * status issue as `status` finds it (see the top of this file). A failed edit waits for the next
+ * interval. A refused body lowers the size of every later edit of this run (writeStatusIssue).
+ * An edit records itself in `state.status_issue`, which the next write of the state file keeps.
  * @param {Gate} gate
  * @param {Issue | null} issue The status issue found at the start, or null before the first.
  */
 export function createStatusPublisher(gate, issue) {
   const { ctx, files, state } = gate
   const seconds = gate.config.hackwin.gate.status_issue_seconds
+  const stale = gate.config.hackwin.gate.heartbeat_stale_seconds
   let current = issue
-  // False after a failure: GitHub may hold a status issue that `current` does not know.
-  let known = true
+  // The start's edit goes to the issue the start found; every later one reads it first.
+  let started = false
+  // The latest heartbeat this Gate sent, in milliseconds, or its start: a heartbeat of this
+  // clone's id up to then is this Gate's own, or one of this clone's Gate before a restart.
+  let sentAt = ctx.clock.now().getTime()
   const limits = { maxLength: MAX_BODY_LENGTH }
   let droppedBefore = 0
   if (current !== null) state.status_issue.number = current.number
+
+  /**
+   * Where the next edit goes, from the status issue as `status` finds it: an issue and whether
+   * to open it again, or the other Gate that writes it.
+   * @returns {Promise<{ issue: Issue | null, reopen: boolean } | { other: OtherGate }>}
+   */
+  const target = async () => {
+    const found = await findStatusIssue(ctx.github)
+    if (found === null) return { issue: current, reopen: current !== null }
+    const status = parseStatusBody(found.body)
+    const own =
+      status === null ||
+      ((status.gate_id === null || status.gate_id === gate.id) &&
+        Date.parse(status.heartbeat_at) <= sentAt)
+    if (!own && status !== null) {
+      const age = ctx.clock.now().getTime() - Date.parse(status.heartbeat_at)
+      const other = {
+        issue: found.number,
+        heartbeat_at: status.heartbeat_at,
+        gate_id: status.gate_id,
+      }
+      if (status.stopped_at === null && age < stale * 1000) return { other }
+      gate.line(
+        `status issue: #${found.number} holds a heartbeat that this Gate did not write, at ${status.heartbeat_at} of ${status.gate_id === null ? 'a Gate without an id' : `the Gate ${status.gate_id}`}, which ${status.stopped_at === null ? 'is stale' : 'stopped'}; this Gate writes it from now on`,
+      )
+    }
+    if (current !== null && found.number !== current.number) {
+      gate.line(
+        `status issue: #${found.number} is the oldest open issue with the label ${STATUS_LABEL}, which \`status\` reads, so the Gate writes it from now on instead of #${current.number}`,
+      )
+    }
+    return { issue: found, reopen: false }
+  }
 
   const publisher = {
     /** The time, in milliseconds, from which the next edit is due. */
@@ -260,6 +319,12 @@ export function createStatusPublisher(gate, issue) {
       return current
     },
     /**
+     * The other Gate that writes the status issue, once an edit found one: this Gate then
+     * stopped and writes nothing more (G2).
+     * @type {OtherGate | null}
+     */
+    other: null,
+    /**
      * Write the status issue now. Never throws: a failure is a line in the terminal.
      * @param {{ stoppedAt?: string | null }} [options] The stop time, for the edit at `quit`.
      * @returns {Promise<boolean>} True when GitHub took the edit.
@@ -267,18 +332,35 @@ export function createStatusPublisher(gate, issue) {
     async publish({ stoppedAt = null } = {}) {
       const at = stoppedAt ?? ctx.clock.now().toISOString()
       publisher.nextAt = Date.parse(at) + seconds * 1000
+      if (publisher.other !== null) return false
       const limitBefore = limits.maxLength
       try {
         await gate.beat(stoppedAt, at)
-        if (current === null && !known) current = await findStatusIssue(ctx.github)
+        const where = started ? await target() : { issue: current, reopen: false }
+        started = true
+        if ('other' in where) {
+          publisher.other = where.other
+          stopFor(where.other, stoppedAt)
+          return false
+        }
         const digest = await readDigest(files.digest)
+        sentAt = Math.max(sentAt, Date.parse(at))
         const written = await writeStatusIssue(ctx.github, {
-          issue: current,
+          issue: where.issue,
           status: { ...gateStatus(gate, at, stoppedAt), digest },
           limits,
+          reopen: where.reopen,
         }).finally(() => reportLimit(limitBefore))
+        if (where.reopen) {
+          gate.line(
+            `status issue: #${written.issue.number} was closed, so the Gate opened it again, since \`status\` reads only open issues`,
+          )
+        } else if (written.created && current !== null) {
+          gate.line(
+            `status issue: #${current.number} is gone, so the Gate created #${written.issue.number}`,
+          )
+        }
         current = written.issue
-        known = true
         state.status_issue = { number: current.number, last_edit_at: at }
         if (written.pinError !== null) {
           ctx.out.warn(
@@ -293,8 +375,12 @@ export function createStatusPublisher(gate, issue) {
         }
         return true
       } catch (error) {
-        known = false
-        if (error instanceof RemoteError && (error.status === 404 || error.status === 410)) {
+        if (
+          current !== null &&
+          error instanceof RemoteError &&
+          (error.status === 404 || error.status === 410)
+        ) {
+          gate.line(`status issue: #${current.number} is gone; the next edit creates a new one`)
           current = null
         }
         const message = error instanceof Error ? error.message : String(error)
@@ -306,6 +392,22 @@ export function createStatusPublisher(gate, issue) {
         return false
       }
     },
+  }
+
+  /**
+   * Stop this Gate, since another one writes the status issue (G2); at `quit` only say so.
+   * @param {OtherGate} other
+   * @param {string | null} stoppedAt
+   */
+  const stopFor = (other, stoppedAt) => {
+    const whose = other.gate_id === null ? 'a Gate without an id' : `the Gate ${other.gate_id}`
+    const said = `status issue: #${other.issue} holds the heartbeat of ${whose} at ${other.heartbeat_at}, not the one this Gate ${gate.id} wrote last: another Gate runs for this project`
+    if (stoppedAt !== null) {
+      gate.line(`${said}, so this Gate leaves the issue to it and writes no stop time`)
+      return
+    }
+    gate.line(`${said}, so this Gate stops after the current step and writes the issue no more`)
+    gate.stop()
   }
 
   /** @param {number} before */

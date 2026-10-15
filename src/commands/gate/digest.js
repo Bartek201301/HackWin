@@ -8,7 +8,7 @@
 
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { readText } from './state.js'
+import { readText } from '../../core/state/index.js'
 
 /**
  * One digest line.
@@ -86,6 +86,18 @@ export async function readDigest(file) {
   return [...latest.values()]
     .sort((a, b) => Date.parse(b.entry.time) - Date.parse(a.entry.time) || b.index - a.index)
     .map(({ entry }) => entry)
+}
+
+/**
+ * True when `digest.log` holds a merged line of the pull request. A pull request is merged once,
+ * so a run that takes up again after the merge, at a restart, writes no second one.
+ * @param {string} file
+ * @param {number} pr
+ * @returns {Promise<boolean>}
+ */
+export async function hasMergedLine(file, pr) {
+  const digest = await readDigest(file)
+  return digest.some((entry) => entry.pr === pr && entry.result === 'merged')
 }
 
 /**

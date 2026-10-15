@@ -1,6 +1,9 @@
 // Attention items (9.6, G18) [D3]: the Lead is interrupted only for five types, each an item in
 // the state file that the status issue shows until it closes (A54). A pull request has at most
-// one open item of a type: a later finding of the same type updates its text. The Gate prints
+// one open item of a type: a later finding of the same type updates its text. A repeated failure
+// is the exception: it names the stage whose pass closes it (9.6), so a pull request has at most
+// one open repeated failure item per stage, and one more per stage for failures that ran across
+// queue items (repeated.js), which the pass of any queue item closes. The Gate prints
 //
 //   ATTENTION <type> #<PR>: <what the Lead must do>
 //
@@ -42,29 +45,51 @@ export function attentionLine({ type, pr, todo }) {
 }
 
 /**
- * The open item of this type for the pull request, or undefined.
- * @param {Gate} gate
- * @param {string} type
- * @param {number} pr
- * @returns {AttentionItem | undefined}
+ * What tells one attention item from another: the type and the pull request, and for a repeated
+ * failure also the stage and whether it ran across queue items. An item across queue items
+ * belongs to its stage alone: a longer run of failures updates it, whatever pull request failed
+ * last.
+ * @typedef {object} AttentionKey
+ * @property {string} type
+ * @property {number} pr
+ * @property {string | null} [stage]
+ * @property {boolean} [across]
  */
-export function openItem(gate, type, pr) {
-  return gate.state.attention.find(
-    (item) => item.type === type && Number(item.pr) === pr && !item.resolved_at,
-  )
+
+/**
+ * True when the item is the one of this key.
+ * @param {AttentionItem} item
+ * @param {AttentionKey} key
+ * @returns {boolean}
+ */
+function isItemOf(item, { type, pr, stage = null, across = false }) {
+  if (item.type !== type) return false
+  if (type !== 'repeated-failure') return Number(item.pr) === pr
+  if ((item.stage ?? null) !== stage || Boolean(item.across) !== across) return false
+  return across || Number(item.pr) === pr
 }
 
 /**
- * Open an attention item, or update the text of the open item of this type for the pull request.
- * Prints the attention line when the item opens or its text changes; a secret item that opens
- * also notifies (G26).
+ * The open item of this key, or undefined.
+ * @param {Gate} gate
+ * @param {AttentionKey} key
+ * @returns {AttentionItem | undefined}
+ */
+export function openItem(gate, key) {
+  return gate.state.attention.find((item) => !item.resolved_at && isItemOf(item, key))
+}
+
+/**
+ * Open an attention item, or update the text of the open item of its key. Prints the attention
+ * line when the item opens or its text changes; a secret item that opens also notifies (G26).
  * @param {Gate} gate
  * @param {Notifier} notifier
- * @param {{ type: string, pr: number, todo: string }} raised
+ * @param {AttentionKey & { todo: string }} raised `stage` and `across` count for a repeated
+ *   failure only.
  * @returns {Promise<{ item: AttentionItem, opened: boolean }>}
  */
-export async function raiseAttention(gate, notifier, { type, pr, todo }) {
-  const open = openItem(gate, type, pr)
+export async function raiseAttention(gate, notifier, { todo, ...key }) {
+  const open = openItem(gate, key)
   if (open) {
     if (open.todo !== todo) {
       open.todo = todo
@@ -72,8 +97,13 @@ export async function raiseAttention(gate, notifier, { type, pr, todo }) {
     }
     return { item: open, opened: false }
   }
+  const { type, pr } = key
   /** @type {AttentionItem} */
   const item = { type, pr, since: gate.ctx.clock.now().toISOString(), todo, resolved_at: null }
+  if (type === 'repeated-failure') {
+    item.stage = key.stage ?? null
+    if (key.across) item.across = true
+  }
   gate.state.attention.push(item)
   gate.ctx.out.line(attentionLine(item))
   if (type === 'secret') await notifySecret(gate, notifier, item)
@@ -87,13 +117,40 @@ export async function raiseAttention(gate, notifier, { type, pr, todo }) {
  * @returns {AttentionItem[]} The items it closed.
  */
 export function closeAttention(gate, { pr, types, why }) {
-  const at = gate.ctx.clock.now().toISOString()
-  const closed = gate.state.attention.filter(
-    (item) => types.includes(item.type) && Number(item.pr) === pr && !item.resolved_at,
+  return closeItems(gate, (item) => types.includes(item.type) && Number(item.pr) === pr, why)
+}
+
+/**
+ * Close the open repeated failure items that a pass of this stage closes (9.6): those of the pull
+ * request for the stage, and those for the stage that ran across queue items.
+ * @param {Gate} gate
+ * @param {{ pr: number, stage: string, why: string }} passed
+ * @returns {AttentionItem[]} The items it closed.
+ */
+export function closeOnPass(gate, { pr, stage, why }) {
+  return closeItems(
+    gate,
+    (item) =>
+      item.type === 'repeated-failure' &&
+      (item.stage ?? null) === stage &&
+      (item.across === true || Number(item.pr) === pr),
+    why,
   )
+}
+
+/**
+ * Close the open items that `which` selects, each with a line that says why.
+ * @param {Gate} gate
+ * @param {(item: AttentionItem) => boolean} which
+ * @param {string} why
+ * @returns {AttentionItem[]}
+ */
+function closeItems(gate, which, why) {
+  const at = gate.ctx.clock.now().toISOString()
+  const closed = gate.state.attention.filter((item) => !item.resolved_at && which(item))
   for (const item of closed) {
     item.resolved_at = at
-    gate.line(`#${pr}: the ${item.type} attention item is closed: ${why}`)
+    gate.line(`#${item.pr}: the ${item.type} attention item is closed: ${why}`)
   }
   return closed
 }

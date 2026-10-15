@@ -147,14 +147,15 @@ export async function noKeepAwake() {
 }
 
 /**
- * Wait until `check` returns a truthy value, looking every 10 ms.
+ * Wait until `check` returns a truthy value, looking every 10 ms. The wait is long, so that a
+ * loaded machine does not fail a test; it only delays the report of a real failure.
  * @template T
  * @param {() => T | Promise<T>} check
  * @param {string} what
  * @param {number} [timeoutMs]
  * @returns {Promise<T>}
  */
-export async function until(check, what, timeoutMs = 10_000) {
+export async function until(check, what, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const value = await check()

@@ -17,8 +17,9 @@
 
 import { join } from 'node:path'
 import { runAcceptanceTests, runCheck } from '../../core/project/index.js'
-import { parseTaskBlock } from '../../core/tasks/index.js'
-import { inlineCode } from './comment.js'
+import { readText } from '../../core/state/index.js'
+import { toTask, writtenByTeam } from '../../core/tasks/index.js'
+import { codeSpan, cutText, inlineCode } from './comment.js'
 import { namedFlakyTests } from './flaky.js'
 import {
   IN_MAIN_CHECKOUT,
@@ -38,7 +39,6 @@ import {
   openScratch,
   projectEnv,
 } from './scratch.js'
-import { readText } from './state.js'
 
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { ProjectRun } from '../../core/project/index.js' */
@@ -90,7 +90,7 @@ export async function mergeTestStage(run) {
         result: 'needs-owner',
         labels: ['needs-owner'],
         reason: `the merge of the head with main conflicts in ${count(merge.conflicts.length, 'file', 'files')}, although stage 6 found no conflict:`,
-        details: capped(merge.conflicts.map((file) => `\`${file}\``)),
+        details: capped(merge.conflicts.map(codeSpan)),
         next: `the author resolves the conflicts: ${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session merges main, resolves the conflicts in its files and runs \`hackwin ship\` (9.3).`,
         note: `merge test: conflict in ${count(merge.conflicts.length, 'file', 'files')}`,
       }
@@ -173,7 +173,9 @@ async function mainInstall(run, { timeoutMs, env }) {
 
 /**
  * The acceptance tests of the task the pull request names, read again from its issue: the block
- * may have changed since stage 2.
+ * may have changed since stage 2. The issue goes through `toTask`, so the rule of #74 holds here
+ * as in stage 2: an issue that no member of the team wrote is no task, also under a configuration
+ * of main that changed since (A17).
  * @param {PullRun} run
  * @returns {Promise<string[] | Failure | typeof STOP>}
  */
@@ -182,21 +184,28 @@ async function acceptanceTests(run) {
   if (task === null) throw new Error('stage 7 runs only after stage 2 found the task')
   const issue = await retrying(run, 'stage 7, merge test', () => gate.ctx.github.getIssue(task))
   if (issue === STOP) return STOP
-  const parsed = issue === null ? null : parseTaskBlock(issue.body, run.config)
-  if (parsed !== null && parsed.isTask && parsed.valid) return parsed.block.acceptance_tests
+  const parsed = issue === null ? null : toTask(issue, run.config)
+  if (parsed?.valid && parsed.block) return parsed.block.acceptance_tests
+  const outsider = issue !== null && !writtenByTeam(issue, run.config)
   const why =
-    parsed === null
+    issue === null
       ? 'does not exist'
-      : parsed.isTask && !parsed.valid
-        ? `has no valid task block: ${parsed.errors.join('; ')}`
-        : 'has no task block'
+      : outsider
+        ? `was written by ${issue.author ?? 'an unknown account'}, who is not a member of the team in hackwin.yml, so it is no task`
+        : parsed === null
+          ? 'has no task block'
+          : `has no valid task block: ${parsed.errors.join('; ')}`
   return {
     result: 'failed',
     labels: [],
     reason: `the task #${task} ${why}, so the Gate does not know its acceptance tests (8.1)`,
     details: [],
-    next: `ask the Lead to fix the task block of #${task}, then to type \`retry ${run.pr}\` in the Gate terminal`,
-    note: 'merge test: no valid task block',
+    next: outsider
+      ? `the author asks the Lead for a task, an issue that the Lead or a member of the team writes, and edits the body to name it; then the Lead types \`retry ${run.pr}\` in the Gate terminal`
+      : `ask the Lead to fix the task block of #${task}, then to type \`retry ${run.pr}\` in the Gate terminal`,
+    note: outsider
+      ? 'merge test: the task was not written by a member'
+      : 'merge test: no valid task block',
   }
 }
 
@@ -253,9 +262,7 @@ function commandFailure(run, { name, outcome, file, named, attempts }) {
       : outcome.code === null
         ? 'ended by a signal'
         : `exit ${outcome.code}`,
-    tail: withoutSecrets(outcome.tail, run.config).map((line) =>
-      line.length > MAX_LINE ? `${line.slice(0, MAX_LINE)}…` : line,
-    ),
+    tail: withoutSecrets(outcome.tail, run.config).map((line) => cutText(line, MAX_LINE)),
     file: `.git/hackwin/gate/${file}`,
   }
   const fix = `${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session merges main, fixes it and runs \`hackwin ship\``
@@ -307,7 +314,7 @@ function missingTests(run, missing) {
     result: 'failed',
     labels: [],
     reason: `the task #${run.task} names ${count(missing.length, 'acceptance test that is', 'acceptance tests that are')} no file of the merge of the head with main, and every entry of \`acceptance_tests\` is a file path (T5):`,
-    details: capped(missing.map((path) => `\`${path}\``)),
+    details: capped(missing.map(codeSpan)),
     next: `the author adds the tests: ${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session writes them and runs \`hackwin ship\`. If the task block names the wrong files, the Lead fixes it and types \`retry ${run.pr}\` in the Gate terminal.`,
     note: 'merge test: acceptance tests missing',
   }

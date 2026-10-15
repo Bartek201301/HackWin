@@ -20,15 +20,17 @@
 // parent is not the main that stage 7 tested, since GitHub merges onto the main it has, and runs
 // `commands.smoke` on the new main when it is set. A failed smoke test raises a repeated failure
 // attention item (A42); the fix arrives as a separate small pull request (G19). So does a fetch of
-// main that fails, which leaves both unchecked. A run that stops after the merge, at `quit` or a
-// crash, takes up again at stage 10 without merging a second time.
+// main that fails, which leaves both unchecked. These items close when a later smoke test
+// passes. A run that stops after the merge, at `quit` or a crash, takes up again at stage 10
+// without merging a second time, and writes no second digest line of the merge.
 
 import { join } from 'node:path'
 import { readProtection } from '../../core/protection/index.js'
 import { RemoteError, execShell } from '../../core/runtime/index.js'
 import { parseBranch, setTaskStatus, toTask } from '../../core/tasks/index.js'
 import { CLOSED_WITH_THE_PULL, closeAttention, raiseAttention } from './attention.js'
-import { inlineCode } from './comment.js'
+import { codeSpan, inlineCode } from './comment.js'
+import { hasMergedLine } from './digest.js'
 import {
   REPEAT,
   STOP,
@@ -46,11 +48,18 @@ import {
   withoutSecrets,
   writeDigest,
 } from './pulls.js'
+import { forgetPull } from './repeated.js'
 import { closeScratch, installInScratch, installKey, openScratch, projectEnv } from './scratch.js'
 
 /** @import { PullRequest } from '../../core/github/index.js' */
 /** @import { Failure } from './pulls.js' */
 /** @import { PullRun } from './stages.js' */
+
+/**
+ * The key of the repeated failure items about main after a merge: no stage's pass closes them,
+ * only a later smoke test that passes.
+ */
+const SMOKE = 'smoke'
 
 /**
  * Stage 9: when main moved since the merge test, stages 6 and 7 run again (G20).
@@ -222,7 +231,7 @@ function refusal(run, refused, admin) {
     result: 'failed',
     labels: [],
     reason: `GitHub refused the merge of head \`${run.sha}\`${admin ? ' with `--admin`' : ''} (\`merge-refused\`)${said.length > 0 ? '. It answered:' : ''}`,
-    details: said.map((line) => inlineCode(line)),
+    details: said.map(codeSpan),
     next: `the Lead reads the answer; once what GitHub refused is fixed, the Lead types \`retry ${run.pr}\` in the Gate terminal. The Gate tested this head, so the author changes nothing unless the answer names the pull request.`,
     note: 'merge-refused',
   }
@@ -271,6 +280,7 @@ export async function afterMergeStage(run) {
     if (closed === STOP) return STOP
   }
   closeAttention(gate, { pr, types: CLOSED_WITH_THE_PULL, why: 'the pull request is merged' })
+  forgetPull(gate, pr)
   await closeScratch(gate)
   await gate.git.run(['update-ref', '-d', pullRef(pr)], { allowFailure: true })
 
@@ -278,19 +288,21 @@ export async function afterMergeStage(run) {
   record.stage = 'after-merge'
   leaveQueue(gate.state, pr)
   const merge = pull?.mergeCommitSha ?? null
-  await writeDigest(gate, {
-    time: now.toISOString(),
-    pr,
-    author: run.author ?? pull?.author ?? '-',
-    result: 'merged',
-    stage: 'after-merge',
-    duration: duration(now.getTime() - run.startedAt),
-    note: [
-      merge ? `merge commit ${merge.slice(0, 12)}` : 'merged',
-      ...(record.ci_reruns > 0 ? [count(record.ci_reruns, 'CI rerun', 'CI reruns')] : []),
-      ...(run.reruns > 0 ? [count(run.reruns, 'merge test rerun', 'merge test reruns')] : []),
-    ].join('; '),
-  })
+  if (!(await hasMergedLine(gate.files.digest, pr))) {
+    await writeDigest(gate, {
+      time: now.toISOString(),
+      pr,
+      author: run.author ?? pull?.author ?? '-',
+      result: 'merged',
+      stage: 'after-merge',
+      duration: duration(now.getTime() - run.startedAt),
+      note: [
+        merge ? `merge commit ${merge.slice(0, 12)}` : 'merged',
+        ...(record.ci_reruns > 0 ? [count(record.ci_reruns, 'CI rerun', 'CI reruns')] : []),
+        ...(run.reruns > 0 ? [count(run.reruns, 'merge test rerun', 'merge test reruns')] : []),
+      ].join('; '),
+    })
+  }
   await gate.save()
   await checkMain(run, merge)
 }
@@ -351,6 +363,7 @@ async function checkMain(run, merge) {
     await raiseAttention(gate, run.tools.notifier, {
       type: 'repeated-failure',
       pr,
+      stage: SMOKE,
       todo: `main was not fetched after the merge of #${pr} (${why}), so the Gate did not check that the merge commit has the tested main as its first parent${smokes ? ' and did not run the smoke test' : ''}; fetch main and check it`,
     })
     await gate.save()
@@ -363,6 +376,7 @@ async function checkMain(run, merge) {
       await raiseAttention(gate, run.tools.notifier, {
         type: 'repeated-failure',
         pr,
+        stage: SMOKE,
         todo: `#${pr} was merged onto main ${parent.slice(0, 12)}, not onto ${run.main.slice(0, 12)}, which the Gate tested: main moved between stage 9 and the merge, and GitHub cannot pin the base of a merge; the merge commit ${merge.slice(0, 12)} is untested, so check main${smokes ? ' (the smoke test runs on it)' : ''}`,
       })
       await gate.save()
@@ -433,6 +447,7 @@ async function smoke(run, main, command) {
     await raiseAttention(gate, run.tools.notifier, {
       type: 'repeated-failure',
       pr,
+      stage: SMOKE,
       todo: `the smoke test ${inlineCode(command)} failed on main ${main.slice(0, 12)} after the merge of #${pr} (${outcome.what}; the log is .git/hackwin/gate/${logs}-smoke.log); write a task for the fix, which arrives as a separate small pull request`,
     })
   }

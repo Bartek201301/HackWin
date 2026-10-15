@@ -25,7 +25,7 @@ import { cp, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createMatcher } from '../../core/config/index.js'
 import { runInstall } from '../../core/project/index.js'
-import { parseJson, readText, writeAtomic } from './state.js'
+import { parseJson, readText, writeAtomic } from '../../core/state/index.js'
 
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { Git } from '../../core/git/index.js' */
@@ -154,6 +154,22 @@ export async function closeScratch(gate) {
   await gate.git.run(['worktree', 'remove', '--force', path], { allowFailure: true })
   await rm(path, { recursive: true, force: true })
   await gate.git.run(['worktree', 'prune'], { allowFailure: true })
+}
+
+/**
+ * At a start, remove what a Gate that stopped during a run left: the scratch worktree, which the
+ * next merge test or smoke test builds again (7.5 step 5), and the half made copies in the
+ * install cache.
+ * @param {Gate} gate
+ * @returns {Promise<boolean>} True when a scratch worktree was there.
+ */
+export async function recoverScratch(gate) {
+  const path = join(gate.files.worktrees, SCRATCH)
+  const listed = (await gate.git.worktreeList()).some((worktree) => worktree.path === path)
+  const left = listed || (await readdir(path).catch(() => null)) !== null
+  await closeScratch(gate)
+  await prune(gate)
+  return left
 }
 
 /**
