@@ -3,8 +3,7 @@
 // A stage returns nothing when it passes, a Failure when the run fails there, or STOP when the
 // run ends without a result: after `quit`, or when intake took the pull request away from it.
 
-import { rolesOf, scopeCheck } from '../../core/config/index.js'
-import { createMatcher } from '../../core/config/glob.js'
+import { createMatcher, rolesOf, scopeCheck } from '../../core/config/index.js'
 import { RemoteError } from '../../core/runtime/index.js'
 import { formatFinding } from '../../core/secrets/index.js'
 import { checkTaskLink } from '../../core/tasks/index.js'
