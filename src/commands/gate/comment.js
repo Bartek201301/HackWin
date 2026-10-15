@@ -88,18 +88,29 @@ export function latestGateComment(comments, { pr, lead }) {
 }
 
 /**
+ * The command of a failed step and the last lines of its log, for the comment of stage 7 (9.2).
+ * @typedef {object} CommentLog
+ * @property {string} command The command line that ran.
+ * @property {string} outcome How it ended, such as `exit 1`.
+ * @property {string[]} tail The last lines of its output.
+ * @property {string | null} file Where the full log is, relative to the Gate's directory.
+ */
+
+/**
  * The body of the comment of a failed run (G21): the marker, then the stage, the reason with its
- * details, and the next action.
+ * details and, for a failed command, the command and the last lines of its log, then the next
+ * action.
  * @param {object} comment
  * @param {GateMarker} comment.marker
  * @param {string} comment.title The stage, as the comment names it: `stage 3, scope`.
  * @param {string} comment.reason
  * @param {string[]} [comment.details] One list item each.
+ * @param {CommentLog} [comment.log]
  * @param {string} comment.next The next action.
  * @param {string | null} [comment.main] The main commit the run tested against.
  * @returns {string}
  */
-export function failureComment({ marker, title, reason, details = [], next, main = null }) {
+export function failureComment({ marker, title, reason, details = [], log, next, main = null }) {
   const tested = main === null ? '' : `, tested against main \`${main}\``
   return [
     formatGateMarker(marker),
@@ -107,10 +118,57 @@ export function failureComment({ marker, title, reason, details = [], next, main
     '',
     `**Reason:** ${reason}`,
     ...(details.length === 0 ? [] : ['', ...details.map((detail) => `- ${detail}`)]),
+    ...(log ? ['', ...logLines(log)] : []),
     '',
     `**Next action:** ${next}`,
     '',
     `Head \`${marker.sha}\`${tested}.`,
     '',
   ].join('\n')
+}
+
+/**
+ * The command, the last lines of its log in a code block, and where the full log is. The fence is
+ * longer than any run of backticks in the log, so no log line ends it, and a mention or a link in
+ * the log stays text.
+ * @param {CommentLog} log
+ * @returns {string[]}
+ */
+function logLines({ command, outcome, tail, file }) {
+  const longest = Math.max(0, ...tail.map((line) => Math.max(0, ...runsOf(line, '`'))))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return [
+    `**Command:** ${inlineCode(command)}, ${outcome}. The last ${tail.length === 1 ? 'line' : `${tail.length} lines`} of its log:`,
+    '',
+    `${fence}text`,
+    ...tail,
+    fence,
+    ...(file === null
+      ? []
+      : [
+          '',
+          `The full log stays on the Lead's laptop, in the Gate's directory: ${inlineCode(file)}.`,
+        ]),
+  ]
+}
+
+/**
+ * The lengths of the runs of a character in a text.
+ * @param {string} text
+ * @param {string} char
+ * @returns {number[]}
+ */
+function runsOf(text, char) {
+  return [...text.matchAll(new RegExp(`\\${char}+`, 'g'))].map((match) => match[0].length)
+}
+
+/**
+ * Text as inline code, with a fence longer than any run of backticks inside it.
+ * @param {string} text
+ * @returns {string}
+ */
+export function inlineCode(text) {
+  const fence = '`'.repeat(Math.max(0, ...runsOf(text, '`')) + 1)
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : ''
+  return `${fence}${pad}${text}${pad}${fence}`
 }

@@ -498,6 +498,11 @@ function headerLines({ gate, status, awake, pid, pipeline }) {
     `status issue: ${issue === null ? 'not created yet' : `#${issue.number} ${issue.url}`}`,
     `keep awake: ${awake.active ? awake.command : 'off'}`,
   ]
+  if (protection.rules.updateRestricted) {
+    lines.push(
+      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
+    )
+  }
   if (gated.migrations.length === 0 && gated.production_config.length === 0) {
     lines.push(
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',

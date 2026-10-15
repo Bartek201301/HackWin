@@ -318,8 +318,9 @@ describe('1.6a/header: the header of a starting Gate', () => {
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
     )
     expect(header).toContain(
-      'notice: stages 7 to 11 are not built yet: a pull request that passes stage 6 waits at the head of the queue',
+      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
     )
+    expect(header.filter((line) => line.includes('not built yet'))).toEqual([])
     expect(header).not.toContain(
       'notice: the pipeline is not built yet: this Gate polls, but takes no pull request',
     )

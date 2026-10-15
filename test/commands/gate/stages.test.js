@@ -89,7 +89,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     })
     const pr = await s.openPull({ branch: 'task/92-shared-deploy', author: LEAD, task: 92 })
     await s.start()
-    await s.until(() => s.out.includes(`#${pr} passed stages 1 to 6 with head ${head}`), 'the run')
+    await s.until(() => s.out.includes(`#${pr} passed stages 1 to 7 with head ${head}`), 'the run')
     expect(s.out).toContain(
       `ATTENTION production-config #${pr}: review the production config change in deploy/prod.env.yml and apply it by hand outside HackWin, then record it in docs/ledger.md; the Gate tests and merges the pull request like any other`,
     )
@@ -98,7 +98,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     await s.quit()
     expect(s.state().prs[String(pr)]).toMatchObject({
       gated: ['production_config'],
-      stage: 'conflicts',
+      stage: 'ci',
       result: null,
     })
     expect(s.state().attention).toEqual([
@@ -191,7 +191,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     })
     await s.poll()
     await s.until(
-      () => s.out.includes(`#${pr} passed stages 1 to 6 with head ${second}`),
+      () => s.out.includes(`#${pr} passed stages 1 to 7 with head ${second}`),
       'the run of the new head',
     )
     await s.quit()

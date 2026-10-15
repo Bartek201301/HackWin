@@ -58,7 +58,7 @@ describe('AC26: a pull request that adds a line matching a secret pattern', () =
     })
     const ahead = await s.openPull({ branch: 'task/40-counter-step', author: BUILDER1, task: 40 })
     await s.start()
-    await s.until(() => s.out.includes(`#${ahead} passed stages 1 to 6`), 'the pull request ahead')
+    await s.until(() => s.out.includes(`#${ahead} passed stages 1 to 7`), 'the pull request ahead')
 
     const { branch, head, pr } = await todosPull(s, 42, {
       'src/features/todos/config.js': `export const url = 'https://example.invalid'\nexport const token = '${githubToken}'\n`,
@@ -181,7 +181,7 @@ describe('AC79: a secret attention item raises one operating system notification
       task: 50,
     })
     await s.start()
-    await s.until(() => s.out.includes(`#${migration} passed stages 1 to 6`), 'the three runs')
+    await s.until(() => s.out.includes(`#${migration} passed stages 1 to 7`), 'the three runs')
 
     expect(s.notifications).toEqual([
       {
