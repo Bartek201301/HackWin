@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Shared follow-up 2: reset retries, shared task constants, contracts and plan (PR #63, issue #60)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/60-shared-follow-up-2`, created by the integrator from `f5052ab`; the session fast-forwarded it to `653bb8c` before its first change. Its session was opened by `lead-55`. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `32614de`, on `653bb8c`; PR #63 opened at 00:09:04 UTC, and CI passed. A second commit, `032acad`, did items 6 and 7 of the scope change posted after the PR was open. Item 6 is done; item 7 (contracts 4.4, `enforceVersion` no longer for the hooks) moved to a later task, because #62 is not merged.
+  - `lead-55` sent `merge #63` with the head SHA by SendMessage. Its review:
+    - The reset treats a 404, and the 422 "Reference does not exist" for a branch, as already gone. It retries a call without an HTTP status, or with a 5xx, up to 4 times, and keeps a failed run's log and full error.
+    - `WAITING_LABELS` and `SCOPE_CHANGE` are in `src/core/tasks`, and contracts 4.5 names the lane copies.
+    - Contracts 3.6 and 5.6 and plan sections 7 and 8 match what was agreed.
+    - `hasManifest` of `runInstall` and `generatedFileCheck` use the `env` option, and a test shows that the given environment reaches git while `process.env` does not.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 12 files inside issue #60's paths; no secret pattern; no conflict with `653bb8c`. Step 6, with the PR merged into `653bb8c`: `npm test` passed 617 of 617, and `npm run test:ac` passed 1.3d/reset (4), 1.3b/labels (3) and 1.3c/project (5). The two inspection criteria held: contracts 5.6 names #57, and plan section 8 lets `lead-55` say "close the day" while section 7 records the terminal tabs. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - Two scope changes reached the issue after the session had read it: item 5 after the start, items 6 and 7 after the PR was open. `lead-55` announced each by SendMessage; without those messages the session would have missed them.
+  - The issue cited the lines of PR #58's head; after the merge of #58 the two constants of `session-start.js` are on lines 37 and 40.
+  - The new reset never ran against real GitHub.
+  - With `env`, the git calls of `generatedFileCheck` drop settings that the caller's git kept in its own environment. No caller in `src` passes `env` yet; #62 will, with the same environment without the token.
+  - The load average was 36.10 before the first `npm test` and 3.82 before the second; nothing timed out.
+- Measured: PR open 7 min 21 s (00:09:04 to 00:16:25 UTC); 2 commits, 2 PR runs (74 s on `32614de`, 79 s on `032acad`), 0 conflicts; local merge test `npm test` 50.01 s; the run on main after the merge 71 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/63; head `032acad`; merge commit `3b9083a`; runs `38658356780` and `38658742930` (PR) and `38659078471` (main).
+
 ### 2026-10-14 · Phase 1 · Step 1.4c, Claude Code settings, hooks and command wrappers (PR #58, issue #10)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/10-claude-code-settings-hooks`, created by the integrator from `4454ab8` after the merges of #47 and #51. Its first commit sits on `53f9ba9`. The integrator's planning session for the merge.
