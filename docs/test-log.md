@@ -17,6 +17,30 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.5f, take: the Gate's comment by its marker, resume after release, worktree state (PR #68, issue #57)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/57-take-gate-comment-marker`, created by the integrator from `58fde88` after the merge of #64; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `3621f00`, on `58fde88`, then a merge of `origin/main` at `7924918` (`55e5604`), which brought contracts 5.7. `11a789f` changed the tests to the stage names of 5.7. PR #68 opened at 05:01:13 UTC, and CI passed.
+  - `lead-55` sent `merge #68` with the head SHA by SendMessage. Its review:
+    - `take` reads the Gate's comment with `latestGateComment`, and only when `marker.sha` is the pull request's head; otherwise the fix prompt says that the Gate has no comment on that head.
+    - AC15 checks the exact `shipLogPath`.
+    - The answer to question 8 in `docs/verification.md` quotes the permissions page word for word and leaves the trailing `*` without a space open.
+    - Accepted: the worktree plan of step 5 now runs before the claim of step 4. It only reads local git, and a detached or switched worktree exits 2 without a claim.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 10 files inside issue #57's paths (take, ship, `docs/verification.md`); no secret pattern; no conflict with `0bf16f6`. Step 6, with the PR merged into `0bf16f6` and no other vitest process: `npm test` passed 718 of 718, and `npm run test:ac` passed 1.5f/gate-comment (2), 1.5f/release-resume (3), 1.5f/worktree-state (3) and AC15 (6). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: a scope change on #14. The deny rule `Bash(gh api *pulls/*/merge*)` (`src/generate/claude-settings.js:45`) may not match `gh api -X PUT .../pulls/<N>/merge`, which ends right at `merge`; question 8 leaves that case open.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - Contracts 5.6 ("Until #57 ...") and 5.7 ("until #57 is merged ...") now describe the old behavior; kept for the next integrator task.
+  - `join` still writes its install log under `$TMPDIR/hackwin-join/` (`src/commands/join/checks.js:341`); kept for a later lane A task.
+  - The fake GitHub gives a pull request a head SHA only with `origin` or `headSha` at creation, so the AC52 fix test got `origin: fixture.origin`.
+  - The tests first used a stage name that contracts 5.7 does not list (`merge-test`).
+  - For the PRD revision, from the Lead's review:
+    - the check of 7.7 step 5 may now run before the claim of step 4;
+    - in Phase 3 a Resolver push in a failed run leaves the marker naming the run's head, so `take` would say that the Gate has no comment on the new head;
+    - `take`'s check for earlier work counts its own merge commit of `origin/main` ("2 commits" for one), and treats untracked files as work, which relies on the `.gitignore` entries `setup` writes (A13 links).
+- Measured: PR open 13 min 8 s (05:01:13 to 05:14:21 UTC); 3 commits (one a merge of `origin/main`), 1 PR run (82 s), 0 conflicts; local merge test `npm test` 105.31 s; the run on main after the merge 71 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/68; head `11a789f`; merge commit `9ab5826`; runs `38684529437` (PR) and `38685708505` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.4d, setup: questions, detection, generated files, bootstrap commit (PR #65, issue #11)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/11-setup-questions-bootstrap`, created by the integrator from `653bb8c` after the merge of #58; `lead-55` opened the session. The integrator's planning session for the merge.
