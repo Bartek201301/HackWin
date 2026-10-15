@@ -15,6 +15,7 @@ export {
   rawResult,
   FakeGitHubError,
   DEFAULT_FAKE_REPO,
+  RULESETS_NOT_OFFERED,
 } from './fake-github.js'
 export { withFixtureRepo, inspectFixtureRepo } from './fixture-repo.js'
 export {
@@ -39,6 +40,7 @@ export {
 /** @typedef {import('./fixture.js').Fixture} Fixture */
 /** @typedef {import('./fake-github.js').FakeGitHub} FakeGitHub */
 /** @typedef {import('./fake-github.js').FakeRequest} FakeRequest */
+/** @typedef {import('./fake-github.js').FakeRuleset} FakeRuleset */
 /** @typedef {import('./fixture-repo.js').FixtureRepoContext} FixtureRepoContext */
 /** @typedef {import('./reset.js').FixtureRepoState} FixtureRepoState */
 /** @typedef {import('./team.js').TeamConfig} TeamConfig */

@@ -3,16 +3,21 @@ import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 
 import { join } from 'node:path'
 import { createGit } from '../../../src/core/git/index.js'
 import {
+  CHECK_NAMES,
   gateDir,
   isGreen,
   isJoinComplete,
   latestMainSeen,
+  parseJson,
   promptPath,
   readCheckRecord,
   readLastStatus,
   readLocal,
   readMainSeen,
+  readText,
+  shipLogPath,
   statePaths,
+  writeAtomic,
   writeCheckRecord,
   writeLastStatus,
   writeLocal,
@@ -65,10 +70,24 @@ describe('1.3c/state: the records under <git-common-dir>/hackwin/', () => {
       sessions: '/repo/.git/hackwin/sessions',
       prompts: '/repo/.git/hackwin/prompts',
       gate: '/repo/.git/hackwin/gate',
+      logs: '/repo/.git/hackwin/logs',
     })
     expect(promptPath(dir, 12)).toBe('/repo/.git/hackwin/prompts/12.md')
     expect(gateDir(dir)).toBe('/repo/.git/hackwin/gate')
     expect(() => promptPath(dir, 0)).toThrow(TypeError)
+  })
+
+  test('the logs of ship lie under the git common directory, one directory per task', () => {
+    const dir = '/repo/.git'
+    expect(shipLogPath(dir, 12, 'check')).toBe('/repo/.git/hackwin/logs/ship/12/check.log')
+    expect(shipLogPath(dir, 12, 'acceptance')).toBe(
+      '/repo/.git/hackwin/logs/ship/12/acceptance.log',
+    )
+    expect(shipLogPath('/repo/.git/worktrees/../', 3, 'check')).toBe(
+      '/repo/.git/hackwin/logs/ship/3/check.log',
+    )
+    expect(() => shipLogPath(dir, 0, 'check')).toThrow(TypeError)
+    expect(() => shipLogPath(dir, 12, '../check')).toThrow(TypeError)
   })
 
   test('local.yml round-trips, and join is complete only with the record and the same login', async () => {
@@ -118,6 +137,57 @@ describe('1.3c/state: the records under <git-common-dir>/hackwin/', () => {
       TypeError,
     )
     expect(await readCheckRecord(dir, '../../x')).toBeNull()
+  })
+
+  test('a green record holds every check that ship records, each passed, generated also skipped (E4)', () => {
+    expect(CHECK_NAMES).toEqual(['scope', 'secrets', 'format', 'generated', 'check', 'acceptance'])
+    const green = { schema: 1, ...checkRecord(SHA_A) }
+    expect(isGreen(green, SHA_A)).toBe(true)
+    const withChecks = (/** @type {any[]} */ checks) => ({ ...green, checks })
+
+    // A record that lacks one of the six checks is not green, whichever is missing.
+    for (const name of CHECK_NAMES) {
+      const without = withChecks(green.checks.filter((check) => check.name !== name))
+      expect(isGreen(without, SHA_A), name).toBe(false)
+    }
+    expect(isGreen(withChecks([{ name: 'scope', result: 'passed' }]), SHA_A)).toBe(false)
+    expect(isGreen(withChecks([]), SHA_A)).toBe(false)
+
+    // Only generated may be skipped.
+    const passed = green.checks.map((check) => ({ ...check, result: 'passed' }))
+    expect(isGreen(withChecks(passed), SHA_A)).toBe(true)
+    for (const name of CHECK_NAMES.filter((own) => own !== 'generated')) {
+      const skipped = passed.map((check) =>
+        check.name === name ? { ...check, result: 'skipped' } : check,
+      )
+      expect(isGreen(withChecks(skipped), SHA_A), name).toBe(false)
+    }
+
+    // A failed or unknown result fails, also for a check outside the six.
+    const extraFailed = [...passed, { name: 'smoke', result: 'failed' }]
+    expect(isGreen(withChecks(extraFailed), SHA_A)).toBe(false)
+    expect(isGreen(withChecks([...passed, { name: 'smoke', result: 'passed' }]), SHA_A)).toBe(true)
+    expect(isGreen(withChecks([...passed.slice(1), null]), SHA_A)).toBe(false)
+  })
+
+  test('the file helpers: an atomic write, a read that is null for a missing file, and a lenient JSON parse', async () => {
+    const dir = commonDir()
+    const file = join(dir, 'hackwin', 'gate', 'state.json')
+    expect(await readText(file)).toBeNull()
+    expect(await readText(join(dir, 'missing', 'deeper'))).toBeNull()
+
+    await writeAtomic(file, '{"schema": 1}\n')
+    expect(await readText(file)).toBe('{"schema": 1}\n')
+    expect(readdirSync(join(dir, 'hackwin', 'gate'))).toEqual(['state.json'])
+    await writeAtomic(file, 'replaced\n')
+    expect(await readText(file)).toBe('replaced\n')
+    // A file on the path of another file, and a directory, read as missing.
+    expect(await readText(join(file, 'inside'))).toBeNull()
+    expect(await readText(join(dir, 'hackwin'))).toBeNull()
+
+    expect(parseJson('{"a": [1, 2]}')).toEqual({ a: [1, 2] })
+    expect(parseJson('not json')).toBeNull()
+    expect(parseJson('')).toBeNull()
   })
 
   test('the last main commit is kept per worktree, and the latest one of the clone is found', async () => {

@@ -34,6 +34,9 @@ import { problemsOf, readFixtureRepoState, resetFixtureRepo } from './reset.js'
 /** The accounts a scenario may act as on real GitHub. `solo` is the Lead's account. */
 const LIVE_ACCOUNTS = ['lead', 'solo', 'builder1']
 
+/** The accounts a scenario acts as when its options name none. */
+const DEFAULT_SCENARIO_ACCOUNTS = ['lead', 'builder1']
+
 /**
  * @typedef {object} FixtureRepoContext
  * @property {string} name The repository name, for example `hackwin-fixture-a`.
@@ -42,7 +45,8 @@ const LIVE_ACCOUNTS = ['lead', 'solo', 'builder1']
  * @property {string} resetSha
  * @property {'public' | 'private'} visibility
  * @property {{ lead: string, builder1: string, builder2: string, solo: string }} logins The
- *   Lead's login is read from gh.
+ *   Lead's login is read from gh; builder1's is read with its token when the scenario acts as
+ *   builder1, and is otherwise the name of `accounts.builder1`.
  * @property {string} tempDir A directory for the scenario, removed afterwards.
  * @property {string} logFile The run log.
  * @property {GuardedCall[]} calls Every gh call of the run, the refused ones included.
@@ -66,11 +70,15 @@ const LIVE_ACCOUNTS = ['lead', 'solo', 'builder1']
  * @property {string} [logFile] The run log, in place of `<stateDir>/logs/<repository>.log`.
  * @property {{ lead?: GhExecutor, builder1?: GhExecutor }} [executors] Executors in place of
  *   the real gh, for the harness's own tests against the fake GitHub.
+ * @property {string[]} [accounts] The accounts the scenario acts as, of `lead`, `solo` and
+ *   `builder1`; `['lead', 'builder1']` by default. Only these are checked before the reset, so
+ *   a scenario with `['lead']` needs only the Lead's gh login and no HACKWIN_TEST_BUILDER_TOKEN,
+ *   and acting as builder1 in it throws. The reset always runs as the Lead.
  */
 
 /**
- * Run a scenario on a fixture repository: take its lock, check the accounts, reset it, run the
- * scenario, release the lock. The scenario's result is returned.
+ * Run a scenario on a fixture repository: take its lock, check the accounts the scenario acts as
+ * and the Lead, reset it, run the scenario, release the lock. The scenario's result is returned.
  * @template T
  * @param {string} name `hackwin-fixture-a`, `-b`, `-c` or `hackwin-fixture-private`.
  * @param {(repo: FixtureRepoContext) => Promise<T>} scenario
@@ -79,6 +87,7 @@ const LIVE_ACCOUNTS = ['lead', 'solo', 'builder1']
  */
 export async function withFixtureRepo(name, scenario, options = {}) {
   const info = fixtureRepo(name)
+  const actsAs = scenarioKeys(options)
   const stateDir = options.stateDir ?? harnessStateDir()
   const release = await acquireLock(info.name, {
     dir: join(stateDir, 'locks'),
@@ -89,7 +98,7 @@ export async function withFixtureRepo(name, scenario, options = {}) {
       ),
   })
   try {
-    return await runLocked(info, stateDir, scenario, options)
+    return await runLocked(info, stateDir, scenario, options, actsAs)
   } finally {
     release()
   }
@@ -102,9 +111,10 @@ export async function withFixtureRepo(name, scenario, options = {}) {
  * @param {string} stateDir
  * @param {(repo: FixtureRepoContext) => Promise<T>} scenario
  * @param {FixtureRepoOptions} options
+ * @param {Set<'lead' | 'builder1'>} actsAs The accounts the scenario acts as.
  * @returns {Promise<T>}
  */
-async function runLocked(info, stateDir, scenario, options) {
+async function runLocked(info, stateDir, scenario, options, actsAs) {
   // The run log holds the last run on the repository; only the lock's holder writes it.
   const logFile = options.logFile ?? join(stateDir, 'logs', `${info.name}.log`)
   mkdirSync(dirname(logFile), { recursive: true })
@@ -126,15 +136,13 @@ async function runLocked(info, stateDir, scenario, options) {
 
     /** @param {string} account */
     const keyOf = (account = 'lead') => {
-      if (account === 'builder2') {
+      const key = liveKey(account)
+      if (key === 'builder1' && !actsAs.has(key)) {
         throw new Error(
-          `builder2 (${accounts.builder2.login}) acts only against the fake GitHub; a live scenario that needs a second builder is named in the pull request instead`,
+          'this scenario acts only as the Lead: name builder1 in the accounts option of withFixtureRepo to act as it',
         )
       }
-      if (!LIVE_ACCOUNTS.includes(account)) {
-        throw new Error(`a live scenario acts as ${LIVE_ACCOUNTS.join(', ')}, not ${account}`)
-      }
-      return account === 'solo' ? 'lead' : account
+      return key
     }
 
     /** @param {string} key */
@@ -164,7 +172,7 @@ async function runLocked(info, stateDir, scenario, options) {
       return (clients[key] ??= createGitHub({ executor: executorOf(key), repo: info.repo }))
     }
 
-    const logins = await checkAccounts(info, github, log)
+    const logins = await checkAccounts(info, github, log, { builder1: actsAs.has('builder1') })
     const reset = () => resetFixtureRepo(github('lead'), info, { log })
     const report = await reset()
 
@@ -241,19 +249,60 @@ export async function inspectFixtureRepo(name, options = {}) {
 }
 
 /**
- * Check, before the reset, that the Lead administers the repository and that `builder1` is
- * `test-bot-builder` with write access. Every failure names the account or the variable.
+ * The account a live scenario acts as: `solo` is the Lead; builder2 never acts on real GitHub.
+ * @param {string} account
+ * @returns {'lead' | 'builder1'}
+ */
+function liveKey(account) {
+  if (account === 'builder2') {
+    throw new Error(
+      `builder2 (${accounts.builder2.login}) acts only against the fake GitHub; a live scenario that needs a second builder is named in the pull request instead`,
+    )
+  }
+  if (!LIVE_ACCOUNTS.includes(account)) {
+    throw new Error(`a live scenario acts as ${LIVE_ACCOUNTS.join(', ')}, not ${account}`)
+  }
+  return account === 'builder1' ? 'builder1' : 'lead'
+}
+
+/**
+ * The accounts a scenario acts as, from its options, with `solo` as the Lead.
+ * @param {FixtureRepoOptions} options
+ * @returns {Set<'lead' | 'builder1'>}
+ */
+function scenarioKeys(options) {
+  const named = options.accounts ?? DEFAULT_SCENARIO_ACCOUNTS
+  if (!Array.isArray(named) || named.length === 0) {
+    throw new TypeError('the accounts option of withFixtureRepo names at least one account')
+  }
+  return new Set(named.map(liveKey))
+}
+
+/**
+ * Check, before the reset, that the Lead administers the repository and, when the scenario acts
+ * as builder1, that `builder1` is `test-bot-builder` with write access. Every failure names the
+ * account or the variable.
  * @param {import('./fixture-repos.js').FixtureRepoInfo} info
  * @param {(account?: string) => GitHub} github
  * @param {(line: string) => void} log
+ * @param {{ builder1: boolean }} needed
  */
-async function checkAccounts(info, github, log) {
+async function checkAccounts(info, github, log, needed) {
   const lead = await named('the Lead (the gh login of this machine)', () => github('lead').login())
   const leadRepo = await named(`the Lead (${lead}) reading ${info.repo}`, () =>
     github('lead').repository(),
   )
   if (!leadRepo.permissions.admin) {
     throw new Error(`the Lead (${lead}) is not an admin of the fixture repository ${info.repo}`)
+  }
+  if (!needed.builder1) {
+    log(`accounts: lead ${lead} (admin); builder1 not checked, the scenario acts only as the Lead`)
+    return {
+      lead,
+      builder1: accounts.builder1.login,
+      builder2: accounts.builder2.login,
+      solo: lead,
+    }
   }
   const builder = await named(`builder1 (${accounts.builder1.login}, ${TOKEN_VARIABLE})`, () =>
     github('builder1').login(),

@@ -22,8 +22,8 @@ export const HOOKS_PATH = '.githooks'
 /**
  * @typedef {object} RemovedWorktrees
  * @property {string[]} removed The paths of the removed worktrees.
- * @property {Array<{ path: string, reason: string }>} kept The other task worktrees, with the
- *   reason each one stays.
+ * @property {Array<{ path: string, reason: string, merged: boolean }>} kept The other task
+ *   worktrees, with the reason each one stays and whether its task's pull request is merged.
  */
 
 /**
@@ -86,7 +86,8 @@ export async function taskWorktrees(git) {
 /**
  * Remove the worktree of every task whose pull request is merged (A35). The branch stays. A
  * worktree with changes or untracked files, a locked worktree and the worktree `git` runs in are
- * kept, each with its reason, and so is every task worktree whose pull request is not merged.
+ * kept, each with its reason and `merged: true`, and so is every task worktree whose pull request
+ * is not merged, with `merged: false`.
  * @param {Git} git
  * @param {GitHub} github
  * @returns {Promise<RemovedWorktrees>}
@@ -103,11 +104,11 @@ export async function removeMergedWorktrees(git, github) {
 
   for (const task of tasks) {
     if (!merged.has(task.branch)) {
-      result.kept.push({ path: task.path, reason: 'its pull request is not merged' })
+      result.kept.push({ path: task.path, reason: 'its pull request is not merged', merged: false })
     } else if (resolve(task.path) === current) {
-      result.kept.push({ path: task.path, reason: 'it is the current worktree' })
+      result.kept.push({ path: task.path, reason: 'it is the current worktree', merged: true })
     } else if (task.locked) {
-      result.kept.push({ path: task.path, reason: 'it is locked' })
+      result.kept.push({ path: task.path, reason: 'it is locked', merged: true })
     } else {
       try {
         await git.worktreeRemove(task.path)
@@ -115,7 +116,7 @@ export async function removeMergedWorktrees(git, github) {
       } catch (error) {
         const dirty = /modified or untracked/.test(error.message)
         const reason = dirty ? 'it has uncommitted changes or untracked files' : error.message
-        result.kept.push({ path: task.path, reason })
+        result.kept.push({ path: task.path, reason, merged: true })
       }
     }
   }

@@ -4,7 +4,14 @@ import { RemoteError } from '../../src/core/runtime/errors.js'
 import { createFakeClock } from '../../src/core/runtime/clock.js'
 import { LABELS, setTaskStatus } from '../../src/core/tasks/index.js'
 import { removeMergedWorktrees } from '../../src/core/worktrees/index.js'
-import { accounts, createFakeGitHub, createFixture, httpError, rawResult } from './index.js'
+import {
+  RULESETS_NOT_OFFERED,
+  accounts,
+  createFakeGitHub,
+  createFixture,
+  httpError,
+  rawResult,
+} from './index.js'
 
 const SHA_A = 'a'.repeat(40)
 const SHA_B = 'b'.repeat(40)
@@ -334,7 +341,9 @@ describe('1.3d/fake-github: the fake GitHub behind the executor seam', () => {
 
     const removal = await removeMergedWorktrees(fixture.git, lead)
     expect(removal.removed.sort()).toEqual([one.path, two.path].sort())
-    expect(removal.kept).toEqual([{ path: three.path, reason: 'its pull request is not merged' }])
+    expect(removal.kept).toEqual([
+      { path: three.path, reason: 'its pull request is not merged', merged: false },
+    ])
     fixture.cleanup()
   })
 
@@ -375,16 +384,16 @@ describe('1.3d/fake-github: the fake GitHub behind the executor seam', () => {
   test('a lane registers handlers for its own calls, and an unknown call fails by name', async () => {
     const fake = createFakeGitHub()
     const github = clientOf(fake)
-    await expect(github.api('repos/{owner}/{repo}/rulesets')).rejects.toThrow(
-      /no handler for gh api --method GET repos\/\{owner\}\/\{repo\}\/rulesets/,
+    await expect(github.api('repos/{owner}/{repo}/environments')).rejects.toThrow(
+      /no handler for gh api --method GET repos\/\{owner\}\/\{repo\}\/environments/,
     )
     expect(fake.unhandled).toHaveLength(1)
 
-    const remove = fake.on('GET repos/{owner}/{repo}/rulesets', ({ query }) => [
-      { id: 1, name: 'rules', page: query.page },
+    const remove = fake.on('GET repos/{owner}/{repo}/environments', ({ query }) => [
+      { id: 1, name: 'production', page: query.page },
     ])
-    fake.on('POST repos/{owner}/{repo}/rulesets', ({ body }) => {
-      if (!body.name) throw httpError(422, 'Validation Failed')
+    fake.on('POST repos/{owner}/{repo}/autolinks', ({ body }) => {
+      if (!body.key_prefix) throw httpError(422, 'Validation Failed')
       return { id: 2, ...body }
     })
     fake.on('run rerun', ({ args }) => rawResult({ stdout: `rerun ${args[2]}\n` }))
@@ -396,24 +405,183 @@ describe('1.3d/fake-github: the fake GitHub behind the executor seam', () => {
       assignees: [],
     }))
 
-    expect(await github.apiPages('repos/{owner}/{repo}/rulesets')).toEqual([
-      { id: 1, name: 'rules', page: '1' },
+    expect(await github.apiPages('repos/{owner}/{repo}/environments')).toEqual([
+      { id: 1, name: 'production', page: '1' },
     ])
     expect(
-      await github.api('repos/{owner}/{repo}/rulesets', { method: 'POST', body: { name: 'x' } }),
-    ).toEqual({ id: 2, name: 'x' })
+      await github.api('repos/{owner}/{repo}/autolinks', {
+        method: 'POST',
+        body: { key_prefix: 'T-' },
+      }),
+    ).toEqual({ id: 2, key_prefix: 'T-' })
     await expect(
-      github.api('repos/{owner}/{repo}/rulesets', { method: 'POST', body: {} }),
+      github.api('repos/{owner}/{repo}/autolinks', { method: 'POST', body: {} }),
     ).rejects.toMatchObject({ status: 422 })
     expect((await github.run(['run', 'rerun', '77', '--failed'])).stdout).toBe('rerun 77\n')
     expect((await github.getIssue(5))?.title).toBe('overridden')
 
     remove()
-    await expect(github.api('repos/{owner}/{repo}/rulesets')).rejects.toThrow(/no handler/)
+    await expect(github.api('repos/{owner}/{repo}/environments')).rejects.toThrow(/no handler/)
     await expect(
       github.run(['api', 'repos/{owner}/{repo}/issues', '--jq', '.[0]']),
     ).rejects.toThrow(/--jq is not supported/)
     expect(fake.calls.every((call) => call.login === accounts.lead.login)).toBe(true)
+  })
+
+  test('rule sets: listed without their rules, created, read with the bypass of the caller, updated and deleted', async () => {
+    const fake = createFakeGitHub({
+      clock: createFakeClock('2026-10-15T10:00:00Z'),
+      rulesets: [{ name: 'old', enforcement: 'disabled' }],
+    })
+    const lead = clientOf(fake)
+    const builder = clientOf(fake, accounts.builder1.login)
+    const body = {
+      name: 'hackwin-update-restriction',
+      target: 'branch',
+      enforcement: 'active',
+      conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } },
+      bypass_actors: [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }],
+      rules: [{ type: 'update', parameters: { update_allows_fetch_and_merge: false } }],
+    }
+
+    const created = await lead.api('repos/{owner}/{repo}/rulesets', { method: 'POST', body })
+    expect(created).toEqual({
+      ...body,
+      id: 2,
+      source_type: 'Repository',
+      source: fake.state.repo,
+      created_at: '2026-10-15T10:00:00Z',
+      updated_at: '2026-10-15T10:00:00Z',
+      current_user_can_bypass: 'always',
+    })
+    expect(await lead.api('repos/{owner}/{repo}/rulesets/2')).toEqual(created)
+    // The admin role is the bypass actor, so a builder with write access cannot bypass it.
+    expect(await builder.api('repos/{owner}/{repo}/rulesets/2')).toMatchObject({
+      current_user_can_bypass: 'never',
+    })
+
+    expect(
+      await lead.apiPages('repos/{owner}/{repo}/rulesets', {
+        query: { includes_parents: 'false' },
+      }),
+    ).toEqual([
+      {
+        id: 1,
+        name: 'old',
+        target: 'branch',
+        source_type: 'Repository',
+        source: fake.state.repo,
+        enforcement: 'disabled',
+        created_at: '2026-10-15T10:00:00Z',
+        updated_at: '2026-10-15T10:00:00Z',
+      },
+      expect.objectContaining({ id: 2, name: 'hackwin-update-restriction', enforcement: 'active' }),
+    ])
+    expect((await lead.apiPages('repos/{owner}/{repo}/rulesets'))[1]).not.toHaveProperty('rules')
+
+    // Only the active rule sets that target the branch give its rules.
+    expect(await lead.apiPages('repos/{owner}/{repo}/rules/branches/main')).toEqual([
+      {
+        type: 'update',
+        parameters: { update_allows_fetch_and_merge: false },
+        ruleset_source_type: 'Repository',
+        ruleset_source: fake.state.repo,
+        ruleset_id: 2,
+      },
+    ])
+    expect(await lead.apiPages('repos/{owner}/{repo}/rules/branches/task/1-x')).toEqual([])
+
+    for (const invalid of [
+      { ...body, name: '' },
+      { ...body, enforcement: 'on' },
+    ]) {
+      await expect(
+        lead.api('repos/{owner}/{repo}/rulesets', { method: 'POST', body: invalid }),
+      ).rejects.toMatchObject({ status: 422 })
+    }
+
+    // An update changes only the fields it names, as `-f enforcement=disabled` does (E1).
+    const disabled = await lead.api('repos/{owner}/{repo}/rulesets/2', {
+      method: 'PUT',
+      body: { enforcement: 'disabled' },
+    })
+    expect(disabled).toEqual({ ...created, enforcement: 'disabled' })
+    expect(await lead.apiPages('repos/{owner}/{repo}/rules/branches/main')).toEqual([])
+    await expect(
+      lead.api('repos/{owner}/{repo}/rulesets/2', { method: 'PUT', body: { enforcement: 'on' } }),
+    ).rejects.toMatchObject({ status: 422 })
+    await expect(
+      lead.api('repos/{owner}/{repo}/rulesets/9', { method: 'PUT', body: { name: 'x' } }),
+    ).rejects.toMatchObject({ status: 404 })
+
+    expect(await lead.api('repos/{owner}/{repo}/rulesets/2', { method: 'DELETE' })).toBeNull()
+    await expect(lead.api('repos/{owner}/{repo}/rulesets/2')).rejects.toMatchObject({
+      status: 404,
+    })
+    await expect(
+      lead.api('repos/{owner}/{repo}/rulesets/2', { method: 'DELETE' }),
+    ).rejects.toMatchObject({ status: 404 })
+    expect(fake.state.rulesets.map((ruleset) => ruleset.name)).toEqual(['old'])
+    expect(fake.addRuleset({ name: 'later' }).id).toBe(3)
+    expect(fake.unhandled).toEqual([])
+  })
+
+  test('rule sets where GitHub offers none: every request answers HTTP 403', async () => {
+    const fake = createFakeGitHub({ visibility: 'private', rulesetsOffered: false })
+    const lead = clientOf(fake)
+    for (const call of [
+      () => lead.api('repos/{owner}/{repo}/rulesets'),
+      () => lead.api('repos/{owner}/{repo}/rulesets', { method: 'POST', body: { name: 'x' } }),
+      () => lead.api('repos/{owner}/{repo}/rulesets/1'),
+      () => lead.api('repos/{owner}/{repo}/rulesets/1', { method: 'PUT', body: { name: 'x' } }),
+      () => lead.api('repos/{owner}/{repo}/rulesets/1', { method: 'DELETE' }),
+      () => lead.api('repos/{owner}/{repo}/rules/branches/main'),
+    ]) {
+      const error = await call().catch((caught) => caught)
+      expect(error).toBeInstanceOf(RemoteError)
+      expect(error).toMatchObject({ status: 403 })
+      expect(error.message).toContain(RULESETS_NOT_OFFERED)
+    }
+  })
+
+  test('a pull request from a fork reports its head repository; a deleted fork reports none', async () => {
+    const fake = createFakeGitHub({
+      branches: { main: SHA_A, 'task/12-counter': SHA_B },
+      issues: [{ number: 12, title: 'Counter' }],
+      pulls: [
+        {
+          number: 20,
+          title: 'From a fork',
+          head: 'task/12-counter',
+          headRepo: 'someone/fork',
+          headSha: 'c'.repeat(40),
+          author: accounts.builder2.login,
+          files: [],
+        },
+        { number: 21, title: 'From a deleted fork', head: 'patch-1', headRepo: null },
+      ],
+    })
+    const github = clientOf(fake, accounts.builder1.login)
+    expect(await github.getPullRequest(20)).toMatchObject({
+      headRef: 'task/12-counter',
+      headRepo: 'someone/fork',
+      // The fork's head does not follow the branch of the same name in this repository.
+      headSha: 'c'.repeat(40),
+    })
+    expect(await github.getPullRequest(21)).toMatchObject({ headRepo: null, headSha: null })
+    const raw = await github.api('repos/{owner}/{repo}/pulls/21')
+    expect(raw.head.repo).toBeNull()
+
+    // The repository's own pull request for the same branch name is no duplicate of the fork's.
+    const own = await github.createPullRequest({
+      title: 'Counter',
+      head: 'task/12-counter',
+      base: 'main',
+      body: 'Closes #12',
+    })
+    expect(own).toMatchObject({ number: 22, headRepo: fake.state.repo, headSha: SHA_B })
+    fake.find(22).pull.headRepo = 'someone/fork'
+    expect((await github.getPullRequest(22))?.headRepo).toBe('someone/fork')
   })
 
   test('another repository answers 404, and builder2 acts only here', async () => {

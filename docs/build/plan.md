@@ -17,7 +17,7 @@ One integrator and three builder lanes work in parallel on this repository, the 
 
 | Role | Owns | Does |
 | --- | --- | --- |
-| `integrator` (shared role) | Shared code, package files, CI, the test harness, docs other than `docs/verification.md` | Plans in the main checkout; builds the foundation and the integration; merges, one pull request at a time, only when the human names it (section 8); is the only session that edits `docs/test-log.md` |
+| `integrator` (shared role) | Shared code, package files, CI, the test harness, docs other than `docs/verification.md` | Plans in the main checkout; builds the foundation and the integration; merges, one pull request at a time, only when the human names it or `lead-55` sends `merge #N` after its review (sections 7 and 8); is the only session that edits `docs/test-log.md` |
 | `lane-a` | Git hooks, CI generation, Claude Code settings and hooks, `setup`, `join` | Tasks 1.4a to 1.4g |
 | `lane-b` | `take`, `ship`, the platform verification | Tasks 1.2 and 1.5a to 1.5e |
 | `lane-c` | `gate`, `status` | Tasks 1.6a to 1.6f |
@@ -39,6 +39,7 @@ Four owners never edit the same file. Each command lives in its own directory, a
 | Path | Role | Content |
 | --- | --- | --- |
 | `bin/` | integrator | The `hackwin` executable; it only calls `src/cli` |
+| `scripts/` | integrator | The scripts behind the npm scripts, such as `scripts/test-ac.js` of `npm run test:ac` (#35) |
 | `src/cli/` | integrator | Dispatcher, command registry, global flags, the runner (configuration, version check, CM10, exit codes, `--json`) |
 | `src/core/` | integrator | Shared modules: `runtime`, `git`, `github`, `config`, `tasks`, `secrets`, `state`, `worktrees`, `project`, `changes`, `protection` (section 3) |
 | `src/commands/setup/`, `src/commands/join/` | lane-a | `setup` (also `--resume`, `--regenerate`) and `join` |
@@ -165,12 +166,20 @@ Waves: 1 is 1.1, 1.2 and the foundation 1.3a to 1.3d; 2 is 1.3e and the lanes; 3
 
 1. Check that every issue in `depends_on` is closed and that no open pull request changes a file inside the task's paths (`gh pr list --state open`, then `gh pr diff <PR> --name-only`).
 2. In the main checkout, create the worktree as `AGENTS.md` says.
-3. Start a fresh session in the worktree with: "Work on issue #<N> in the worktree <absolute worktree path>, on the branch task/<N>-<slug>. Read the issue body with `gh issue view <N>`, then every comment with `gh issue view <N> --comments`, including each one that starts with "Scope change:", and follow AGENTS.md." Two commands, because in a non-interactive shell `gh issue view <N> --comments` prints only the comments and not the issue body (gh 2.88.1; observed in PRs #36, #38 and #39 and by the integrator).
+3. Start a fresh session in the worktree with: "Work on issue #<N> in the worktree <absolute worktree path>, on the branch task/<N>-<slug>. Read the issue body with `gh issue view <N>`, then every comment with `gh issue view <N> --comments`, including each one that starts with "Scope change:", and follow AGENTS.md. When you stop, send your final report to lead-55 with SendMessage as well." Two commands, because in a non-interactive shell `gh issue view <N> --comments` prints only the comments and not the issue body (gh 2.88.1; observed in PRs #36, #38 and #39 and by the integrator).
 4. The session finishes as `AGENTS.md` says and stops with the pull request number and the full head SHA.
+
+**How the build runs since 15 October 2026.**
+
+- The Lead's session, `lead-55`, reviews the pull requests and sends the sessions their messages with SendMessage.
+- After its review it sends the integrator `merge #N` with the head SHA. The human delegated this in the integrator's terminal; the integrator then runs the full procedure of section 8 as if the human had written it.
+- Every first message ends with: "When you stop, send your final report to lead-55 with SendMessage as well." The integrator sends every report to `lead-55` as well as in its own terminal.
+- A message the human writes in a session's terminal wins over one from `lead-55`.
+- A session can lose its login and then answers every message only with "Not logged in · Please run /login". Observed on 14 October 2026 at 22:32 UTC in the sessions of #19 and #12, started two days earlier. The human then runs `/login` in that session or starts a new one.
 
 ## 8. Merging
 
-Only the integrator merges, one pull request at a time, and only when the human names it. Each step runs only when every earlier step passed.
+Only the integrator merges, one pull request at a time, and only when the human names it or `lead-55` sends `merge #N` with the head SHA after its review (section 7). Each step runs only when every earlier step passed.
 
 | # | Step | How |
 | --- | --- | --- |
@@ -203,7 +212,7 @@ The human answered the open questions of the setup on 10 October 2026. Each issu
 | 1 | Deadlines | Wave 1 (1.2, 1.3a to 1.3d): `2026-10-17T23:59:00+02:00`. Wave 2 (1.3e and the lanes): `2026-11-01T23:59:00+01:00`. Wave 3 (integration): `2026-11-06T23:59:00+01:00`. 1.1 has none; PR #30 closes it | #2 to #29 |
 | 2 | Accounts | `builder1` is `test-bot-builder`. `builder2` is `maljul`, a real teammate's account used only as a name in team configurations: it is never invited to any repository and nobody acts as it on real GitHub. Every test in which `builder2` acts runs against the fake GitHub. A live test that needs a second builder says so in its pull request instead of inviting this account. The third builder of a team of four is `hackwin-test-builder3`, a name only with the same rule: it is never invited, assigned or mentioned on real GitHub, and every test in which it acts runs against the fake GitHub. GitHub answered 404 for this login on 12 October 2026 (PR #40), so nobody owns it today and anyone may register it later. `solo` is the Lead's account | #6, #13 |
 | 3 | Machine account credential | The harness reads `test-bot-builder`'s token from `HACKWIN_TEST_BUILDER_TOKEN`, which the human sets locally; 1.3a records the name in `docs/build/contracts.md`. CI of this repository holds no credential and runs only the offline suite. Tests on fixture repositories run locally | #3, #6 |
-| 4 | Repositories for tests | No repository is ever deleted, and the `delete_repo` scope is never requested. Each lane has a fixture repository, `hackwin-fixture-a`, `hackwin-fixture-b` and `hackwin-fixture-c`, plus the private `hackwin-fixture-private` for the cases where GitHub refuses protection; the integration tasks use the lane fixtures. Before a test run the harness resets a fixture: close issues and pull requests, delete labels and rules, reset `main` to the recorded commit (table below). Automated tests never touch `hackwin-sandbox`; it is for the human's live tests | #2, #6, #7, #13, #26 to #29 |
+| 4 | Repositories for tests | No repository is ever deleted, and the `delete_repo` scope is never requested. Each lane has a fixture repository, `hackwin-fixture-a`, `hackwin-fixture-b` and `hackwin-fixture-c`, plus the private `hackwin-fixture-private` for the cases where GitHub refuses protection; the integration tasks use the lane fixtures. Before a test run the harness resets a fixture as the Lead (`test/harness/reset.js`, as `docs/build/contracts.md` section 6.4 has it): it deletes every rule set (an HTTP 403 is accepted on `hackwin-fixture-private` only, where GitHub offers no rule sets) and every branch rule, closes every open pull request and then every open issue, unpins every pinned issue, deletes every branch but `main` and every label, and resets `main` to the recorded commit (table below), creating `main` when it is missing. It then reads the state back and fails when it does not hold. Repository settings, collaborators and invitations stay as they are. Automated tests never touch `hackwin-sandbox`; it is for the human's live tests | #2, #6, #7, #13, #26 to #29 |
 | 5 | Versions before release 0.1.0 | `.tgz` packages from `npm pack`, attached to GitHub pre-releases of this repository and installed by URL. The major and minor numbers name the phase, so Phase 1 is `0.1`. Builds are `0.1.0-pre.<n>`. For AC77 the same code is also packed as `0.1.1-pre.<n>`, a bug fix of the same phase with a different patch number, and as `0.2.0-pre.<n>`, another phase. CM12 compares the major and minor numbers for the phase and semver precedence for older and newer, so `0.1.0-pre.<n>` < `0.1.1-pre.<n>` < `0.1.1`, and no npm release from step 1.8 on shares a version with a pre-release. The integrator creates a pre-release when the human asks. 1.3a records the scheme in `docs/build/contracts.md` | #3, #4, #9, #26, #29 |
 | 6 | Package name | `hackwin`. It was free on npm on 9 October 2026, and `npm view hackwin` still returned 404 on 10 October 2026. The install command is `npm install -g hackwin@<version>`, or `npm install -g` with the URL of the `.tgz` for a pre-release | #3, #4 |
 | 7 | Cases where GitHub refuses | The private fixture repository gives "no protection" and, if step 1.2 confirms it, "no push protection". A case that no real repository can produce is tested against the fake GitHub; step 1.2 decides which | #2, #13, #27 |
