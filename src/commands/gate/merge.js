@@ -29,7 +29,7 @@ import { readProtection } from '../../core/protection/index.js'
 import { RemoteError, execShell } from '../../core/runtime/index.js'
 import { parseBranch, setTaskStatus, toTask } from '../../core/tasks/index.js'
 import { CLOSED_WITH_THE_PULL, closeAttention, raiseAttention } from './attention.js'
-import { inlineCode } from './comment.js'
+import { codeSpan, inlineCode } from './comment.js'
 import { hasMergedLine } from './digest.js'
 import {
   REPEAT,
@@ -231,7 +231,7 @@ function refusal(run, refused, admin) {
     result: 'failed',
     labels: [],
     reason: `GitHub refused the merge of head \`${run.sha}\`${admin ? ' with `--admin`' : ''} (\`merge-refused\`)${said.length > 0 ? '. It answered:' : ''}`,
-    details: said.map((line) => inlineCode(line)),
+    details: said.map(codeSpan),
     next: `the Lead reads the answer; once what GitHub refused is fixed, the Lead types \`retry ${run.pr}\` in the Gate terminal. The Gate tested this head, so the author changes nothing unless the answer names the pull request.`,
     note: 'merge-refused',
   }

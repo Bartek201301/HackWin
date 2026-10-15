@@ -104,14 +104,16 @@ export function latestGateComment(comments, { pr, lead }) {
 export const MAX_COMMENT_LENGTH = 65_536
 
 /** How long one item of a list, or one line of a log, may be in a comment. */
-const MAX_ITEM = 1_000
+export const MAX_ITEM = 1_000
 
 /**
  * The body of the comment of a failed run (G21): the marker, then the stage, the reason with its
  * details and, for a failed command, the command and the last lines of its log, then the next
- * action. It stays within MAX_COMMENT_LENGTH: each item and log line is cut to MAX_ITEM
- * characters, then the oldest log lines and the last items are left out, with a line that says
- * how many, until the body fits.
+ * action. It stays within MAX_COMMENT_LENGTH: each log line is cut to MAX_ITEM characters (it
+ * stands in a code block), then the oldest log lines and the last items are left out whole, with
+ * a line that says how many, until the body fits. An item is never cut here, since a cut could
+ * end an inline code span early and turn the rest into a mention or a link: a caller cuts the
+ * raw text before it wraps it (codeSpan).
  * @param {object} comment
  * @param {GateMarker} comment.marker
  * @param {string} comment.title The stage, as the comment names it: `stage 3, scope`.
@@ -123,8 +125,8 @@ const MAX_ITEM = 1_000
  * @returns {string}
  */
 export function failureComment({ marker, title, reason, details = [], log, next, main = null }) {
-  let items = details.map(cut)
-  let tail = (log?.tail ?? []).map(cut)
+  let items = details
+  let tail = (log?.tail ?? []).map((line) => cutText(line, MAX_ITEM))
   let itemsLeft = 0
   let linesLeft = 0
   for (;;) {
@@ -146,7 +148,18 @@ export function failureComment({ marker, title, reason, details = [], log, next,
       items = items.slice(0, -1)
       itemsLeft += 1
     } else {
-      return `${body.slice(0, MAX_COMMENT_LENGTH - 2)}…\n`
+      // Only a reason or a next action longer than any the Gate writes gets here.
+      return commentBody({
+        marker,
+        title,
+        reason:
+          'the reason is too long for a comment; the Gate terminal and digest.log show the run',
+        items: [],
+        log: undefined,
+        linesLeft: 0,
+        next: 'the Lead reads the Gate terminal',
+        main,
+      })
     }
   }
 }
@@ -174,12 +187,29 @@ function commentBody({ marker, title, reason, items, log, linesLeft, next, main 
 }
 
 /**
- * A text cut to MAX_ITEM characters.
+ * A text cut to at most `max` UTF-16 code units, the length of a JavaScript string, with `…` at
+ * the end when it was cut. It cuts between whole characters, so no half of a surrogate pair is
+ * left alone.
+ * @param {string} text
+ * @param {number} max At least 2.
+ * @returns {string}
+ */
+export function cutText(text, max) {
+  if (text.length <= max) return text
+  let end = max - 1
+  const last = text.charCodeAt(end - 1)
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1
+  return `${text.slice(0, end)}…`
+}
+
+/**
+ * Raw text as inline code, cut to MAX_ITEM characters first, so that the code span always
+ * closes: no mention, issue reference or link in the text becomes live.
  * @param {string} text
  * @returns {string}
  */
-function cut(text) {
-  return text.length > MAX_ITEM ? `${text.slice(0, MAX_ITEM)}…` : text
+export function codeSpan(text) {
+  return inlineCode(cutText(text, MAX_ITEM))
 }
 
 /**

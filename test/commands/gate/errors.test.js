@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   MAX_COMMENT_LENGTH,
+  codeSpan,
+  cutText,
   failureComment,
+  inlineCode,
   parseGateMarker,
 } from '../../../src/commands/gate/comment.js'
 import { parseDigestLine } from '../../../src/commands/gate/digest.js'
@@ -459,7 +462,10 @@ describe('1.6e/refusals: an outage is waited out, a refusal ends the run, and ev
       marker: { pr: 7, sha, stage: 'merge-test', result: 'failed' },
       title: 'stage 7, merge test',
       reason: 'the check failed',
-      details: Array.from({ length: 200 }, (_, index) => `detail ${index} ${'d'.repeat(5_000)}`),
+      // Each item cut and wrapped as a caller does.
+      details: Array.from({ length: 200 }, (_, index) =>
+        codeSpan(`detail ${index} ${'d'.repeat(5_000)}`),
+      ),
       log: {
         command: 'npm test',
         outcome: 'exit 1',
@@ -474,5 +480,39 @@ describe('1.6e/refusals: an outage is waited out, a refusal ends the run, and ev
     expect(body).toMatch(/^- and \d+ more$/m)
     expect(body).toContain('**Next action:** fix it')
     expect(body.split('\n').every((line) => line.length <= 1_200)).toBe(true)
+  })
+})
+
+describe('1.6e/comment-cut: a comment cuts raw text on whole characters, before it wraps it', () => {
+  const marker = { pr: 8, sha: 'e'.repeat(40), stage: 'merge', result: 'failed' }
+
+  test('a code span of a long text always closes, so nothing after the cut becomes live', () => {
+    const span = codeSpan(`${'x'.repeat(1_200)} @someone #12 https://example.invalid`)
+    expect(span).toBe(`\`${'x'.repeat(999)}…\``)
+    const body = failureComment({
+      marker,
+      title: 'stage 10, merge',
+      reason: 'GitHub refused the merge',
+      details: [inlineCode(`@someone ${'b'.repeat(2_000)}`)],
+      next: 'look',
+    })
+    // An item stays whole: the comment never cuts inside a code span.
+    expect(body).toContain(`\n- \`@someone ${'b'.repeat(2_000)}\`\n`)
+  })
+
+  test('no cut leaves half of a character of two code units', () => {
+    expect(cutText(`${'a'.repeat(999)}😀b`, 1_000)).toBe(`${'a'.repeat(999)}…`)
+    expect(cutText(`${'a'.repeat(998)}😀b`, 1_000)).toBe(`${'a'.repeat(998)}…`)
+    expect(cutText(`${'a'.repeat(997)}😀bb`, 1_000)).toBe(`${'a'.repeat(997)}😀…`)
+    expect(cutText(`${'a'.repeat(997)}😀b`, 1_000)).toBe(`${'a'.repeat(997)}😀b`)
+    const body = failureComment({
+      marker,
+      title: 'stage 7, merge test',
+      reason: 'the check failed',
+      log: { command: 'npm test', outcome: 'exit 1', tail: [`${'a'.repeat(999)}😀b`], file: null },
+      next: 'fix it',
+    })
+    expect(body.isWellFormed()).toBe(true)
+    expect(codeSpan(`${'a'.repeat(999)}😀b`).isWellFormed()).toBe(true)
   })
 })

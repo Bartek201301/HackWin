@@ -36,7 +36,7 @@ import { join } from 'node:path'
 import { RemoteError } from '../../core/runtime/index.js'
 import { writeAtomic } from '../../core/state/index.js'
 import { raiseAttention } from './attention.js'
-import { inlineCode } from './comment.js'
+import { cutText, inlineCode } from './comment.js'
 import { hasMergedLine } from './digest.js'
 import { admitHead, intake, tookOwnMerge } from './intake.js'
 import { stepTimeoutMs as stepTimeoutOf } from './merge-test.js'
@@ -196,10 +196,13 @@ async function runStages(run) {
     const stage = STAGES[index]
     if (gate.stopping) return
     if (run.superseded()) return superseded(run)
+    // A fault of a stage that began after the merge leaves the pull request merged (endMerged).
+    const mergedBefore = record.result === 'merged'
     await gate.stage(pr, stage.name)
     const started = ctx.clock.now().getTime()
     /** @type {Awaited<ReturnType<Stage['run']>>} */
     let outcome
+    let fault = false
     try {
       outcome = await stage.run(run)
     } catch (error) {
@@ -208,6 +211,7 @@ async function runStages(run) {
         await tries.after(error, 'GitHub or the network failed, the Gate runs the stage again')
         continue
       }
+      fault = true
       outcome = await gateError(run, stage, error)
     }
     tries = null
@@ -220,14 +224,16 @@ async function runStages(run) {
     }
     if (outcome) {
       const failure = { ...outcome, stage: stage.name, title: stageTitle(stage) }
-      if (record.result === 'merged') return endMerged(run, failure)
+      if (mergedBefore) return endMerged(run, failure)
+      // Only a fault leaves open whether GitHub merged: a refusal of the merge was read.
+      if (stage.name === 'merge') record.merge_unknown = fault
       const merged = await mergedMeanwhile(run)
       if (merged === STOP) return run.superseded() ? superseded(run) : undefined
-      if (merged) {
+      if (merged || (await endRun(run, failure))) {
         index = merge
         continue
       }
-      return endRun(run, failure)
+      return
     }
     recordPass(gate, { pr, sha: run.sha, stage: stage.name, title: stageTitle(stage) })
     index += 1
@@ -264,7 +270,10 @@ async function resumeAt(run) {
  */
 async function mergedMeanwhile(run) {
   const { gate, pr, record } = run
-  if (record.result !== null || record.stage !== 'merge' || run.superseded()) return false
+  if (run.superseded()) return false
+  // Intake took GitHub's merge of this head as the Gate's own already.
+  if (record.result === 'merged') return true
+  if (record.result !== null || record.stage !== 'merge') return false
   try {
     const pull = await retrying(run, 'stage 10, merge', () => gate.ctx.github.getPullRequest(pr))
     if (pull === STOP) return STOP
@@ -279,7 +288,8 @@ async function mergedMeanwhile(run) {
 
 /**
  * Take GitHub's merge of the run's head as the Gate's own (intake.js, tookOwnMerge), after the
- * work for the pull request that started earlier: intake may have taken it already.
+ * work for the pull request that started earlier. When intake took it meanwhile, the record is
+ * merged already, and the run goes on after the merge all the same.
  * @param {PullRun} run
  * @param {PullRequest} pull
  * @returns {Promise<boolean>}
@@ -287,7 +297,7 @@ async function mergedMeanwhile(run) {
 async function takeMerge(run, pull) {
   let own = false
   const acted = await run.act(async () => {
-    own = tookOwnMerge(run.gate, run.pr, pull)
+    own = run.record.result === 'merged' || tookOwnMerge(run.gate, run.pr, pull)
   })
   if (!acted || !own) return false
   await run.gate.save()
@@ -344,18 +354,22 @@ async function gateError(run, stage, error) {
  * earlier, and only while intake has not taken the pull request away. While GitHub or the network
  * is down, the end is tried again with increasing waits (retrySeries); when the Lead types `quit`
  * meanwhile, the run stops and the restart runs it again. A refusal of GitHub or any other error
- * gives the run up (abandon).
+ * gives the run up (abandon). When intake took GitHub's merge of the head as the Gate's own
+ * meanwhile, the run does not end failed: it goes on after the merge.
  * @param {PullRun} run
  * @param {StageFailure} failure
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} True when the head is merged, and the run goes on with stage 10.
  */
 async function endRun(run, failure) {
   const { gate, tools, pr, record } = run
   const tries = retrySeries(run, { stage: failure.stage, title: failure.title })
   for (;;) {
+    let merged = false
     try {
-      const ended = await run.act(() =>
-        endFailed(gate, tools.notifier, {
+      const ended = await run.act(async () => {
+        merged = record.result === 'merged'
+        if (merged) return
+        await endFailed(gate, tools.notifier, {
           pr,
           record,
           author: run.author,
@@ -363,18 +377,26 @@ async function endRun(run, failure) {
           startedAt: run.startedAt,
           failure,
           config: run.config,
-        }),
-      )
+        })
+      })
+      if (merged) return true
       if (!ended) await superseded(run)
-      return
+      return false
     } catch (error) {
-      if (!isOutage(error)) return abandon(run, error, failure)
+      if (record.result === 'merged') return true
+      if (!isOutage(error)) {
+        await abandon(run, error, failure)
+        return false
+      }
       await tries.after(
         error,
         'the end of the failed run did not reach GitHub, the Gate tries again',
       )
-      if (gate.stopping) return
-      if (run.superseded()) return superseded(run)
+      if (gate.stopping) return false
+      if (run.superseded()) {
+        await superseded(run)
+        return false
+      }
     }
   }
 }
@@ -430,22 +452,32 @@ async function abandon(run, error, failure) {
     return
   }
   try {
-    leaveQueue(gate.state, pr)
-    const merged = record.result === 'merged'
-    if (!merged) {
+    let merged = false
+    let labelled = false
+    // The record and the label change after the work for the pull request that started earlier.
+    const acted = await run.act(async () => {
+      leaveQueue(gate.state, pr)
+      merged = record.result === 'merged'
+      if (merged) return
       record.result = failure?.result ?? 'failed'
       record.stage = failure?.stage ?? record.stage
-    }
-    const stage = record.stage ?? 'intake'
-    let labelled = merged
-    if (!merged) {
+      // An error outside a stage's end at stage 10 left open whether GitHub merged.
+      if (record.stage === 'merge' && failure === undefined) record.merge_unknown = true
       try {
         await setGateLabels(gate.ctx.github, pr, ['gate:failed'])
         labelled = true
       } catch {
         // GitHub may be what failed; the line and the attention item say so.
       }
+    })
+    if (!acted) {
+      gate.line(
+        `#${pr}: the run of head ${run.sha} stopped on an error, and the newer head stays queued: ${message}`,
+      )
+      return
     }
+    labelled ||= merged
+    const stage = record.stage ?? 'intake'
     gate.line(
       `#${pr}: the run stopped on an error at ${stage} and left the queue without a comment${labelled ? '' : ' and with the labels of the run'}: ${message}`,
     )
@@ -485,7 +517,7 @@ const MAX_MESSAGE = 300
  */
 function firstLine(text) {
   const line = text.split('\n').find((each) => each.trim() !== '') ?? text
-  return line.length > MAX_MESSAGE ? `${line.slice(0, MAX_MESSAGE)}…` : line
+  return cutText(line, MAX_MESSAGE)
 }
 
 /**

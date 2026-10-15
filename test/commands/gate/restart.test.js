@@ -14,7 +14,7 @@ import {
 import { formatStatusBody } from '../../../src/commands/gate/status-issue.js'
 import { rawResult } from '../../harness/index.js'
 import { readJson } from './helpers.js'
-import { BUILDER1, LEAD, STATUS_MS, createScene, task } from './scene.js'
+import { BUILDER1, LEAD, POLL_MS, STATUS_MS, createScene, task } from './scene.js'
 
 /** @typedef {import('./scene.js').Scene} Scene */
 
@@ -365,6 +365,209 @@ describe('1.6e/merged-after-all: a run in stage 10 ends failed only when GitHub 
       expect(s.digest().map(parseDigestLine)).toEqual([
         expect.objectContaining({ pr, result: 'merged', stage: 'after-merge' }),
       ])
+    },
+    SLOW,
+  )
+})
+
+/**
+ * Answer a read of a pull request as the fake GitHub does without the handler that called it.
+ * @param {Scene} s
+ * @param {string} number
+ */
+async function readPull(s, number) {
+  return rawResult(
+    await s.fake.as(LEAD)(['api', '--method', 'GET', `repos/{owner}/{repo}/pulls/${number}`]),
+  )
+}
+
+/** A promise and the function that settles it. */
+function gate() {
+  /** @type {() => void} */
+  let open = () => {}
+  const opened = new Promise((resolve) => (open = () => resolve(undefined)))
+  return { opened, open }
+}
+
+describe('1.6e/merge-race: once its head is merged, by the run or by intake, a run ends with stage 11', () => {
+  test(
+    'intake records the merge while the run asks GitHub again: the run goes on and posts no failure',
+    async () => {
+      const s = await scene({ issues: [task(131, 'counter')] })
+      const pull = await shipped(s, { issue: 131, file: 'src/features/counter/r1.js' })
+      const hold = gate()
+      let held = false
+      const removeMerge = s.fake.on('pr merge', async ({ args }) => {
+        removeMerge()
+        const answer = await mergeAsGitHub(s, args)
+        let reads = 0
+        const removeRead = s.fake.on(
+          'GET repos/{owner}/{repo}/pulls/:number',
+          async ({ params }) => {
+            reads += 1
+            // The read right after the merge is cut short.
+            if (reads === 1) return CUT
+            // The run's read whether GitHub merged waits until intake took the merge.
+            removeRead()
+            held = true
+            await hold.opened
+            return readPull(s, params.number)
+          },
+        )
+        return answer
+      })
+      await s.start()
+      await s.until(() => held, "the run's second read")
+      await s.poll()
+      await s.until(
+        () =>
+          s.out.includes(
+            `#${pull.pr}: GitHub merged head ${pull.head}, which the Gate had not recorded`,
+          ),
+        'the merge that intake took',
+      )
+      hold.open()
+      await s.ended(pull.pr, 'merged')
+      await s.quit()
+      expect(s.comments(pull.pr)).toEqual([])
+      expect(gateLabels(s.labels(pull.pr))).toEqual(['gate:merged'])
+      expect(/** @type {any} */ (s.fake.find(131)).state).toBe('closed')
+      expect(s.digest().map(parseDigestLine)).toEqual([
+        expect.objectContaining({ pr: pull.pr, result: 'merged', stage: 'after-merge' }),
+      ])
+      expect(s.merges()).toEqual([{ pr: pull.pr, sha: pull.head, admin: true, code: 0 }])
+    },
+    SLOW,
+  )
+
+  test(
+    "intake waits for the run's read after the merge and records the merge as soon as that read fails: the run goes on",
+    async () => {
+      const s = await scene({ issues: [task(132, 'counter')] })
+      const pull = await shipped(s, { issue: 132, file: 'src/features/counter/r2.js' })
+      const hold = gate()
+      let held = false
+      const removeMerge = s.fake.on('pr merge', async ({ args }) => {
+        removeMerge()
+        const answer = await mergeAsGitHub(s, args)
+        const removeRead = s.fake.on('GET repos/{owner}/{repo}/pulls/:number', async () => {
+          removeRead()
+          held = true
+          await hold.opened
+          return CUT
+        })
+        return answer
+      })
+      await s.start()
+      await s.until(() => held, 'the read after the merge')
+      // The next poll lists the pull requests, and its intake waits for the run's work on it.
+      const before = s.fake.calls.length
+      s.gate.clock.advance(POLL_MS)
+      await s.until(
+        () =>
+          s.fake.calls
+            .slice(before)
+            .some((call) => call.args.join(' ').includes('repos/{owner}/{repo}/pulls?')),
+        "the poll's list of pull requests",
+      )
+      hold.open()
+      await s.ended(pull.pr, 'merged')
+      await s.quit()
+      expect(s.comments(pull.pr)).toEqual([])
+      expect(gateLabels(s.labels(pull.pr))).toEqual(['gate:merged'])
+      expect(s.digest().map(parseDigestLine)).toEqual([
+        expect.objectContaining({ pr: pull.pr, result: 'merged', stage: 'after-merge' }),
+      ])
+    },
+    SLOW,
+  )
+})
+
+describe("1.6e/own-merge: a later merge of a failed stage 10 run is the Gate's own only when its answer was not read", () => {
+  test(
+    "after GitHub refused the merge, the Lead's merge by hand is a merge outside the Gate",
+    async () => {
+      const s = await scene({ issues: [task(133, 'counter')] })
+      const pull = await shipped(s, { issue: 133, file: 'src/features/counter/o1.js' })
+      // GitHub's answer has a line longer than a comment item, with a mention after the cut.
+      const long = `${'x'.repeat(1_200)} @someone https://example.invalid/path`
+      const remove = s.fake.on('pr merge', () => {
+        remove()
+        return rawResult({
+          code: 1,
+          stdout: '',
+          stderr: `GraphQL: Pull request is not mergeable (mergePullRequest)\n${long}\n`,
+        })
+      })
+      await s.start()
+      await s.ended(pull.pr, 'failed')
+      const [comment] = s.comments(pull.pr)
+      expect(comment.body).toContain(`- \`${'x'.repeat(999)}…\``)
+      expect(comment.body).not.toContain('@someone')
+      expect(s.state().prs[String(pull.pr)]).toMatchObject({
+        stage: 'merge',
+        result: 'failed',
+        merge_unknown: false,
+      })
+
+      await mergeAsGitHub(s, [
+        'pr',
+        'merge',
+        String(pull.pr),
+        '--merge',
+        '--match-head-commit',
+        pull.head,
+      ])
+      await s.poll()
+      await s.until(
+        () => s.out.includes(`#${pull.pr} was merged outside the Gate and left the queue`),
+        'the merge outside the Gate',
+      )
+      await s.quit()
+      expect(s.out).not.toContain('so the Gate finishes it after the merge')
+      expect(s.labels(pull.pr)).not.toContain('gate:merged')
+      expect(s.state().prs[String(pull.pr)]).toBeUndefined()
+    },
+    SLOW,
+  )
+
+  test(
+    'when neither answer whether GitHub merged was readable, the run ends failed, and the next intake finishes it after the merge',
+    async () => {
+      const s = await scene({ issues: [task(134, 'counter')] })
+      const pull = await shipped(s, { issue: 134, file: 'src/features/counter/o2.js' })
+      const removeMerge = s.fake.on('pr merge', async ({ args }) => {
+        removeMerge()
+        const answer = await mergeAsGitHub(s, args)
+        // The read right after the merge, and the run's read whether GitHub merged, are cut short.
+        let reads = 0
+        const removeRead = s.fake.on('GET repos/{owner}/{repo}/pulls/:number', () => {
+          reads += 1
+          if (reads === 2) removeRead()
+          return CUT
+        })
+        return answer
+      })
+      await s.start()
+      await s.ended(pull.pr, 'failed')
+      expect(s.state().prs[String(pull.pr)]).toMatchObject({
+        stage: 'merge',
+        result: 'failed',
+        merge_unknown: true,
+      })
+      await s.poll()
+      await s.ended(pull.pr, 'merged')
+      await s.quit()
+      expect(s.out).toContain(
+        `#${pull.pr}: GitHub merged head ${pull.head}, whose run ended at stage 10, so the Gate finishes it after the merge`,
+      )
+      expect(gateLabels(s.labels(pull.pr))).toEqual(['gate:merged'])
+      expect(/** @type {any} */ (s.fake.find(134)).state).toBe('closed')
+      expect(s.digest().map(parseDigestLine)).toEqual([
+        expect.objectContaining({ pr: pull.pr, result: 'failed', stage: 'merge' }),
+        expect.objectContaining({ pr: pull.pr, result: 'merged', stage: 'after-merge' }),
+      ])
+      expect(s.merges()).toEqual([{ pr: pull.pr, sha: pull.head, admin: true, code: 0 }])
     },
     SLOW,
   )

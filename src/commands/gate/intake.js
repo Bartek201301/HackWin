@@ -278,10 +278,11 @@ async function leaveClosed(gate, pr, pulls) {
 /**
  * Take a merge as the Gate's own when GitHub merged the head SHA that the record's run took into
  * stage 10: the run stopped there, as when the Gate was killed after GitHub merged and before the
- * state file said so, or it ended failed or was given up there because the answer to the merge
- * was lost or not readable. The record is then merged and in the queue, and its run takes up
- * again after the merge (pipeline.js): stage 11 labels it, closes its task and readies the
- * dependents. Every other merge of a pull request with a record happened outside the Gate.
+ * state file said so, or it ended failed or was given up there without a readable answer whether
+ * GitHub merged (`merge_unknown`). The record is then merged and in the queue, and its run takes
+ * up again after the merge (pipeline.js): stage 11 labels it, closes its task and readies the
+ * dependents. Every other merge of a pull request with a record happened outside the Gate, also
+ * the Lead's merge by hand after stage 10 read that GitHub refused the merge.
  * @param {Gate} gate
  * @param {number} pr
  * @param {PullRequest} pull
@@ -291,13 +292,13 @@ export function tookOwnMerge(gate, pr, pull) {
   const { state } = gate
   const record = state.prs[String(pr)]
   if (!record || record.stage !== 'merge') return false
-  if (record.result !== null && record.result !== 'failed') return false
+  const unknown = record.result === 'failed' && record.merge_unknown === true
+  if (record.result !== null && !unknown) return false
   if (!pull.merged || pull.headSha !== record.head_sha) return false
-  const ended = record.result === 'failed'
   record.result = 'merged'
   if (!state.queue.includes(pr)) state.queue.unshift(pr)
   gate.line(
-    ended
+    unknown
       ? `#${pr}: GitHub merged head ${record.head_sha}, whose run ended at stage 10, so the Gate finishes it after the merge`
       : `#${pr}: GitHub merged head ${record.head_sha}, which the Gate had not recorded, so the run goes on after the merge`,
   )

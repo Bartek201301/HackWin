@@ -57,7 +57,7 @@ describe('1.6e/outsiders: an issue that no member of the team wrote is no task (
         'the issue #300 that the pull request names is no task: no member of the team wrote it (`invalid-task-block`):',
       )
       expect(comment.body).toContain(
-        `- issue #300 was written by ${OUTSIDER}, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task`,
+        `- \`issue #300 was written by ${OUTSIDER}, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task\``,
       )
       expect(parseDigestLine(s.digest()[0])).toMatchObject({
         stage: 'task-link',

@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { runAcceptanceTests, runCheck } from '../../core/project/index.js'
 import { readText } from '../../core/state/index.js'
 import { toTask, writtenByTeam } from '../../core/tasks/index.js'
-import { inlineCode } from './comment.js'
+import { codeSpan, cutText, inlineCode } from './comment.js'
 import { namedFlakyTests } from './flaky.js'
 import {
   IN_MAIN_CHECKOUT,
@@ -90,7 +90,7 @@ export async function mergeTestStage(run) {
         result: 'needs-owner',
         labels: ['needs-owner'],
         reason: `the merge of the head with main conflicts in ${count(merge.conflicts.length, 'file', 'files')}, although stage 6 found no conflict:`,
-        details: capped(merge.conflicts.map((file) => `\`${file}\``)),
+        details: capped(merge.conflicts.map(codeSpan)),
         next: `the author resolves the conflicts: ${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session merges main, resolves the conflicts in its files and runs \`hackwin ship\` (9.3).`,
         note: `merge test: conflict in ${count(merge.conflicts.length, 'file', 'files')}`,
       }
@@ -262,9 +262,7 @@ function commandFailure(run, { name, outcome, file, named, attempts }) {
       : outcome.code === null
         ? 'ended by a signal'
         : `exit ${outcome.code}`,
-    tail: withoutSecrets(outcome.tail, run.config).map((line) =>
-      line.length > MAX_LINE ? `${line.slice(0, MAX_LINE)}…` : line,
-    ),
+    tail: withoutSecrets(outcome.tail, run.config).map((line) => cutText(line, MAX_LINE)),
     file: `.git/hackwin/gate/${file}`,
   }
   const fix = `${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session merges main, fixes it and runs \`hackwin ship\``
@@ -316,7 +314,7 @@ function missingTests(run, missing) {
     result: 'failed',
     labels: [],
     reason: `the task #${run.task} names ${count(missing.length, 'acceptance test that is', 'acceptance tests that are')} no file of the merge of the head with main, and every entry of \`acceptance_tests\` is a file path (T5):`,
-    details: capped(missing.map((path) => `\`${path}\``)),
+    details: capped(missing.map(codeSpan)),
     next: `the author adds the tests: ${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session writes them and runs \`hackwin ship\`. If the task block names the wrong files, the Lead fixes it and types \`retry ${run.pr}\` in the Gate terminal.`,
     note: 'merge test: acceptance tests missing',
   }

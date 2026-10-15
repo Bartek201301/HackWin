@@ -93,6 +93,10 @@ export function gateFiles(gitCommonDir) {
  * @property {unknown[]} resolver Phase 3.
  * @property {Array<{ stage: string, sha: string, at: string }>} failures
  * @property {Record<string, number>} stage_times Seconds per stage.
+ * @property {boolean} [merge_unknown] True when the run of this head ended failed or was given
+ *   up at stage 10 without a readable answer whether GitHub merged it: a fault of the Gate, not a
+ *   refusal of the merge. Intake then takes a later merge of the head as the Gate's own. A key of
+ *   this Gate beside those of 9.6.
  */
 
 /**
