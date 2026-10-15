@@ -13,6 +13,9 @@ import { rolesOfGlob } from '../config/ownership.js'
 /** The marker line that makes an issue a task issue. */
 export const TASK_MARKER = '# hackwin:task'
 
+/** An issue comment that starts with this is a scope change of the task (8.1). */
+export const SCOPE_CHANGE = 'Scope change:'
+
 /** The kinds of a task block (8.1). */
 export const TASK_KINDS = Object.freeze([
   'task',

@@ -10,6 +10,9 @@ import { SANDBOX } from './fixture-repos.js'
 
 /** @import { GhExecutor } from '../../src/core/github/index.js' */
 
+/** How the stderr of a call that the guard refused starts. */
+export const REFUSED = 'refused by the test harness: '
+
 /**
  * @typedef {object} GuardedCall
  * @property {string} account
@@ -83,7 +86,7 @@ export function guardExecutor(executor, { repo, account, calls, onCall }) {
     const record = { account, args: [...args], repo: call.env?.GH_REPO ?? null, refused, code: 1 }
     calls.push(record)
     if (refused !== null) {
-      const stderr = `refused by the test harness: ${refused}\n`
+      const stderr = `${REFUSED}${refused}\n`
       onCall?.(record, stderr)
       return { code: 1, stdout: '', stderr }
     }
