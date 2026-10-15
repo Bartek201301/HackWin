@@ -17,6 +17,33 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.6e, gate: restarts, errors and repeated failures (PR #80, issue #24)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/24-gate-restarts-errors`, created by the integrator from `15d3b88` after the merge of #69; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9db1e26`, then a merge of `origin/main` (`e48c007`); PR #80 opened at 07:03:19 UTC, and CI passed.
+  - The Lead reviewed it over three rounds, with `b3ba019`, `3e01076`, `d05e6af` (Gate tests that hold on a loaded machine) and `77b44fa`, and merges of `origin/main` between them. The rounds fixed:
+    - a merge that GitHub made is always finished with stage 11, also when intake and the run race (1.6e/merge-race, with reads held to force each order);
+    - the Gate claims a failed stage-10 record as its own merge only when GitHub's answer could not be read (`merge_unknown`), so a hand merge by the Lead stays "merged outside the Gate" (1.6e/own-merge);
+    - only outages are waited out (no status, 5xx, 429, a rate-limit 403, 401, gh without login). Other refusals end as `gate-error` with an attention item, and retries over 10 minutes raise one;
+    - comments stay under 65,536 characters, with code spans cut on whole characters before wrapping;
+    - the author rule of #74 at stages 2, 7 and 11;
+    - a lock slack of 60 s;
+    - `abandon` is visible and runs inside `run.act`;
+    - fetches of origin are serialized, fixing a race the Gate had since #23.
+  - The session showed that the four race and takeover tests fail on the previous code.
+  - `lead-55` sent `merge #80` with the head SHA by SendMessage. Its review: AC21, AC22, AC34, AC56 and AC78 are asserted, and AC35 as a trace at the level of Node. The restart logic never merges twice, never skips a stage and never repeats a comment: it recognizes its own comments only by the marker in comments of `team.lead`, per head SHA and stage. It probed `codeSpan` and `cutText` at the head.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 36 files inside issue #24's paths; no secret pattern; no conflict with `6c8cf1b`. Step 6, with the PR merged into `6c8cf1b` at a load average of 1.59 and no other vitest process: `npm test` passed 874 of 874, and `npm run test:ac` passed AC21 (1), AC22 (3), AC34 (1), AC35 (1), AC56 (2) and AC78 (5). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: a new integrator task, #87 (contracts 5.7 lists the `gate-error` markers, and 4.5 says how stage 7 reads the task), with a worktree at `62f40a3`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - AC35 ("a process trace shows no write to an agent process or to a session log") is checked by a trace at the level of Node, not by a process trace of the operating system.
+  - Scope changes arrived on #24 while the task ran, announced by `lead-55`. The items that needed #74 were first left out as the comments allowed; after #74 (PR #77) was merged during the review round, they moved into this pull request.
+  - `gate-error` adds stages and results that a marker can carry, which only the integrator can document (#87). The PR's note names PR #73 as the change of 5.7's list; that list came from #67 and #72.
+  - A test of a review round showed a race between two fetches of origin that the Gate had since #23; fixed here.
+  - The load average reached about 60 during the session's own full runs, which passed. According to `lead-55`, it was 51 with five vitest processes of this worktree at one point.
+- Measured: PR open 1 h 54 min 44 s (07:03:19 to 08:58:03 UTC), including three review rounds; 9 commits (four merges of `origin/main`), 4 PR runs (111 s, 135 s, 115 s and 117 s), 0 conflicts; local merge test `npm test` 138.08 s; the run on main after the merge 121 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/80; head `e9903c5`; merge commit `62f40a3`; runs `38696216248`, `38700058569`, `38700749341` and `38708752416` (PR) and `38709465653` (main).
+
 ### 2026-10-15 · Phase 1 · Shared follow-up 6: export shown, join's log helper, contracts 4.5 and 5.6 (PR #86, issue #85)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/85-shared-follow-up-6`, created by the integrator from `86f625e` after the merge of #84; `lead-55` opened the session. The integrator's planning session for the merge.
