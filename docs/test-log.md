@@ -17,6 +17,21 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Contracts: Gate error markers in 5.7, stage 7 in 4.5 (PR #88, issue #87)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/87-contracts-gate-error-markers`, created by the integrator from `62f40a3` after the merge of #80; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - Before writing the issue, the integrator checked the stage loop of `src/commands/gate/pipeline.js`. Any stage before the merge, not only the three `lead-55` named, can end with `gate-error` and the result `failed`; `scope` and `conflicts` too. The issue asked the session to check each stage against the code.
+  - One commit, `2a0fad4`, on `62f40a3`; PR #88 opened at 09:07:12 UTC.
+  - `lead-55` sent `merge #88` with the head SHA by SendMessage. Its review:
+    - 5.7 lists `failed` through `gate-error` for every stage before the merge, and `merge` only while the head is not merged.
+    - 5.7 says that `after-merge` and `abandon` carry no marker, and names `endRun` and intake as the callers of `endFailed`.
+    - 4.5 says that stage 7 reads the task through `toTask` and checks `writtenByTeam` since #80. No dashes.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 1 file inside issue #87's paths; no secret pattern; no dash added; no conflict with `62f40a3`. The two inspections held against the code: the table of 5.7 matches `gateError`, `endRun` and `endMerged`, and the callers of `endFailed` are `pipeline.js:372` and `intake.js:208`. 4.5 matches `merge-test.js:187-189`. Step 6, with the PR merged into `62f40a3` at a load average of 1.59 and no other vitest process: `npm test` passed 874 of 874; no `npm run test:ac`, because the task has inspection criteria only. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes": `AGENTS.md` asks to format the changed files with `npm run format -- <files>`, but `.prettierignore` excludes `*.md`. For a task that changes only Markdown the command runs and changes nothing.
+- Measured: PR open 5 min 21 s (09:07:12 to 09:12:33 UTC); 1 commit, 1 PR run (125 s), 0 conflicts; local merge test `npm test` 137.51 s; the run on main after the merge 151 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/88; head `2a0fad4`; merge commit `f6c596a`; runs `38710592456` (PR) and `38711248956` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.6e, gate: restarts, errors and repeated failures (PR #80, issue #24)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/24-gate-restarts-errors`, created by the integrator from `15d3b88` after the merge of #69; `lead-55` opened the session. The integrator's planning session for the merge.
