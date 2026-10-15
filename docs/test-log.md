@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Shared follow-up 3: the runner's unreachable hook, contracts 5.6 and 5.7 (PR #72, issue #71)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/71-shared-follow-up-3`, created by the integrator from `15d3b88` after the merge of #69; `lead-55` opened the session and added to its first message that 5.7 lists every stage and result a Gate comment can carry. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `907540b`, on `15d3b88`; PR #72 opened at 06:15:52 UTC. The session's first push failed for an unknown reason, and a plain retry pushed (no force).
+  - The Lead's review asked that a failing hook or import still exit 3; `a0b6a74` did that.
+  - `lead-55` sent `merge #72` with the head SHA by SendMessage. Its review:
+    - 1.3a/unreachable (7) is asserted. A user command whose `prepareContext` throws a `RemoteError` loads its module and runs `unreachable(ctx, error)` without config or identity. It prints the hook's lines first (lines and data under `--json`) and exits 3.
+    - A module without the hook, a plumbing command and a `RemoteError` from `run` behave as before. A hook or import that throws still exits 3, with one warning.
+    - Contracts 3.2, 3.3 and 3.6 record the interface; 5.6 and 5.7 drop the "Until #57" sentences.
+    - 5.7 lists only the stages that end a run in a failure and so carry a comment, with their results: `task-link`, `scope`, `secrets`, `conflicts`, `merge-test`, `ci` and `merge`.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 4 files inside issue #71's paths; no secret pattern; no dash added; no conflict with `15d3b88`.
+    - 5.7's table matches the code: every `result` a failure returns in `src/commands/gate` belongs to a stage of the table, and `merged` (stage `after-merge`) and `requeued` are no failures. No "Until #57" sentence is left.
+    - Step 6, with the PR merged into `15d3b88` and no other vitest process: `npm test` passed 760 of 760, and `npm run test:ac` passed 1.3a/unreachable (7). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes":
+  - The issue said the interface "was agreed between the Lead and the session of #25". The session found that agreement neither on #25 nor in a pull request: it was a message between sessions. The Lead then confirmed that #71's wording is the interface. An agreement made by SendMessage is not visible to a session that reads only GitHub.
+  - The integrator's question had expected that `freshness` and `after-merge` might carry a comment. The code shows they do not, and that `fetch` and `gated-paths`, which the 5.7 of #67 listed, do not either.
+- Measured: PR open 11 min 31 s (06:15:52 to 06:27:23 UTC), including the Lead's review and one fix; 2 commits, 2 PR runs (103 s on `907540b`, 106 s on `a0b6a74`), 0 conflicts; local merge test `npm test` 118.42 s; the run on main after the merge 107 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/72; head `a0b6a74`; merge commit `2a9d7e1`; runs `38691387254` and `38691969112` (PR) and `38692508441` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.6d, gate: stages 7 to 11 (PR #69, issue #23)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/23-gate-stages-7-11`, created by the integrator from `58fde88` after the merge of #64; `lead-55` opened the session. The integrator's planning session for the merge.
