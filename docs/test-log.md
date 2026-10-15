@@ -17,6 +17,40 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.4i, internal ci: no task link to an outsider's issue; join's install log under logs/ (PR #83, issue #76)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/76-ci-outsider-join-log`, created by the integrator from `61a2233` after the merge of #77, beside the sessions of #75 and #78; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `900d694`, on `61a2233`; PR #83 opened at 07:17:34 UTC.
+  - `lead-55` sent `merge #83` with the head SHA by SendMessage, to merge after #82. Its review: 1.4i/outsider-task and 1.4i/join-log are asserted.
+    - Step 2 of `internal ci` fails a pull request whose task issue an outsider wrote, with `checkTaskLink`'s own error (issue and author, escaped) and its own resolve. Both direct reads of `parseTaskBlock` go through `readTaskBlock`, which checks `writtenByTeam` first.
+    - `join`'s install log moved to `<git common dir>/hackwin/logs/join/install.log`, replaced on each run.
+    - `join`'s queue already drops outsiders' issues through `toTask` (tested).
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 4 files inside issue #76's paths; no secret pattern; no conflict with `1ce644a`. Step 6, with the PR merged into `1ce644a`, beside 12 vitest processes of another session (load average 6.45 at the start, 70.53 at the end): `npm test` passed 828 of 828 in 243.39 s, and `npm run test:ac` passed 1.4i/outsider-task (2) and 1.4i/join-log (1). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The scope change on #76 said `join` names the author "as `take` does (#75)", but #75 had no pull request yet, so the session could not read `take`'s wording. `join` names no issue it leaves out, so it did not matter.
+  - Contracts 5.6 names only `ship`'s logs under `logs/`; `join` now writes `logs/join/install.log`. For a later integrator task: a `statePaths` helper for `join`'s log path, and 5.6 naming it beside `ship`'s.
+  - The session's `npm test` took 225 s, at a load average of 17.9 at the start and 68.9 at the end.
+- Measured: PR open 12 min 44 s (07:17:34 to 07:30:18 UTC); 1 commit, 1 PR run (106 s), 0 conflicts; local merge test `npm test` 243.39 s; the run on main after the merge 103 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/83; head `900d694`; merge commit `5b55441`; runs `38697773267` (PR) and `38699195838` (main).
+
+### 2026-10-15 · Phase 1 · Step 1.5g, take: no task from an outsider, and safe block errors (PR #82, issue #75)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/75-take-outsider-task`, created by the integrator from `61a2233` after the merge of #77, beside the sessions of #76 and #78; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `7a441d4`, on `61a2233`; PR #82 opened at 07:16:06 UTC.
+  - `lead-55` sent `merge #82` with the head SHA by SendMessage. Its review: 1.5g/outsider-task (11) and 1.5g/block-errors (5) are asserted.
+    - `take N` and `take N --release` on an outsider's issue exit 2 and name the author through `shown`, with `{ author, member: false }`.
+    - `ship` in such a worktree exits 2 with the same reason.
+    - The queue and the block errors already came right through #74.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 5 files inside issue #75's paths (take and ship); no secret pattern; no conflict with `241c149`. Step 6, with the PR merged into `241c149` (load average 4.08 at the start, 15.07 at the end): `npm test` passed 825 of 825, and `npm run test:ac` passed 1.5g/outsider-task (11) and 1.5g/block-errors (5). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - `shown`, which names the author as `checkTaskLink` does, is not exported from `src/core/tasks/index.js`. `take` and `ship` import it from `block.js`; for a later integrator task: export it from the index.
+  - The session's tool input turned `\u` escapes above U+007F into the raw characters, so the first version of a test had a raw U+2028 inside a regular expression, which ended the line (a parse error). About 3 minutes lost.
+  - The load average was 16 at the start of the session's `npm test` and 32 at its acceptance tests (14 vitest processes of other sessions); `npm test` took 192 s. According to `lead-55`, the load reached 68 at its peak, and it held new sessions until it dropped.
+- Measured: PR open 7 min 16 s (07:16:06 to 07:23:22 UTC); 1 commit, 1 PR run (110 s), 0 conflicts; local merge test `npm test` 126.70 s; the run on main after the merge 112 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/82; head `7a441d4`; merge commit `1ce644a`; runs `38697610614` (PR) and `38698418193` (main).
+
 ### 2026-10-15 · Phase 1 · Shared follow-up 5: milestones in the fake GitHub (PR #81, issue #78)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/78-fake-github-milestones`, created by the integrator from `61a2233` after the merge of #77, beside the sessions of #75 and #76; `lead-55` opened the session. The integrator's planning session for the merge.
