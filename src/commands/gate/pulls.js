@@ -103,17 +103,41 @@ export function pullRef(pr) {
   return `refs/hackwin/pr/${pr}`
 }
 
+/** The fetch of origin under way, by Gate. */
+/** @type {WeakMap<Gate, Promise<unknown>>} */
+const fetching = new WeakMap()
+
+/**
+ * Run a fetch of origin after the one under way. A poll fetches origin while a run fetches main
+ * or a head, and two git fetches that update the same remote-tracking ref at once make one of
+ * them fail ("incorrect old value provided"), as a test of #24 showed.
+ * @template T
+ * @param {Gate} gate
+ * @param {() => Promise<T>} work
+ * @returns {Promise<T>}
+ */
+export function oneFetchAtATime(gate, work) {
+  const next = (fetching.get(gate) ?? Promise.resolve()).then(work)
+  fetching.set(
+    gate,
+    next.catch(() => {}),
+  )
+  return next
+}
+
 /**
  * Fetch the default branch into its remote-tracking ref. Throws a RemoteError when the fetch
  * fails.
  * @param {Gate} gate
  * @returns {Promise<string>} The full SHA of main.
  */
-export async function fetchMain(gate) {
+export function fetchMain(gate) {
   const branch = gate.config.hackwin.project.default_branch
   const tracking = `refs/remotes/origin/${branch}`
-  await gate.git.fetch({ remote: 'origin', refspecs: [`+refs/heads/${branch}:${tracking}`] })
-  return gate.git.revParse(tracking)
+  return oneFetchAtATime(gate, async () => {
+    await gate.git.fetch({ remote: 'origin', refspecs: [`+refs/heads/${branch}:${tracking}`] })
+    return gate.git.revParse(tracking)
+  })
 }
 
 /**
@@ -125,10 +149,12 @@ export async function fetchMain(gate) {
  * @param {{ main?: boolean }} [options]
  * @returns {Promise<void>}
  */
-export async function fetchHead(gate, pr, sha, { main = false } = {}) {
+export function fetchHead(gate, pr, sha, { main = false } = {}) {
   const branch = gate.config.hackwin.project.default_branch
   const refspecs = main ? [`+refs/heads/${branch}:refs/remotes/origin/${branch}`] : []
-  await gate.git.fetch({ remote: 'origin', refspecs: [...refspecs, `+${sha}:${pullRef(pr)}`] })
+  return oneFetchAtATime(gate, () =>
+    gate.git.fetch({ remote: 'origin', refspecs: [...refspecs, `+${sha}:${pullRef(pr)}`] }),
+  )
 }
 
 /**

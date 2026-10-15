@@ -24,7 +24,7 @@ import { startKeepAwake } from './awake.js'
 import { hoursAndMinutes } from './digest.js'
 import { INPUT_HELP, readCommands } from './input.js'
 import { acquireLock, releaseLock, runningGate } from './lock.js'
-import { duration } from './pulls.js'
+import { duration, oneFetchAtATime } from './pulls.js'
 import { recoverScratch } from './scratch.js'
 import {
   addsSecret,
@@ -479,9 +479,11 @@ async function poll(gate, pipeline) {
   state.last_poll_at = clock.now().toISOString()
   const branch = gate.config.hackwin.project.default_branch
   try {
-    await gate.git.fetch({ remote: 'origin' })
-    state.last_github_ok_at = clock.now().toISOString()
-    state.main_sha = await gate.git.revParse(`refs/remotes/origin/${branch}`)
+    state.main_sha = await oneFetchAtATime(gate, async () => {
+      await gate.git.fetch({ remote: 'origin' })
+      state.last_github_ok_at = clock.now().toISOString()
+      return gate.git.revParse(`refs/remotes/origin/${branch}`)
+    })
   } catch (error) {
     gate.line(`poll: the fetch of origin failed, the next poll tries again: ${messageOf(error)}`)
   }
