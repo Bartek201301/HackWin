@@ -107,6 +107,7 @@ function taskBody({ paths = ['src/features/counter/**'], acceptance_tests = [TES
  * @param {boolean} [options.push]
  * @param {Parameters<typeof taskBody>[0]} [options.block]
  * @param {string[]} [options.labels]
+ * @param {string} [options.author] The author of the task issue; the Lead by default.
  * @param {string | null} [options.generate]
  * @param {Parameters<typeof createFakeGitHub>[0]['pulls']} [options.pulls] Pull requests that
  *   exist before ship runs.
@@ -116,6 +117,7 @@ export async function scene({
   push = true,
   block,
   labels = ['in-progress', 'role:counter'],
+  author,
   generate = null,
   pulls = [],
 } = {}) {
@@ -136,7 +138,7 @@ export async function scene({
   const joined = await fixture.join(fixture.main, { login: accounts.builder1.login })
   const worktree = await fixture.worktree({ issue: ISSUE, title: TITLE, files: work, push })
   const fake = createFakeGitHub({
-    issues: [{ number: ISSUE, title: TITLE, body: taskBody(block), labels }],
+    issues: [{ number: ISSUE, title: TITLE, body: taskBody(block), labels, author }],
     pulls,
     origin: fixture.origin,
   })
