@@ -17,6 +17,25 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Shared follow-up 6: export shown, join's log helper, contracts 4.5 and 5.6 (PR #86, issue #85)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/85-shared-follow-up-6`, created by the integrator from `86f625e` after the merge of #84; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The integrator wrote the issue after checking each item against the code, the existing tests and the validation, as `lead-55` asked after the two flawed criteria of #79. It left out the item on contracts 5.7 for the markers of Gate errors, because #80 (#24) was not merged.
+  - One commit, `99b6452`, on `86f625e`; PR #86 opened at 07:50:37 UTC.
+  - `lead-55` sent `merge #86` with the head SHA by SendMessage. Its review:
+    - 1.3b/task-block-errors (17) and 1.3c/state (11) are asserted.
+    - `src/core/tasks/index.js` exports `shown`, and `src/core/state` exports `joinLogPath` with the path `join` builds today.
+    - Contracts 4.5 (the row of `shown`, `status` since #79, `internal ci` since #76), 4.7 and 5.6 (`join`'s install log) match the merged code. No dashes.
+  - The integrator's session reached its usage limit before it acted on the message; the merge ran after the limit reset.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 6 files inside issue #85's paths; no secret pattern; no dash added; no conflict with `86f625e`. The inspection held: the old wording of 4.5 is gone, and 4.7 lists `joinLogPath`. Step 6, with the PR merged into `86f625e` at a load average of 1.14 and no other vitest process: `npm test` passed 832 of 832, and `npm run test:ac` passed 1.3b/task-block-errors (17) and 1.3c/state (11). Main had not moved, and the merge was pinned to the head SHA.
+- Problems: the PR's "Workflow notes" say "none". Kept for later:
+  - after #80: contracts 5.7 on the stages that carry a marker with a Gate error, and the sentence of 4.5 on the Gate's stage 7;
+  - for a later lane A task: `join` switches to `joinLogPath`;
+  - for later lane tasks: `take` and `ship` import `shown` from the index.
+- Measured: PR open 53 min 17 s (07:50:37 to 08:43:54 UTC), including the Lead's review and the stop of the integrator's session at its usage limit; 1 commit, 1 PR run (108 s), 0 conflicts; local merge test `npm test` 120.22 s; the run on main after the merge 102 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/86; head `99b6452`; merge commit `6c8cf1b`; runs `38701496534` (PR) and `38707763214` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.6g, status: the team's members through writtenByTeam, milestones from the harness (PR #84, issue #79)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/79-status-written-by-team`, created by the integrator from `241c149` after the merge of #81; `lead-55` opened the session. The integrator's planning session for the merge.
