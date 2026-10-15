@@ -64,7 +64,7 @@ import { detectCallerKind } from '../core/runtime/caller.js'
  * The optional second export of a user command's module. When preparing the context fails with
  * a RemoteError (the fetch of origin, or `gh api user`), the runner calls it instead of `run`,
  * with the context it built, which has no config and no identity, prints what it returns before
- * the error and exits 3. `status` uses it for the local heartbeat (7.6).
+ * the error and exits 3, also when it throws. `status` uses it for the local heartbeat (7.6).
  * @typedef {(ctx: CommandContext, error: RemoteError) => Promise<UnreachableResult | void>} CommandUnreachable
  */
 

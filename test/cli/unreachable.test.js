@@ -58,6 +58,11 @@ export async function unreachable() {
 }
 `
 
+// A module that fails while it loads.
+const brokenModule = `
+throw new Error('broken module')
+`
+
 // A plumbing command and a user command whose run fails with a RemoteError after the
 // preparation succeeded: neither reaches the hook.
 const remoteInRunModule = `
@@ -76,6 +81,8 @@ export async function unreachable() {
 let repo
 /** @type {ReturnType<typeof createScratch>} */
 let modules
+/** @type {ReturnType<typeof createScratch>} */
+let broken
 /** A clone whose origin is gone, so the fetch of the preparation fails. */
 let offline = ''
 
@@ -93,11 +100,14 @@ beforeAll(() => {
   write('src/commands/ship/index.js', shipModule)
   write('src/commands/setup/index.js', remoteInRunModule)
   write('src/internal/hook/pre-commit.js', remoteInRunModule)
+  broken = createScratch()
+  broken.write(join(broken.dir, 'src/commands/status/index.js'), brokenModule)
 })
 
 afterAll(() => {
   repo.cleanup()
   modules.cleanup()
+  broken.cleanup()
 })
 
 /** A gh that cannot reach GitHub. */
@@ -240,10 +250,32 @@ describe('1.3a/unreachable: a user command prints what it knows locally when Git
     expect(stranger.stdout).toBe('')
   })
 
-  test('an error that the hook throws is reported in place of the RemoteError', async () => {
-    const result = await run(['ship'], { cwd: offline })
-    expect(result.code).toBe(2)
-    expect(result.stdout).toBe('')
-    expect(result.stderr).toContain('hackwin ship: internal error: broken hook')
+  test('a hook or a module that throws still exits 3 with the RemoteError, and one line says why', async () => {
+    const hook = await run(['ship'], { cwd: offline })
+    expect(hook.code).toBe(3)
+    expect(hook.stdout).toBe('')
+    const [warning, error] = hook.stderr.split('\n')
+    expect(warning).toBe(
+      'warning: the local information of hackwin ship could not be shown: broken hook',
+    )
+    expect(error).toMatch(/^hackwin ship: git fetch origin failed/)
+    const json = JSON.parse((await run(['ship', '--json'], { cwd: offline })).stdout)
+    expect(json).toEqual({
+      command: 'ship',
+      ok: false,
+      exitCode: 3,
+      error: expect.objectContaining({ kind: 'remote' }),
+      warnings: ['the local information of hackwin ship could not be shown: broken hook'],
+    })
+    // The import of the module fails, with a failed fetch and with a failed `gh api user`.
+    for (const options of [{ cwd: offline }, { ghExecutor: offlineGh }]) {
+      const module = await run(['status'], { ...options, moduleRoot: broken.dir })
+      expect(module.code).toBe(3)
+      expect(module.stdout).toBe('')
+      expect(module.stderr).toMatch(
+        /^warning: the local information of hackwin status could not be shown: broken module\nhackwin status: /,
+      )
+      expect(module.stderr).not.toContain('internal error')
+    }
   })
 })

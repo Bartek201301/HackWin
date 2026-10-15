@@ -226,8 +226,9 @@ export async function loadCommand(entry, moduleRoot) {
  * (contracts section 3.2): the runner loads the command's module anyway and calls its
  * `unreachable(ctx, error)` with the context it built, without config and identity. Null when
  * the error is another one, the command is plumbing, or its module does not exist yet or exports
- * no `unreachable`; the runner then prints the error alone. An error that the module or the hook
- * throws is reported in place of the RemoteError, as an error of `run` is.
+ * no `unreachable`; the runner then prints the error alone. GitHub unreachable exits 3 (7.6), so
+ * when the import of the module or the hook throws, the runner still reports the RemoteError: the
+ * failure becomes one warning that says why the local information could not be shown, and null.
  * @param {CommandContext} ctx
  * @param {CommandEntry} entry
  * @param {unknown} error The error of prepareContext.
@@ -236,12 +237,18 @@ export async function loadCommand(entry, moduleRoot) {
  */
 async function runUnreachable(ctx, entry, error, moduleRoot) {
   if (entry.plumbing || !(error instanceof RemoteError)) return null
-  const module = await importCommand(entry, moduleRoot)
-  if (typeof module?.unreachable !== 'function') return null
-  delete ctx.config
-  delete ctx.identity
-  const hook = /** @type {CommandUnreachable} */ (module.unreachable)
-  return (await hook(ctx, error)) ?? {}
+  try {
+    const module = await importCommand(entry, moduleRoot)
+    if (typeof module?.unreachable !== 'function') return null
+    delete ctx.config
+    delete ctx.identity
+    const hook = /** @type {CommandUnreachable} */ (module.unreachable)
+    return (await hook(ctx, error)) ?? {}
+  } catch (failure) {
+    const why = failure instanceof Error ? failure.message : String(failure)
+    ctx.out.warn(`the local information of hackwin ${entry.name} could not be shown: ${why}`)
+    return null
+  }
 }
 
 /**

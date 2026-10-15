@@ -149,7 +149,7 @@ export async function unreachable(ctx, error) {}
 - The runner calls it only when preparing the context (section 3.6, step 4) throws a `RemoteError`: the fetch of `origin`, or `gh api user` for the identity. It then loads the module although the preparation failed and calls `unreachable`; `run` is not called.
 - `ctx` is the context the runner built, without `config` and `identity`, also when the configuration was loaded before `gh api user` failed. The function reads only local state.
 - It returns `{ lines, data }`, both optional, or nothing. Without `--json` the runner prints the lines on stdout, then the error on stderr as for any error. With `--json` the one document is the error's, with the lines and data added (section 3.3). The exit code is 3, the `RemoteError`'s.
-- An error that the module or the function throws is reported in place of the `RemoteError`, as an error of `run` is.
+- GitHub unreachable exits 3 (7.6), also when the import of the module or the function throws. The runner then reports the `RemoteError` as without the function, after one warning (section 3.3) that says why: `the local information of hackwin <command> could not be shown: <message>`. With `--json` the warning is in `warnings`, and the document has no `lines` and no `data`.
 - The error alone is printed, as for any error, when the module does not export `unreachable`, when it does not exist yet (the `RemoteError`, not `not built yet`), for a plumbing command (which the runner does not prepare, section 3.6), and for a `RemoteError` that `run` throws after the preparation succeeded.
 - `status` exports it to print the local heartbeat on the Lead's laptop while GitHub is unreachable (7.6, #25).
 
@@ -162,7 +162,7 @@ export async function unreachable(ctx, error) {}
   { "command": "take", "ok": false, "exitCode": 1, "error": { "kind": "blocked", "message": "...", "rule": "...", "objects": ["..."], "resolve": { "command": "...", "dir": "..." } }, "warnings": [] }
   ```
 
-  `command` is null when the command line itself is wrong. The fields of `error` are those of section 3.4. After an `unreachable` function (section 3.2) the error's document also has `lines` (empty when it returned none) and `data` (null when it returned none), before `error`:
+  `command` is null when the command line itself is wrong. The fields of `error` are those of section 3.4. After an `unreachable` function that returned (section 3.2) the error's document also has `lines` (empty when it returned none) and `data` (null when it returned none), before `error`:
 
   ```json
   { "command": "status", "ok": false, "exitCode": 3, "lines": ["..."], "data": {}, "error": { "kind": "remote", "message": "...", "details": { "status": null, "tail": ["..."] } }, "warnings": [] }
