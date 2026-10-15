@@ -17,6 +17,22 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Shared follow-up 5: milestones in the fake GitHub (PR #81, issue #78)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/78-fake-github-milestones`, created by the integrator from `61a2233` after the merge of #77, beside the sessions of #75 and #76; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `ee58839`, on `61a2233`; PR #81 opened at 07:12:49 UTC.
+  - `lead-55` sent `merge #81` with the head SHA by SendMessage. Its review: 1.3d/fake-github (14) is asserted.
+    - Issues and pull requests carry a milestone or `null` in `GET .../issues/<N>`, in the lists and in the pull request JSON, and the counts include pull requests, as on GitHub.
+    - `POST` and `PATCH` accept `milestone`, with 422 for an unknown number, and the list filters by milestone.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 4 files inside issue #78's paths; no secret pattern; no dash added; no conflict with `61a2233`. Step 6, with the PR merged into `61a2233`, beside 12 vitest processes of other sessions (load average 32.37 at the start, 35.61 at the end): `npm test` passed 809 of 809, and `npm run test:ac` passed 1.3d/fake-github (14). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: a worktree for #79 at `241c149`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - `AGENTS.md` has rules for the fixture repositories and `hackwin-sandbox`, but none for read-only calls to other public repositories. The session made three read-only `gh api` calls to `cli/cli` and `microsoft/vscode` to see GitHub's milestone form instead of guessing it. Nothing was written; the PR lists the calls, and the Lead found them harmless.
+  - The machine's load average reached 68 at its peak while several suites ran at once, according to `lead-55`, which held new sessions until it dropped.
+- Measured: PR open 5 min 34 s (07:12:49 to 07:18:23 UTC); 1 commit, 1 PR run (94 s), 0 conflicts; local merge test `npm test` 157.77 s; the run on main after the merge 98 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/81; head `ee58839`; merge commit `241c149`; runs `38697239436` (PR) and `38697861510` (main).
+
 ### 2026-10-15 · Phase 1 · Shared follow-up 4: an issue is a task only when a team member wrote it, and safe task block errors (PR #77, issue #74)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/74-shared-follow-up-4`, created by the integrator from `2a9d7e1`; `lead-55` opened the session. The integrator's planning session for the merge.
