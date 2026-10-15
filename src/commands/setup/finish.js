@@ -10,13 +10,15 @@ import { join } from 'node:path'
 import { stringify } from 'yaml'
 import { loadConfig, resolveIdentity } from '../../core/config/index.js'
 import { HackwinError, PreconditionError, formatResolve, runIn } from '../../core/runtime/index.js'
+import { readProtection } from '../../core/protection/index.js'
 import { readLocal } from '../../core/state/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
 import { run as runJoin } from '../join/index.js'
 import { inviteMembers } from './invitations.js'
 import { createLabels } from './labels.js'
-import { enablePushProtection, pushProtectionLine } from './push-protection.js'
+import { enablePushProtection, pushProtectionLines, readPushProtection } from './push-protection.js'
 import { applyBranchRules, protectionLines } from './rules.js'
+import { settledRead } from './settle.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config, Identity } from '../../core/config/index.js' */
@@ -147,13 +149,17 @@ async function finish(ctx, questions, { repository, config: given }) {
   })
   for (const line of invitationLines(invitations, name)) ctx.out.line(line)
 
-  // Steps 11 and 12.
-  const rules = await applyBranchRules(ctx.github, { branch })
-  ctx.out.line(`branch rules: the state read back from GitHub is ${rules.protection.state}`)
-
-  // Step 13.
-  const pushProtection = await enablePushProtection(ctx.github)
-  ctx.out.line(`push protection: the setting read back from GitHub is ${pushProtection.status}`)
+  // Steps 11 to 13: both writes first, then both read backs, once GitHub's reads have settled.
+  const rules = await applyBranchRules(ctx.github)
+  const enabling = await enablePushProtection(ctx.github)
+  ctx.out.line('branch rules and push protection: reading them back once GitHub has settled')
+  const since = ctx.clock.now().getTime()
+  const [protection, pushProtection] = await Promise.all([
+    settledRead(ctx.clock, () => readProtection(ctx.github, { branch }), { since }),
+    settledRead(ctx.clock, () => readPushProtection(ctx.github), { since }),
+  ])
+  ctx.out.line(`branch rules: the state read back from GitHub is ${protection.value.state}`)
+  ctx.out.line(`push protection: the setting read back from GitHub is ${pushProtection.value}`)
 
   // Step 14.
   ctx.out.line(`join for the Lead's machine, in ${root}:`)
@@ -165,8 +171,8 @@ async function finish(ctx, questions, { repository, config: given }) {
     joined.exitCode === 1
       ? `setup of ${name} is complete except for join on this machine`
       : `setup of ${name} is complete`,
-    ...protectionLines(rules, { branch, lead, repository: name, root }),
-    pushProtectionLine(pushProtection, name),
+    ...protectionLines(rules, protection, { branch, lead, repository: name, root }),
+    ...pushProtectionLines(pushProtection, name, root),
     ...memberLines({ config, identity, invitations, joined, repository, root }),
     'next:',
     `  ${runIn('hackwin gate', root)}, in a separate terminal that stays open`,
@@ -180,8 +186,10 @@ async function finish(ctx, questions, { repository, config: given }) {
       labels,
       invitations,
       protection: {
-        state: rules.protection.state,
-        rules: rules.protection.rules,
+        state: protection.value.state,
+        rules: protection.value.rules,
+        settled: protection.settled,
+        reads: protection.reads,
         offered: rules.offered,
         branchRules: rules.branchRules,
         updateRestriction: rules.updateRestriction,
@@ -189,7 +197,13 @@ async function finish(ctx, questions, { repository, config: given }) {
         restrictionRefused: rules.restrictionRefused,
         pinRefused: rules.pinRefused,
       },
-      pushProtection,
+      pushProtection: {
+        on: pushProtection.value === 'enabled',
+        status: pushProtection.value,
+        settled: pushProtection.settled,
+        reads: pushProtection.reads,
+        refused: enabling.refused,
+      },
       join: { exitCode: joined.exitCode ?? 0, lines: joined.lines, data: joined.data },
     },
   }

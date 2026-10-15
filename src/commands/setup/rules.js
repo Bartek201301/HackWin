@@ -1,5 +1,6 @@
 // Steps 11 and 12 of `setup` (7.1): the branch rules of the default branch as two repository rule
-// sets, read back through src/core/protection, and the fallback where GitHub refuses them. The
+// sets, read back through src/core/protection (settle.js), and the fallback where GitHub refuses
+// them. The
 // mechanism and the names are those of docs/build/contracts.md section 5.4, which
 // docs/verification.md (rows 5 and 6) confirmed:
 //
@@ -14,16 +15,13 @@
 // summary says so (scope change on #13). Where GitHub refuses the update restriction, the rules
 // for everyone stay (full); where it refuses rule sets, setup falls back to soft protection.
 
-import {
-  ACTIONS_APP_ID,
-  ADMIN_ROLE_ID,
-  REQUIRED_CHECK,
-  readProtection,
-} from '../../core/protection/index.js'
+import { ACTIONS_APP_ID, ADMIN_ROLE_ID, REQUIRED_CHECK } from '../../core/protection/index.js'
 import { RemoteError, runIn } from '../../core/runtime/index.js'
+import { unsettled } from './settle.js'
 
 /** @import { GitHub } from '../../core/github/index.js' */
 /** @import { Protection, ProtectionState } from '../../core/protection/index.js' */
+/** @import { Settled } from './settle.js' */
 
 /** The rule set of the rules for everyone (contracts 5.4). */
 export const BRANCH_RULES = 'hackwin-branch-rules'
@@ -43,6 +41,7 @@ const ON_DEFAULT_BRANCH = Object.freeze({
 })
 
 /**
+ * What setup wrote, or what GitHub refused.
  * @typedef {object} RulesOutcome
  * @property {boolean} offered False where GitHub offers no rule sets for the repository.
  * @property {'created' | 'updated' | null} branchRules What setup did with the rules for
@@ -52,7 +51,6 @@ const ON_DEFAULT_BRANCH = Object.freeze({
  * @property {string | null} restrictionRefused Why GitHub refused the update restriction.
  * @property {string | null} pinRefused Why GitHub refused the pinned check; the rules for
  *   everyone then require an unpinned one.
- * @property {Protection} protection The state read back from GitHub.
  */
 
 /**
@@ -109,13 +107,13 @@ export function updateRestrictionBody() {
 }
 
 /**
- * Steps 11 and 12: apply both rule sets where GitHub accepts them, then read the state back.
+ * Step 11: apply both rule sets where GitHub accepts them. The state is read back afterwards,
+ * once GitHub's reads have settled (settle.js).
  * @param {GitHub} github The Lead's client.
- * @param {{ branch: string }} options The default branch.
  * @returns {Promise<RulesOutcome>}
  */
-export async function applyBranchRules(github, { branch }) {
-  /** @type {Omit<RulesOutcome, 'protection'>} */
+export async function applyBranchRules(github) {
+  /** @type {RulesOutcome} */
   const outcome = {
     offered: true,
     branchRules: null,
@@ -137,14 +135,14 @@ export async function applyBranchRules(github, { branch }) {
       }
     }
   }
-  return { ...outcome, protection: await readProtection(github, { branch }) }
+  return outcome
 }
 
 /**
  * The rules for everyone, pinned; where GitHub refuses that, unpinned.
  * @param {GitHub} github
  * @param {any[]} existing
- * @param {Omit<RulesOutcome, 'protection'>} outcome Filled in.
+ * @param {RulesOutcome} outcome Filled in.
  */
 async function applyRulesForEveryone(github, existing, outcome) {
   try {
@@ -220,6 +218,7 @@ function refusalOf(error) {
 /**
  * The lines of the summary for the protection state (step 15), with the fallback in use.
  * @param {RulesOutcome} outcome
+ * @param {Settled<Protection>} read The state read back from GitHub.
  * @param {object} context
  * @param {string} context.branch
  * @param {string} context.lead
@@ -227,8 +226,8 @@ function refusalOf(error) {
  * @param {string} context.root The main checkout, for the resume command.
  * @returns {string[]}
  */
-export function protectionLines(outcome, { branch, lead, repository, root }) {
-  const { state, rules } = outcome.protection
+export function protectionLines(outcome, read, { branch, lead, repository, root }) {
+  const { state, rules } = read.value
   const everyone = `changes to ${branch} only through a pull request whose check ${REQUIRED_CHECK} passed, no force push and no deletion, for every account, the owner included`
   /** @type {Record<ProtectionState, string>} */
   const lines = {
@@ -242,6 +241,7 @@ export function protectionLines(outcome, { branch, lead, repository, root }) {
       `the required check ${REQUIRED_CHECK} is not pinned to the GitHub Actions app${because(outcome.pinRefused)}: a status that anyone with write access posts by hand can satisfy it. Once GitHub Actions has run in ${repository}, ${runIn('hackwin setup --resume', root)} to pin it`,
     )
   }
+  if (!read.settled) result.push(unsettled('protection state', read, root))
   return result
 }
 

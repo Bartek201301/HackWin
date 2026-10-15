@@ -13,11 +13,12 @@ import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { main } from '../../../src/cli/main.js'
 import { readProtection } from '../../../src/core/protection/index.js'
-import { quoteShellArg } from '../../../src/core/runtime/index.js'
+import { quoteShellArg, systemClock } from '../../../src/core/runtime/index.js'
 import { isJoinComplete, readLocal } from '../../../src/core/state/index.js'
 import { labelCatalogue } from '../../../src/commands/setup/labels.js'
 import { readPushProtection } from '../../../src/commands/setup/push-protection.js'
 import { BRANCH_RULES, UPDATE_RESTRICTION } from '../../../src/commands/setup/rules.js'
+import { settledRead } from '../../../src/commands/setup/settle.js'
 import { MANIFEST, PROJECT_FILES, SETTINGS_PATH } from '../../../src/generate/index.js'
 import { ownersObject, withFixtureRepo, yaml } from '../../harness/index.js'
 import { teamAnswers } from './setup-fixture.js'
@@ -269,7 +270,12 @@ describe('AC80/setup: push protection on the fixture repositories', () => {
         'hackwin-fixture-a',
         async (repo) => {
           const lead = repo.github('lead')
-          const initial = await readPushProtection(lead)
+          // One read right after a write can show the old value (settle.js), so every read here
+          // waits until GitHub's reads have settled.
+          const settled = async () =>
+            (await settledRead(systemClock, () => readPushProtection(lead), { since: Date.now() }))
+              .value
+          const initial = await settled()
           repo.log(`push protection before the test: ${initial}`)
           try {
             // Off first, so that the run shows setup turning it on.
@@ -279,12 +285,12 @@ describe('AC80/setup: push protection on the fixture repositories', () => {
                 security_and_analysis: { secret_scanning_push_protection: { status: 'disabled' } },
               },
             })
-            expect(await readPushProtection(lead)).toBe('disabled')
+            expect(await settled()).toBe('disabled')
             const clone = await leadClone(repo)
             const result = await runLiveSetup(repo, clone)
             expect(result.code).toBe(0)
-            expect(result.stdout).toContain('push protection: on, enabled by setup')
-            expect(await readPushProtection(lead)).toBe('enabled')
+            expect(result.stdout).toContain('push protection: on: GitHub blocks a push')
+            expect(await settled()).toBe('enabled')
           } finally {
             // Always back to the setting the test found. A read right before did not do: on
             // 15 October 2026 it skipped the restore, and the setting stayed disabled.
@@ -295,7 +301,7 @@ describe('AC80/setup: push protection on the fixture repositories', () => {
                   security_and_analysis: { secret_scanning_push_protection: { status: initial } },
                 },
               })
-              repo.log(`push protection after the test: ${await readPushProtection(lead)}`)
+              repo.log(`push protection after the test: ${await settled()}`)
             }
           }
         },

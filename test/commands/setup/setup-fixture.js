@@ -24,7 +24,7 @@ import { Readable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { main } from '../../../src/cli/main.js'
-import { quoteShellArg } from '../../../src/core/runtime/index.js'
+import { createFakeClock, quoteShellArg } from '../../../src/core/runtime/index.js'
 import {
   BUILDER3_LOGIN,
   accounts,
@@ -102,13 +102,21 @@ export async function createSetupFixture({
  * `security_and_analysis`, and `PATCH repos/{owner}/{repo}` that changes it.
  * @param {FakeGitHub} fake
  * @param {'offered' | 'refused'} mode
- * @returns {{ pushProtection: string | null }} The setting, which a test may change.
+ * @returns {{ pushProtection: string | null, afterPatch: Array<string | null> }} The setting,
+ *   which a test may change, and what the reads after the next PATCH return before they return
+ *   the setting: GitHub's reads lag its writes (src/commands/setup/settle.js).
  */
 function servePushProtection(fake, mode) {
-  const security = { pushProtection: mode === 'offered' ? 'disabled' : null }
+  /** @type {{ pushProtection: string | null, afterPatch: Array<string | null> }} */
+  const security = { pushProtection: mode === 'offered' ? 'disabled' : null, afterPatch: [] }
+  /** @type {Array<string | null>} */
+  let lagging = []
   const { state } = fake
-  /** @param {string} login */
-  const repositoryJson = (login) => {
+  /**
+   * @param {string} login
+   * @param {string | null} pushProtection
+   */
+  const repositoryJson = (login, pushProtection = security.pushProtection) => {
     const order = ['read', 'triage', 'write', 'maintain', 'admin']
     const level = state.collaborators[login] ?? (state.visibility === 'public' ? 'read' : null)
     const rank = level === null ? -1 : order.indexOf(level)
@@ -131,18 +139,21 @@ function servePushProtection(fake, mode) {
       ...(rank >= 4
         ? {
             security_and_analysis:
-              security.pushProtection === null
+              pushProtection === null
                 ? null
                 : {
                     secret_scanning: { status: 'enabled' },
-                    secret_scanning_push_protection: { status: security.pushProtection },
+                    secret_scanning_push_protection: { status: pushProtection },
                   },
           }
         : {}),
     }
   }
-  fake.on('GET repos/{owner}/{repo}', ({ login }) => repositoryJson(login))
+  fake.on('GET repos/{owner}/{repo}', ({ login }) =>
+    repositoryJson(login, lagging.length > 0 ? lagging.shift() : security.pushProtection),
+  )
   fake.on('PATCH repos/{owner}/{repo}', ({ login, body }) => {
+    lagging = [...security.afterPatch]
     const wanted = body?.security_and_analysis ?? {}
     if (mode === 'refused') {
       if (wanted.secret_scanning) {
@@ -255,6 +266,8 @@ export async function runSetup(fixture, fake, options = {}) {
  * @param {boolean} [options.tty]
  * @param {Record<string, string | undefined>} [options.env]
  * @param {string} [options.cwd]
+ * @param {import('../../../src/core/runtime/index.js').Clock} [options.clock] A fake clock by
+ *   default, so that waiting for GitHub's reads to settle takes no time.
  */
 export async function runHackwin(fixture, fake, argv, options = {}) {
   const { login = LEAD, input = [], tty = false } = options
@@ -272,6 +285,7 @@ export async function runHackwin(fixture, fake, argv, options = {}) {
       stdout: { write: (chunk) => (stdout += chunk), isTTY: tty },
       stderr: { write: (chunk) => (stderr += chunk) },
       ghExecutor: fake.as(login),
+      clock: options.clock ?? createFakeClock(new Date()),
     })
     return { code, stdout, stderr }
   } finally {

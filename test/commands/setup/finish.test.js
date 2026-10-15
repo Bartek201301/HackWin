@@ -17,6 +17,8 @@ import {
 } from '../../../src/generate/index.js'
 import { labelCatalogue } from '../../../src/commands/setup/labels.js'
 import { BRANCH_RULES, UPDATE_RESTRICTION } from '../../../src/commands/setup/rules.js'
+import { SETTLE, settledRead } from '../../../src/commands/setup/settle.js'
+import { createFakeClock } from '../../../src/core/runtime/index.js'
 import { accounts, httpError, ownersObject, teamConfig } from '../../harness/index.js'
 import {
   JOIN_ANSWERS,
@@ -135,7 +137,7 @@ describe('AC1: setup configures the repository and GitHub', () => {
     expect(result.stdout).toContain(
       `protection: full, with the update restriction: changes to main only through a pull request whose check hackwin passed, no force push and no deletion, for every account, the owner included; only ${LEAD} can update main`,
     )
-    expect(result.stdout).toContain('push protection: on, enabled by setup')
+    expect(result.stdout).toContain('push protection: on: GitHub blocks a push')
   })
 
   test('AC1: the summary names the protection state, push protection, what each member runs, the next steps and .env.local; the Lead is joined', async () => {
@@ -309,15 +311,16 @@ describe('AC80/setup: push protection where GitHub offers it, and off where it d
     ])
     expect(security.pushProtection).toBe('enabled')
     expect(result.stdout).toContain('push protection: the setting read back from GitHub is enabled')
-    expect(result.stdout).toContain('push protection: on, enabled by setup')
+    expect(result.stdout).toContain('push protection: on: GitHub blocks a push')
   })
 
-  test('AC80/setup: push protection that is on already stays as it is', async () => {
+  test('AC80/setup: setup sends the enabling call even when push protection reads on, because a read may be stale', async () => {
     const { fixture, fake, security } = await createSetupFixture()
     security.pushProtection = 'enabled'
     const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
     expect(result.code).toBe(0)
-    expect(callsOf(fake, 'PATCH', /^repos\/\{owner\}\/\{repo\}$/)).toEqual([])
+    expect(callsOf(fake, 'PATCH', /^repos\/\{owner\}\/\{repo\}$/)).toHaveLength(1)
+    expect(security.pushProtection).toBe('enabled')
     expect(result.stdout).toContain('push protection: on: GitHub blocks a push')
   })
 
@@ -527,5 +530,84 @@ describe('1.4f/resume: setup --resume runs only where the bootstrap push happene
     expect(result.code).toBe(2)
     expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
     expect(writes(fake)).toEqual([])
+  })
+})
+
+describe('1.4f/settle: setup does not trust one read right after it writes a setting', () => {
+  test('1.4f/settle: the read back settles on the value that holds, not on the first read or on a stale one', async () => {
+    // The reads after `enabled` on hackwin-fixture-a, 15 October 2026: the new value from 0 to
+    // 2.3 s, the old one from 2.7 to 9.8 s, the new one from 10.2 s on (settle.js).
+    const clock = createFakeClock('2026-10-15T05:50:06.772Z')
+    const since = clock.now().getTime()
+    /** @type {string[]} */
+    const seen = []
+    const read = async () => {
+      const at = clock.now().getTime() - since
+      const value = at < 2_500 || at >= 10_000 ? 'enabled' : 'disabled'
+      seen.push(value)
+      return value
+    }
+    const result = await settledRead(clock, read, { since })
+    expect(result).toMatchObject({ value: 'enabled', settled: true, changes: 2 })
+    expect(seen).toContain('disabled')
+    expect(clock.now().getTime() - since).toBeGreaterThanOrEqual(SETTLE.minMs)
+
+    // The same reads, old and new swapped: a value that only looked new at first is not taken.
+    const swapped = createFakeClock('2026-10-15T05:49:45.566Z')
+    const start = swapped.now().getTime()
+    const stale = await settledRead(
+      swapped,
+      async () => {
+        const at = swapped.now().getTime() - start
+        return at >= 2_500 && at < 4_500 ? 'enabled' : 'disabled'
+      },
+      { since: start },
+    )
+    expect(stale).toMatchObject({ value: 'disabled', settled: true, changes: 2 })
+  })
+
+  test('1.4f/settle: push protection that reads back the old value for a while after the enabling call is reported as on', async () => {
+    const { fixture, fake, security } = await createSetupFixture()
+    security.afterPatch = ['enabled', 'enabled', ...Array(8).fill('disabled')]
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
+    expect(result.code).toBe(0)
+    const json = JSON.parse(result.stdout)
+    expect(json.lines).toContain(
+      "push protection: on: GitHub blocks a push that holds a secret it recognizes, and HackWin's own secret scans run as well",
+    )
+    expect(json.data.pushProtection).toMatchObject({ on: true, settled: true })
+    expect(json.data.pushProtection.reads).toBeGreaterThan(10)
+  })
+
+  test('1.4f/settle: rule sets that GitHub does not report for a while after setup created them are read back as full-restricted', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    let stale = 0
+    const off = fake.on('GET repos/{owner}/{repo}/rules/branches/:branch*', () => {
+      stale += 1
+      if (stale === 6) off()
+      return []
+    })
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
+    expect(result.code).toBe(0)
+    expect(stale).toBe(6)
+    const json = JSON.parse(result.stdout)
+    expect(json.data.protection).toMatchObject({ state: 'full-restricted', settled: true })
+    expect(json.lines.join('\n')).toContain('protection: full, with the update restriction')
+  })
+
+  test('1.4f/settle: a setting whose reads never settle is reported with the last read and a note to read it again', async () => {
+    const { fixture, fake, security } = await createSetupFixture()
+    security.afterPatch = Array.from({ length: 200 }, (_, index) =>
+      index % 2 === 0 ? 'enabled' : 'disabled',
+    )
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
+    expect(result.code).toBe(0)
+    const json = JSON.parse(result.stdout)
+    expect(json.data.pushProtection.settled).toBe(false)
+    expect(json.lines.join('\n')).toMatch(
+      new RegExp(
+        `the push protection setting read back from GitHub changed \\d+ times in 60 s, and the line above shows the last read; GitHub may hold another value\\. To read it again later, run \`hackwin setup --resume\` in ${fixture.main.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+      ),
+    )
   })
 })
