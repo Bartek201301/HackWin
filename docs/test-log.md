@@ -17,6 +17,43 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.6d, gate: stages 7 to 11 (PR #69, issue #23)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/23-gate-stages-7-11`, created by the integrator from `58fde88` after the merge of #64; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `1508346`, on `58fde88`, then a merge of `origin/main` at `9ab5826` (`72f0289`); PR #69 opened at 05:21:50 UTC, and CI passed.
+  - The Lead's review round brought `3bbddbe`:
+    - log text is scanned and hidden before any comment or attention text;
+    - project commands get an allowlisted environment with the Gate's own `HOME`, `GH_CONFIG_DIR` and git config, no SSH, and no system or global git config;
+    - the install cache holds only main's own install, and nothing is given back;
+    - the soft fallback requires the GitHub Actions app;
+    - "flaky" is decided only from failure lines;
+    - the default branch is never deleted;
+    - a first-parent check after the merge, and an attention item when the smoke fetch fails;
+    - no test waits real minutes.
+  - `lead-55` sent `merge #69` with the head SHA by SendMessage. Its review: AC23, AC24, AC27, AC28, AC29 and AC57 are asserted, and the merge path is sound:
+    - no path merges a SHA that skipped a stage or lacks green required checks on that exact SHA;
+    - the merge is pinned with `--match-head-commit`;
+    - `--admin` follows the settled rule with a fresh protection read; a failed read is retried, and nothing merges on a stale one.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 23 files inside issue #23's paths; no secret pattern; no conflict with `9ab5826`. Step 6, with the PR merged into `9ab5826`, ran while another session's suite was running (11 vitest processes; load average 6.76 at the start, 25.65 at the end): `npm test` passed 753 of 753, and `npm run test:ac` passed AC23 (1), AC24 (1), AC27 (3), AC28 (2), AC29 (3) and AC57 (1). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: worktrees for #24 and #25 at `15d3b88`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - Still reachable from a pull request's commands on the Lead's machine (listed in the PR):
+    - the keychain;
+    - files under the real home, by path (gh's `hosts.yml`, `~/.ssh`, `.npmrc`, the `.env.local` of worktrees);
+    - `ssh` run directly;
+    - the clone's shared `.git`;
+    - the network.
+    
+    Real isolation is an item for the PRD revision.
+  - For the PRD revision: `retry` resets `ci_reruns` (9.2 says per head SHA); a non-empty `bypassable` and the two new post-merge items use the attention type "repeated failure", while G23 names another case; the 1.3e reader does not read classic branch protection.
+  - Contracts 5.7 gains the stages `merge-test`, `ci` and `merge` and the result `flaky`; kept for the next integrator task.
+  - `src/core/project` offers no way to stop a running command, so "a push during the run ends it" holds only after the command under way.
+  - One new test (AC27) failed once in a full-file run: right after `scene.poll()` the state file still showed the old queue. The likely cause, not confirmed: `poll()` resolves when the intake ends, and the Gate writes the state file after that. The test now waits for the queue with `until`.
+  - The session's `npm test` took 98.56 s, 139.43 s and 136.95 s.
+- Measured: PR open 37 min 47 s (05:21:50 to 05:59:37 UTC), including the Lead's review and one round of fixes; 3 commits (one a merge of `origin/main`), 2 PR runs (134 s on `72f0289`, 95 s on `3bbddbe`), 0 conflicts; local merge test `npm test` 184.54 s; the run on main after the merge 92 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/69; head `3bbddbe`; merge commit `15d3b88`; runs `38686383472` and `38689207914` (PR) and `38689813519` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.5f, take: the Gate's comment by its marker, resume after release, worktree state (PR #68, issue #57)
 
 - Setup: one builder session of lane B (Claude Code) in the worktree `task/57-take-gate-comment-marker`, created by the integrator from `58fde88` after the merge of #64; `lead-55` opened the session. The integrator's planning session for the merge.
