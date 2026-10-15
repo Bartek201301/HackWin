@@ -181,14 +181,16 @@ export class Questions {
 
 /**
  * The questions of this run: the answers file of `--answers`, read and checked, and the
- * terminal. Without a terminal, setup needs an answers file (CM11).
+ * terminal. Without a terminal, setup needs an answers file (CM11); `setup --resume` does not,
+ * because each of its questions has an answer that holds without one.
  * @param {CommandContext} ctx
+ * @param {{ required?: boolean }} [options] False: no answers file and no terminal is no error.
  * @returns {Promise<Questions>}
  */
-export async function openQuestions(ctx) {
+export async function openQuestions(ctx, { required = true } = {}) {
   const name = ctx.flags.answers
   if (typeof name !== 'string') {
-    if (ctx.caller !== 'terminal') {
+    if (ctx.caller !== 'terminal' && required) {
       throw new PreconditionError(
         'setup asks its questions in an interactive terminal, and this is none',
         {

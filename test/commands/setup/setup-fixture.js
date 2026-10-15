@@ -1,11 +1,30 @@
 // A fixture for the tests of `setup`: an offline repository with a bare origin, unconfigured, and a
 // fake GitHub that knows the test accounts, answers `gh version` and the user lookups of step 3,
-// and records every call, so a test can tell that GitHub was left unchanged.
+// holds the push protection setting of step 13, and records every call, so a test can tell what
+// changed on GitHub.
+//
+// Step 14 runs the checks of `join` for the Lead's machine, so a `bin` directory comes first on
+// PATH: a `hackwin` that runs the CLI of this checkout (the hooks' self test calls it), a `claude`
+// that does nothing, and an `npm` that only notes its arguments, so the install of the Node
+// fixture stays offline. The install of `join` inherits the PATH of the test process, so
+// runSetup puts the directory first there too while setup runs.
 
-import { lstatSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { delimiter, join, relative } from 'node:path'
 import { Readable } from 'node:stream'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
 import { main } from '../../../src/cli/main.js'
+import { quoteShellArg } from '../../../src/core/runtime/index.js'
 import {
   BUILDER3_LOGIN,
   accounts,
@@ -16,6 +35,8 @@ import {
   teamConfig,
   yaml,
 } from '../../harness/index.js'
+
+const CLI = fileURLToPath(new URL('../../../bin/hackwin.js', import.meta.url))
 
 /** @typedef {import('../../harness/index.js').FakeGitHub} FakeGitHub */
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
@@ -43,13 +64,26 @@ export const EVENT = Object.freeze({
  *   Node project. True by default.
  * @param {Record<string, string>} [options.files] Files of the first commit, besides the Node
  *   fixture or instead of the README.
- * @param {'public' | 'private'} [options.visibility]
+ * @param {'public' | 'private'} [options.visibility] A private repository behaves as
+ *   `hackwin-fixture-private`: no rule sets and no push protection, unless the next two options
+ *   say otherwise.
+ * @param {boolean} [options.rulesetsOffered]
+ * @param {'offered' | 'refused'} [options.pushProtection] Offered: the setting reads `disabled`
+ *   until enabled. Refused: enabling it answers HTTP 200 and the setting reads back null, as
+ *   on `hackwin-fixture-private` (docs/verification.md E3).
  * @param {{ hackwin: unknown, owners: unknown }} [options.config] Commit a configuration on main,
  *   which makes the repository configured.
  */
-export async function createSetupFixture({ nodeProject = true, files, visibility, config } = {}) {
+export async function createSetupFixture({
+  nodeProject = true,
+  files,
+  visibility = 'public',
+  rulesetsOffered = visibility === 'public',
+  pushProtection = visibility === 'public' ? 'offered' : 'refused',
+  config,
+} = {}) {
   const fixture = await createFixture({ nodeProject, files, config })
-  const fake = createFakeGitHub({ visibility })
+  const fake = createFakeGitHub({ visibility, rulesetsOffered })
   fake.on('version', () =>
     rawResult({ code: 0, stdout: 'gh version 2.88.1 (2026-01-01)\n', stderr: '' }),
   )
@@ -59,8 +93,108 @@ export async function createSetupFixture({ nodeProject = true, files, visibility
     }
     return { login: params.login, type: 'User' }
   })
-  return { fixture, fake }
+  const security = servePushProtection(fake, pushProtection)
+  return { fixture, fake, security, env: toolsEnv(fixture) }
 }
+
+/**
+ * The repository requests of step 13 on the fake GitHub: `GET repos/{owner}/{repo}` with
+ * `security_and_analysis`, and `PATCH repos/{owner}/{repo}` that changes it.
+ * @param {FakeGitHub} fake
+ * @param {'offered' | 'refused'} mode
+ * @returns {{ pushProtection: string | null }} The setting, which a test may change.
+ */
+function servePushProtection(fake, mode) {
+  const security = { pushProtection: mode === 'offered' ? 'disabled' : null }
+  const { state } = fake
+  /** @param {string} login */
+  const repositoryJson = (login) => {
+    const order = ['read', 'triage', 'write', 'maintain', 'admin']
+    const level = state.collaborators[login] ?? (state.visibility === 'public' ? 'read' : null)
+    const rank = level === null ? -1 : order.indexOf(level)
+    return {
+      full_name: state.repo,
+      name: state.repo.split('/')[1],
+      owner: { login: state.repo.split('/')[0] },
+      default_branch: state.defaultBranch,
+      visibility: state.visibility,
+      private: state.visibility === 'private',
+      html_url: `https://github.com/${state.repo}`,
+      permissions: {
+        admin: rank >= 4,
+        maintain: rank >= 3,
+        push: rank >= 2,
+        triage: rank >= 1,
+        pull: rank >= 0,
+      },
+      // GitHub returns the block only to admins, and null where it offers no secret scanning.
+      ...(rank >= 4
+        ? {
+            security_and_analysis:
+              security.pushProtection === null
+                ? null
+                : {
+                    secret_scanning: { status: 'enabled' },
+                    secret_scanning_push_protection: { status: security.pushProtection },
+                  },
+          }
+        : {}),
+    }
+  }
+  fake.on('GET repos/{owner}/{repo}', ({ login }) => repositoryJson(login))
+  fake.on('PATCH repos/{owner}/{repo}', ({ login, body }) => {
+    const wanted = body?.security_and_analysis ?? {}
+    if (mode === 'refused') {
+      if (wanted.secret_scanning) {
+        throw httpError(422, 'Secret scanning is not available for this repository.')
+      }
+      // HTTP 200 that enables nothing (docs/verification.md, E3 step 2).
+      return {
+        ...repositoryJson(login),
+        security_and_analysis: {
+          secret_scanning: { status: 'disabled' },
+          secret_scanning_push_protection: { status: 'disabled' },
+        },
+      }
+    }
+    const status = wanted.secret_scanning_push_protection?.status
+    if (status !== undefined) security.pushProtection = status
+    return repositoryJson(login)
+  })
+  return security
+}
+
+/**
+ * The fixture's environment with the commands of step 14 first on PATH.
+ * @param {Fixture} fixture
+ * @returns {Record<string, string | undefined>}
+ */
+export function toolsEnv(fixture) {
+  return { ...fixture.env, PATH: `${toolsDir(fixture.dir)}${delimiter}${fixture.env.PATH}` }
+}
+
+/**
+ * The directory of the commands setup's step 14 meets: `hackwin`, `claude` and `npm`.
+ * @param {string} dir The fixture's directory.
+ * @returns {string}
+ */
+function toolsDir(dir) {
+  const bin = join(dir, 'bin')
+  mkdirSync(bin, { recursive: true })
+  const tools = {
+    hackwin: `#!/bin/sh\nexec ${quoteShellArg(process.execPath)} ${quoteShellArg(CLI)} "$@"\n`,
+    claude: '#!/bin/sh\nexit 0\n',
+    npm: `#!/bin/sh\necho "$*" >> ${quoteShellArg(join(dir, 'npm.log'))}\nexit 0\n`,
+  }
+  for (const [name, text] of Object.entries(tools)) {
+    writeFileSync(join(bin, name), text)
+    chmodSync(join(bin, name), 0o755)
+  }
+  return bin
+}
+
+/** The answers of `join` that setup hands on for the Lead's machine (CM11). */
+export const JOIN_ANSWERS = Object.freeze({ language: 'English', explanation_style: 'concise' })
 
 /**
  * The answers of a fixture team of this size (test/harness/team.js), with changes.
@@ -69,7 +203,7 @@ export async function createSetupFixture({ nodeProject = true, files, visibility
  * @returns {any}
  */
 export function teamAnswers(size, change) {
-  const answers = structuredClone(teamConfig(size).answers)
+  const answers = { ...structuredClone(teamConfig(size).answers), ...JOIN_ANSWERS }
   answers.project.event = { ...EVENT }
   change?.(answers)
   return answers
@@ -98,25 +232,62 @@ export function writeAnswers(fixture, answers, name = 'answers.yml') {
  * @param {string} [options.login]
  * @param {string[]} [options.input] Lines typed in the terminal.
  * @param {boolean} [options.tty] stdin and stdout are terminals: the caller is `terminal`.
- * @param {Record<string, string | undefined>} [options.env]
+ * @param {Record<string, string | undefined>} [options.env] The fixture's environment with the
+ *   commands of step 14 first on PATH by default.
  * @param {string} [options.cwd]
  */
 export async function runSetup(fixture, fake, options = {}) {
-  const { answers, login = LEAD, input = [], tty = false, env = fixture.env } = options
   const args = [...(options.args ?? [])]
-  if (answers !== undefined) args.push('--answers', writeAnswers(fixture, answers))
+  if (options.answers !== undefined) {
+    args.push('--answers', writeAnswers(fixture, options.answers))
+  }
+  return runHackwin(fixture, fake, ['setup', ...args], options)
+}
+
+/**
+ * Run a hackwin command in-process, as runSetup runs `setup`.
+ * @param {Fixture} fixture
+ * @param {FakeGitHub} fake
+ * @param {string[]} argv The command and its arguments.
+ * @param {object} [options]
+ * @param {string} [options.login]
+ * @param {string[]} [options.input]
+ * @param {boolean} [options.tty]
+ * @param {Record<string, string | undefined>} [options.env]
+ * @param {string} [options.cwd]
+ */
+export async function runHackwin(fixture, fake, argv, options = {}) {
+  const { login = LEAD, input = [], tty = false } = options
+  const env = options.env ?? toolsEnv(fixture)
   let stdout = ''
   let stderr = ''
   const stdin = Object.assign(Readable.from(input.map((line) => `${line}\n`)), { isTTY: tty })
-  const code = await main(['setup', ...args], {
-    cwd: options.cwd ?? fixture.main,
-    env,
-    stdin,
-    stdout: { write: (chunk) => (stdout += chunk), isTTY: tty },
-    stderr: { write: (chunk) => (stderr += chunk) },
-    ghExecutor: fake.as(login),
-  })
-  return { code, stdout, stderr }
+  const path = process.env.PATH
+  process.env.PATH = env.PATH
+  try {
+    const code = await main(argv, {
+      cwd: options.cwd ?? fixture.main,
+      env,
+      stdin,
+      stdout: { write: (chunk) => (stdout += chunk), isTTY: tty },
+      stderr: { write: (chunk) => (stderr += chunk) },
+      ghExecutor: fake.as(login),
+    })
+    return { code, stdout, stderr }
+  } finally {
+    if (path === undefined) delete process.env.PATH
+    else process.env.PATH = path
+  }
+}
+
+/**
+ * What `npm` was asked to do by the setups of this fixture, one line per call.
+ * @param {Fixture} fixture
+ * @returns {string[]}
+ */
+export function npmCalls(fixture) {
+  const log = join(fixture.dir, 'npm.log')
+  return existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []
 }
 
 /**
@@ -149,4 +320,41 @@ export function snapshot(root) {
  */
 export function writes(fake) {
   return fake.calls.filter((call) => call.method !== null && call.method !== 'GET')
+}
+
+/**
+ * A pre-receive hook on the fixture's origin that marks its start, waits, and then accepts or
+ * refuses the push.
+ * @param {Fixture} fixture
+ * @param {boolean} accept
+ * @returns {string} The marker file, which appears when the push has started.
+ */
+export function slowOrigin(fixture, accept) {
+  const marker = join(fixture.dir, 'push-started')
+  const hook = join(fixture.origin, 'hooks', 'pre-receive')
+  writeFileSync(
+    hook,
+    `#!/bin/sh\ncat >/dev/null\ntouch '${marker}'\nsleep 1\n${accept ? 'exit 0' : 'echo refused >&2\nexit 1'}\n`,
+  )
+  chmodSync(hook, 0o755)
+  return marker
+}
+
+/**
+ * Wait until a file exists, for at most 5 seconds.
+ * @param {string} file
+ */
+export async function waitFor(file) {
+  for (let tries = 0; tries < 200 && !existsSync(file); tries += 1) await sleep(25)
+  if (!existsSync(file)) throw new Error(`${file} did not appear`)
+}
+
+/**
+ * The commit of origin's main.
+ * @param {Fixture} fixture
+ * @returns {Promise<string>}
+ */
+export async function originMain(fixture) {
+  const { stdout } = await fixture.git.run(['ls-remote', fixture.origin, 'refs/heads/main'])
+  return stdout.split(/\s+/)[0]
 }

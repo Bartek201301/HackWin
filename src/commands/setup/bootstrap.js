@@ -10,7 +10,11 @@
 //   secrets itself (E6) before it pushes; push protection does not exist yet at this point.
 // - The push sends the commit alone, and the local branch moves only once origin holds it.
 // - A failure or an interrupt (Ctrl+C) before the push succeeds puts every file back as it was and
-//   changes nothing on GitHub; one after it lets setup finish the local branch first.
+//   changes nothing on GitHub; one after it lets setup finish the local branch first, and then
+//   setup stops for `setup --resume`. When setup cannot tell whether the push reached origin, it
+//   puts the files back and says how to find out, never that nothing changed.
+// - The git calls after the push run in a process group of their own, so a Ctrl+C in the terminal
+//   reaches setup, which notes it, but not the git child, which completes.
 
 import { readFileSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
@@ -30,6 +34,8 @@ import {
   PROJECT_FILES,
   SETTINGS_PATH,
   TEMPLATE_CHECK_WORKFLOW_PATH,
+  WORKFLOW_PATH,
+  linkError,
   linkOn,
   mergeClaudeSettings,
   planProjectFiles,
@@ -62,6 +68,8 @@ import {
  * @property {string[]} removed The files setup removed.
  * @property {string[]} kept The files of 6.4 that existed and stay as they were.
  * @property {string[]} notices
+ * @property {boolean} interrupted An interrupt came in after the push had started, and the push
+ *   reached origin: setup finished the local branch and stops before the steps after the push.
  */
 
 /**
@@ -83,6 +91,12 @@ export const BOOTSTRAP_PATHS = Object.freeze([
 const INTERRUPTS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP'])
 
 /**
+ * The timeout of each git call after the push. A git call with a timeout runs in a process group
+ * of its own (src/core/runtime/exec.js), out of reach of a Ctrl+C in the terminal.
+ */
+const AFTER_PUSH_TIMEOUT_MS = 120_000
+
+/**
  * Write the files, commit them and push the commit. Before the push succeeds, any failure or
  * interrupt undoes every change in the checkout and ends setup with an error.
  * @param {CommandContext} ctx
@@ -98,8 +112,12 @@ export async function bootstrap(ctx, input, { signals = process } = {}) {
 
   const journal = await Journal.remember(root, BOOTSTRAP_PATHS)
   const interrupt = watchInterrupts(signals)
-  const scratch = await mkdtemp(join(tmpdir(), 'hackwin-setup-'))
+  /** @type {string | null} */
+  let scratch = null
   try {
+    interrupt.start()
+    scratch = await mkdtemp(join(tmpdir(), 'hackwin-setup-'))
+    const afterPush = git.with({ timeoutMs: AFTER_PUSH_TIMEOUT_MS })
     /** @type {string | null} */
     let commit = null
     try {
@@ -107,29 +125,38 @@ export async function bootstrap(ctx, input, { signals = process } = {}) {
       interrupt.check()
       commit = await makeCommit(ctx, git, input, join(scratch, 'index'), journal)
       interrupt.check()
-      await push(git, input.branch, commit)
+      await push(git, input.branch, commit, root)
     } catch (error) {
-      if (commit === null || !(await landed(git, input.branch, commit))) {
+      const origin = commit === null ? 'lacks' : await landed(afterPush, input.branch, commit)
+      if (origin !== 'holds') {
         await undo(ctx.out, journal, root)
+        if (origin === 'unknown') {
+          throw unknownPush(root, input.branch, String(commit), {
+            cause: error,
+            interrupted: interrupt.happened(),
+          })
+        }
         throw interrupt.happened() ? interrupted(root) : error
       }
       ctx.out.warn(`the push reported a failure, but origin/${input.branch} holds ${commit}`)
     }
-    const changed = await changedFiles(git, input.head, commit)
-    await moveBranch(ctx, git, input, commit, changed)
+    const pushed = /** @type {string} */ (commit)
+    const changed = await changedFiles(afterPush, input.head, pushed)
+    await moveBranch(ctx, afterPush, input, pushed, changed)
     const removed = changed.filter((file) => file.status === 'D').map((file) => file.path)
     return {
-      commit,
+      commit: pushed,
       written: changed.filter((file) => file.status !== 'D').map((file) => file.path),
       removed,
       kept: BOOTSTRAP_PATHS.filter(
         (path) => journal.existed(path) && !changed.some((file) => file.path === path),
       ),
       notices: plan.flatMap((change) => (change.notice ? [change.notice] : [])),
+      interrupted: interrupt.happened(),
     }
   } finally {
     interrupt.stop()
-    await rm(scratch, { recursive: true, force: true })
+    if (scratch !== null) await rm(scratch, { recursive: true, force: true })
   }
 }
 
@@ -184,6 +211,11 @@ const COMMITTED_PATHS = Object.freeze(
  * @param {readonly string[]} paths
  */
 async function refuseIgnored(ctx, git, paths) {
+  // git check-ignore fails as a whole (exit 128) for a path beyond a symlink: name the link.
+  for (const path of paths) {
+    const link = await linkOn(ctx.repoRoot, path)
+    if (link !== null && link.path !== path) throw linkError(path, link)
+  }
   const args = ['check-ignore', '--verbose', '--', ...paths]
   const result = await git.run(args, { allowFailure: true })
   // Exit 1: no path is ignored. A tracked file is never reported: ignore rules do not apply to it.
@@ -238,7 +270,7 @@ async function writeFiles(root, input, plan) {
 async function makeCommit(ctx, git, input, indexFile, journal) {
   const own = git.with({ env: { ...ctx.env, GIT_INDEX_FILE: indexFile } })
   if (input.head !== null) await own.run(['read-tree', input.head])
-  await own.run(['add', '--all', '--', ...(await journal.changedPaths())])
+  await stageFiles(own, await journal.changedPaths())
   const tree = (await own.run(['write-tree'])).stdout.trim()
   const base =
     input.head ??
@@ -266,19 +298,48 @@ async function makeCommit(ctx, git, input, indexFile, journal) {
 }
 
 /**
+ * Stage these files, and only these, in the index of `git`, a removed file as a removal. An empty
+ * list is refused: `git add --all --` without a path stages the whole tree. Setup always has
+ * files to commit, because hackwin.yml is new on a repository that is not configured.
+ * @param {Git} git Git with the index of the bootstrap commit.
+ * @param {readonly string[]} paths
+ */
+export async function stageFiles(git, paths) {
+  if (paths.length === 0) {
+    throw new Error('setup found no file of its own to commit, so it made no bootstrap commit')
+  }
+  await git.run(['add', '--all', '--', ...paths])
+}
+
+/**
+ * GitHub's refusal of a push that creates or changes a workflow file, from a login whose OAuth
+ * token lacks the `workflow` scope. The bootstrap commit creates `.github/workflows/hackwin.yml`.
+ */
+const WORKFLOW_SCOPE_REFUSED = /without `?workflow`? scope/
+
+/**
  * Step 9: push the bootstrap commit alone to the default branch, without tags.
  * @param {Git} git
  * @param {string} branch
  * @param {string} commit
+ * @param {string} root The main checkout, for the resolve.
  */
-async function push(git, branch, commit) {
+async function push(git, branch, commit, root) {
   const refspec = `${commit}:refs/heads/${branch}`
   const result = await git.run(['push', '--quiet', '--no-follow-tags', 'origin', refspec], {
     allowFailure: true,
   })
-  if (result.code !== 0) {
-    throw new RemoteError(`git push origin ${refspec} failed`, { tail: result.tail })
+  if (result.code === 0) return
+  if (result.tail.some((line) => WORKFLOW_SCOPE_REFUSED.test(line))) {
+    throw new RemoteError(
+      `git push origin ${refspec} failed: GitHub refuses a push that creates a workflow file from a login without the workflow scope, and the bootstrap commit creates ${WORKFLOW_PATH}`,
+      {
+        tail: result.tail,
+        resolve: `add the scope to the gh login that git pushes with: run \`gh auth refresh -s workflow\` in any directory, then ${runIn('hackwin setup', root)}`,
+      },
+    )
   }
+  throw new RemoteError(`git push origin ${refspec} failed`, { tail: result.tail })
 }
 
 /**
@@ -318,17 +379,19 @@ function commitMessage({ version, branch }) {
 }
 
 /**
- * Whether origin's branch points at the commit, although the push reported a failure.
+ * Whether origin's branch points at the commit, although the push reported a failure: `holds`,
+ * `lacks`, or `unknown` when origin cannot be asked.
  * @param {Git} git
  * @param {string} branch
  * @param {string} commit
- * @returns {Promise<boolean>}
+ * @returns {Promise<'holds' | 'lacks' | 'unknown'>}
  */
 async function landed(git, branch, commit) {
   const result = await git.run(['ls-remote', 'origin', `refs/heads/${branch}`], {
     allowFailure: true,
   })
-  return result.code === 0 && result.stdout.split(/\s+/)[0] === commit
+  if (result.code !== 0) return 'unknown'
+  return result.stdout.split(/\s+/)[0] === commit ? 'holds' : 'lacks'
 }
 
 /**
@@ -379,6 +442,26 @@ async function undo(out, journal, root) {
 }
 
 /**
+ * The push failed or was interrupted, and origin could not be asked whether it holds the commit:
+ * the commit may be there. Setup has put its files back.
+ * @param {string} root
+ * @param {string} branch
+ * @param {string} commit
+ * @param {{ cause: unknown, interrupted: boolean }} what
+ * @returns {RemoteError}
+ */
+function unknownPush(root, branch, commit, { cause, interrupted }) {
+  const check = runIn(`git ls-remote origin refs/heads/${branch}`, root)
+  return new RemoteError(
+    `setup could not check whether its bootstrap commit ${commit} reached origin/${branch}: the push ${interrupted ? 'was interrupted' : 'failed'}, and git ls-remote failed too. Setup put its files back; the commit may be on origin`,
+    {
+      resolve: `${check}: when it prints ${commit}, the push landed, and ${runIn('hackwin setup --resume', root)}; otherwise ${runIn('hackwin setup', root)}`,
+      cause,
+    },
+  )
+}
+
+/**
  * @param {string} root
  * @returns {PreconditionError}
  */
@@ -399,8 +482,11 @@ function watchInterrupts(signals) {
   const note = () => {
     happened = true
   }
-  for (const signal of INTERRUPTS) signals.on(signal, note)
   return {
+    /** Start listening; `stop` removes every handler that this added. */
+    start() {
+      for (const signal of INTERRUPTS) signals.on(signal, note)
+    },
     happened: () => happened,
     /** Throws when an interrupt came in. */
     check() {

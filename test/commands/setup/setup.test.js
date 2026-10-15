@@ -105,7 +105,11 @@ describe('1.4d/bootstrap: the bootstrap commit', () => {
     expect(settings.permissions.deny).toEqual(denyRules({ defaultBranch: 'main' }))
     expect(Object.keys(settings.hooks)).toEqual(CLAUDE_HOOKS.map((hook) => hook.event))
     expect(readFileSync(join(fixture.main, '.env.example'), 'utf8')).toBe('')
-    expect(writes(fake)).toEqual([])
+    // On GitHub, steps 10 to 13 write labels, rule sets and the push protection setting only.
+    expect(writes(fake).length).toBeGreaterThan(0)
+    for (const call of writes(fake)) {
+      expect(call.endpoint).toMatch(/^repos\/\{owner\}\/\{repo\}(\/labels|\/rulesets)?$/)
+    }
   })
 
   test('1.4d/bootstrap: commits and pushes with the member hooks switched off', async () => {
@@ -162,6 +166,8 @@ const SOLO_INPUT = [
   EVENT.start,
   EVENT.end,
   '', // project language: en
+  '', // answer language of join: the project language
+  '', // explanation style of join: concise
 ]
 
 describe('AC3: setup proposes the stack commands of a Node project', () => {
