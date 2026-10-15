@@ -6,17 +6,16 @@
 // the last state this clone fetched. An older CLI, or one of another phase, exits 2 with the
 // install command of the pinned version, which blocks the commit or the push, as every command
 // does; a newer bug fix release of the same phase prints the one-line warning and continues.
+// The runner's loader, loadCheckedConfig of src/core/config, does all of this without its fetch.
 
-import { enforceVersion } from '../../cli/main.js'
-import { ConfigError, PreconditionError } from '../../core/runtime/errors.js'
-import { loadConfig, resolveIdentity } from '../../core/config/index.js'
-import { HACKWIN_FILE, pinnedVersionOf } from '../../core/config/load.js'
+import { REPOSITORY_URL } from '../../cli/context.js'
+import { PreconditionError } from '../../core/runtime/errors.js'
+import { loadCheckedConfig, resolveIdentity } from '../../core/config/index.js'
 import { readLocal } from '../../core/state/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
 
 /** @import { CommandContext } from '../../cli/context.js' */
 /** @import { Config, Identity } from '../../core/config/index.js' */
-/** @import { Git } from '../../core/git/index.js' */
 
 /**
  * hackwin.yml and owners.yml from the local origin/main, validated, after the version check.
@@ -25,22 +24,13 @@ import { mainCheckout } from '../../core/worktrees/index.js'
  * @param {CommandContext} ctx
  * @returns {Promise<Config>}
  */
-export async function loadHookConfig(ctx) {
-  const ref = await mainRef(ctx.git)
-  /** @type {Config} */
-  let config
-  try {
-    config = await loadConfig(ctx.git, { ref, fetch: false })
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      const text = await ctx.git.showFile(ref, HACKWIN_FILE).catch(() => null)
-      const pinned = text === null ? null : pinnedVersionOf(text)
-      if (pinned !== null) enforceVersion({ running: ctx.version, pinned, out: null })
-    }
-    throw error
-  }
-  enforceVersion({ running: ctx.version, pinned: config.hackwin.cli_version, out: ctx.out })
-  return config
+export function loadHookConfig(ctx) {
+  return loadCheckedConfig(ctx.git, {
+    fetch: false,
+    running: ctx.version,
+    repositoryUrl: REPOSITORY_URL,
+    out: ctx.out,
+  })
 }
 
 /**
@@ -60,18 +50,4 @@ export async function hookIdentity(ctx, config) {
     )
   }
   return resolveIdentity(config, record.login)
-}
-
-/**
- * The remote-tracking ref of the default branch: what origin/HEAD points to, or origin/main.
- * The same lookup as the runner's, which does not export it.
- * @param {Git} git
- * @returns {Promise<string>}
- */
-async function mainRef(git) {
-  const result = await git.run(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], {
-    allowFailure: true,
-  })
-  const ref = result.stdout.trim()
-  return result.code === 0 && ref.startsWith('origin/') ? ref : 'origin/main'
 }
