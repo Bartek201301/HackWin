@@ -2,6 +2,7 @@
 // the whole event. It tests and merges pull requests one at a time without a model (section 9).
 
 import { startGate } from './gate.js'
+import { createPipeline } from './pipeline.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 
@@ -10,5 +11,5 @@ import { startGate } from './gate.js'
  * @returns {Promise<CommandResult>}
  */
 export async function run(ctx) {
-  return startGate(ctx)
+  return startGate(ctx, { pipeline: createPipeline() })
 }

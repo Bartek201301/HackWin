@@ -13,9 +13,11 @@ import { readProtection } from '../../core/protection/index.js'
 import { PreconditionError, runIn } from '../../core/runtime/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
 import { startKeepAwake } from './awake.js'
+import { hoursAndMinutes } from './digest.js'
 import { INPUT_HELP, readCommands } from './input.js'
 import { acquireLock, releaseLock, runningGate } from './lock.js'
 import {
+  addsSecret,
   gateFiles,
   loadGateId,
   loadState,
@@ -52,6 +54,7 @@ const TICK_MS = 1000
  *   of the queue through the stages (G8, G17). It announces each stage with `gate.stage()`, which
  *   writes the heartbeat and the state, and returns between two stages once `gate.stopping` is
  *   true. A finished run takes the pull request off the head of the queue.
+ * @property {string[]} [notices] Lines for the header about what the pipeline does not do yet.
  */
 
 /**
@@ -465,6 +468,10 @@ function retry(gate, pr) {
     gate.line(
       `retry #${pr}: only a failed or flaky run is retried, and the last run of #${pr} ended ${record.result ?? 'without a result'}; a new head SHA queues it again`,
     )
+  } else if (addsSecret(record)) {
+    gate.line(
+      `retry #${pr}: the head SHA of #${pr} adds a secret, so it is not queued again; a new head SHA without it is`,
+    )
   } else {
     gate.retries.add(pr)
     gate.line(`retry #${pr}: queued again at the next poll`)
@@ -499,17 +506,9 @@ function headerLines({ gate, status, awake, pid, pipeline }) {
   if (!pipeline.run) {
     lines.push('notice: the pipeline is not built yet: this Gate polls, but takes no pull request')
   }
+  for (const notice of pipeline.notices ?? []) lines.push(`notice: ${notice}`)
   lines.push(INPUT_HELP)
   return lines
-}
-
-/**
- * The time as the terminal prints it (9.6): hours and minutes, local time.
- * @param {Date} time
- */
-function hoursAndMinutes(time) {
-  const pad = (/** @type {number} */ value) => String(value).padStart(2, '0')
-  return `${pad(time.getHours())}:${pad(time.getMinutes())}`
 }
 
 /** @param {unknown} error */

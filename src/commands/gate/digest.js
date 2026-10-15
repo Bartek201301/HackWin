@@ -87,3 +87,13 @@ export async function readDigest(file) {
     .sort((a, b) => Date.parse(b.entry.time) - Date.parse(a.entry.time) || b.index - a.index)
     .map(({ entry }) => entry)
 }
+
+/**
+ * The time as the terminal prints it (9.6): hours and minutes, local time.
+ * @param {Date} time
+ * @returns {string}
+ */
+export function hoursAndMinutes(time) {
+  const pad = (/** @type {number} */ value) => String(value).padStart(2, '0')
+  return `${pad(time.getHours())}:${pad(time.getMinutes())}`
+}
