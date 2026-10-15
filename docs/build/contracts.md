@@ -371,7 +371,7 @@ Local state of a clone lives in `<gitCommonDir>/hackwin/`, shared by every workt
 
 ### 4.9 `src/core/project` (1.3c)
 
-Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs, logFile }`. A run without `timeoutMs` has the default timeout of 20 minutes (`PROJECT_TIMEOUT_MS`). Every run takes `env`, the whole environment of the project command, `process.env` by default (as `execShell`, section 4.1): a caller that must keep a variable from the project's code, such as `internal ci` with the token of its run, passes an environment without it.
+Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs, logFile }`. A run without `timeoutMs` has the default timeout of 20 minutes (`PROJECT_TIMEOUT_MS`). Every run takes `env`, the whole environment of every process the run starts, `process.env` by default (as `execShell`, section 4.1): a caller that must keep a variable from the project's code, such as `internal ci` with the token of its run, passes an environment without it. That covers git as well: the `git ls-files` of `runInstall` that looks for a manifest, and the git calls of `generatedFileCheck`, which with `env` run with it in place of the environment of the `git` passed in, and without `env` keep that environment.
 
 | Export | Inputs | Output |
 | --- | --- | --- |

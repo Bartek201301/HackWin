@@ -31,9 +31,9 @@ export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
  */
 
 /**
- * The environment of a project command: the whole environment of the child, `process.env` by
- * default. A caller that must keep a variable from the project's code, such as the token of a
- * CI run, passes an environment without it.
+ * The environment of every process a run starts, the project command and git alike: the whole
+ * environment of the child, `process.env` by default. A caller that must keep a variable from the
+ * project's code, such as the token of a CI run, passes an environment without it.
  * @typedef {Record<string, string | undefined>} ProjectEnv
  */
 
@@ -43,7 +43,8 @@ export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
  * @property {Config} config
  * @property {number} [timeoutMs] PROJECT_TIMEOUT_MS by default.
  * @property {string} [logFile] Receives the whole output; its directory is created.
- * @property {ProjectEnv} [env] The environment of the command; `process.env` by default.
+ * @property {ProjectEnv} [env] The environment of the command and of git; `process.env` by
+ *   default.
  */
 
 /**
@@ -55,7 +56,7 @@ export const PROJECT_TIMEOUT_MS = 20 * 60 * 1000
 export async function runInstall({ cwd, config, timeoutMs, logFile, env }) {
   const install = projectCommand(config, 'install')
   const manifests = config.hackwin.paths?.manifests ?? []
-  if (!(await hasManifest(cwd, manifests))) {
+  if (!(await hasManifest(cwd, manifests, env))) {
     const globs = manifests.length === 0 ? 'it is empty' : manifests.join(', ')
     return {
       skipped: true,
@@ -135,7 +136,8 @@ export async function formatCheck({ cwd, config, files, env }) {
  * file. Changes that were in the checkout before the run do not count. Every tracked file the
  * command changed is restored. `ok` without a run when `commands.generate` is null.
  * @param {{ cwd: string, config: Config, git: Git, env?: ProjectEnv }} options `git` may run in
- *   any worktree of the clone; the check runs in `cwd`.
+ *   any worktree of the clone; the check runs in `cwd`. With `env`, its git calls run with `env`
+ *   in place of the environment of `git`.
  * @returns {Promise<{ ok: boolean, changed: string[], run: ProjectRun | null }>}
  */
 export async function generatedFileCheck({ cwd, config, git, env }) {
@@ -146,7 +148,7 @@ export async function generatedFileCheck({ cwd, config, git, env }) {
       key: 'commands.generate',
     })
   }
-  const repo = git.with({ cwd })
+  const repo = git.with(env === undefined ? { cwd } : { cwd, env })
   const before = await trackedChanges(repo, cwd)
 
   /** @type {string[]} */
@@ -223,12 +225,13 @@ async function runCommand(command, { cwd, timeoutMs = PROJECT_TIMEOUT_MS, logFil
  * True when a tracked or untracked, not ignored file of the checkout matches one of the globs.
  * @param {string} cwd
  * @param {string[]} globs
+ * @param {ProjectEnv} [env] The environment of git; `process.env` by default.
  * @returns {Promise<boolean>}
  */
-async function hasManifest(cwd, globs) {
+async function hasManifest(cwd, globs, env) {
   if (globs.length === 0) return false
   const isManifest = picomatch(globs, { dot: true })
-  const listing = await createGit({ cwd }).run([
+  const listing = await createGit({ cwd, env }).run([
     'ls-files',
     '-z',
     '--cached',
