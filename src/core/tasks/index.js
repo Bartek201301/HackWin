@@ -3,7 +3,7 @@
 // that wait for a pull request's author and status transitions. See docs/build/contracts.md
 // section 4.5.
 
-export { parseTaskBlock, SCOPE_CHANGE } from './block.js'
+export { parseTaskBlock, SCOPE_CHANGE, shown } from './block.js'
 export { toTask, writtenByTeam, queueOf, dependenciesOf } from './task.js'
 export { slugOf, branchName, parseBranch, parseTaskLink, checkTaskLink } from './branch.js'
 export { LABELS, WAITING_LABELS, roleLabel, setTaskStatus } from './labels.js'
