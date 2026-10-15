@@ -11,7 +11,16 @@ import {
   branchRulesBody,
   updateRestrictionBody,
 } from '../../core/protection/rulesets.js'
-import { leadGitHub, manualClock, readJson, startMain, terminal, until } from './helpers.js'
+import {
+  leadGitHub,
+  manualClock,
+  noKeepAwake,
+  readJson,
+  startDirect,
+  startMain,
+  terminal,
+  until,
+} from './helpers.js'
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 /** @typedef {import('./helpers.js').Terminal} Terminal */
@@ -52,6 +61,26 @@ afterEach(async () => {
  */
 async function startLeadGate(options = {}) {
   const gate = startMain(fixture, { fake: leadGitHub(), login: LEAD, ...options })
+  running.push(gate)
+  await until(
+    async () => gate.io.out.includes(HEADER_END) || (await isSettled(gate.done)),
+    'the header',
+  )
+  if (!gate.io.out.includes(HEADER_END)) throw new Error(`the Gate did not start: ${gate.io.err}`)
+  return gate
+}
+
+/**
+ * Start a Gate of the Lead without a pipeline, on a context that the runner prepared as for
+ * `hackwin gate` in a terminal, and wait for its header. `done` settles with the exit code.
+ */
+async function startProcessGate() {
+  const started = await startDirect(fixture, {
+    fake: leadGitHub(),
+    login: LEAD,
+    options: { pipeline: {}, keepAwake: noKeepAwake },
+  })
+  const gate = { io: started.io, done: started.done.then(() => 0) }
   running.push(gate)
   await until(
     async () => gate.io.out.includes(HEADER_END) || (await isSettled(gate.done)),
@@ -199,7 +228,8 @@ describe('1.6a/state: the state file survives a restart and counts every start',
     ]
     writeFileSync(files.state, JSON.stringify(state))
 
-    const second = await startLeadGate()
+    // Without a pipeline: intake would drop #7, which the fake GitHub does not hold.
+    const second = await startProcessGate()
     expect(second.io.out).toContain('Gate started: start 2, restart 1, pid')
     expect(second.io.out).toContain('queue: 1 pull request\n')
     expect(await quit(second)).toBe(0)
@@ -288,6 +318,9 @@ describe('1.6a/header: the header of a starting Gate', () => {
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
     )
     expect(header).toContain(
+      'notice: stages 7 to 11 are not built yet: a pull request that passes stage 6 waits at the head of the queue',
+    )
+    expect(header).not.toContain(
       'notice: the pipeline is not built yet: this Gate polls, but takes no pull request',
     )
     expect(await quit(gate)).toBe(0)
