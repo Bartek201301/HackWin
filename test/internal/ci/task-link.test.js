@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest'
-import { TEST_FILE, WORK, createCiScene, taskBody } from './ci-fixture.js'
+import { accounts } from '../../harness/index.js'
+import { ALL_STEPS, TEST_FILE, WORK, createCiScene, stepsOf, taskBody } from './ci-fixture.js'
+
+const E11 = 'E11: one issue, one pull request; the pull request names a valid open task'
 
 describe('AC71/ci: the task link in CI', () => {
   test('a pull request that names no open task with a valid data block fails CI', async () => {
@@ -97,6 +100,57 @@ describe('AC71/ci: the task link in CI', () => {
     })
     expect(result.json.error.message).toBe(
       'step 2, task link: spike/try-counter is a spike/ branch, which is never merged',
+    )
+  })
+})
+
+describe('1.4i/outsider-task: the task link in CI names a task that a member of the team wrote', () => {
+  test('a task issue by an account outside the team fails step 2, which names the issue and its author; the same issue by a member passes', async () => {
+    const scene = await createCiScene()
+    const issue = {
+      number: 31,
+      title: 'Counter reset',
+      body: scene.issues[0].body,
+      labels: ['in-review', 'role:counter'],
+      author: 'mallory',
+    }
+    scene.issues.push(issue)
+    const branch = 'task/31-counter-reset'
+    const head = await scene.push(branch, WORK)
+
+    const outsider = await scene.runCi({ branch, head })
+
+    expect(outsider.code).toBe(1)
+    expect(outsider.json.error).toMatchObject({
+      kind: 'blocked',
+      rule: E11,
+      objects: ['issue #31'],
+    })
+    expect(outsider.json.error.message).toBe(
+      'step 2, task link: issue #31 was written by mallory, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task',
+    )
+    expect(outsider.json.error.resolve).toBe(
+      'ask the Lead to write the task, move the work to the branch task/<N>-<slug> of that task with a pull request that holds `Closes #<N>`, and close pull request #30',
+    )
+    expect(outsider.stderr).not.toContain('step 3, ')
+
+    // An author that holds an escape character is named quoted, never as it is.
+    issue.author = 'mallory\u001b[2J'
+    const escaped = await scene.runCi({ branch, head })
+
+    expect(escaped.code).toBe(1)
+    expect(escaped.json.error.message).toBe(
+      'step 2, task link: issue #31 was written by "mallory\\u001b[2J", who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task',
+    )
+
+    issue.author = accounts.builder2.login
+    const member = await scene.runCi({ branch, head })
+
+    expect(member.code).toBe(0)
+    expect(stepsOf(member)).toEqual(ALL_STEPS)
+    expect(member.json.data.task).toBe(31)
+    expect(member.stderr).toContain(
+      'step 2, task link: task/31-counter-reset closes task #31, an open task with a valid data block',
     )
   })
 })
