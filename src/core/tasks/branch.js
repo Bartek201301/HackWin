@@ -2,7 +2,8 @@
 // with exactly one `Closes #<N>` line and no other closing reference (T1, E11). `spike/`
 // branches are never merged (E16). The body format is docs/build/contracts.md section 5.5.
 
-import { parseTaskBlock } from './block.js'
+import { parseTaskBlock, shown } from './block.js'
+import { writtenByTeam } from './task.js'
 
 /** @import { GitHub, PullRequest } from '../github/index.js' */
 /** @import { OwnershipConfig } from '../config/ownership.js' */
@@ -12,7 +13,20 @@ import { parseTaskBlock } from './block.js'
  */
 
 /**
- * @typedef {{ ok: true, issue: number } | { ok: false, reason: TaskLinkReason | 'issue-not-open' | 'invalid-task-block' }} TaskLink
+ * Why the issue that a pull request names is no task with a valid block. The reason stays
+ * `invalid-task-block` for an issue that no member of the team wrote, so that a reader that knows
+ * only the reasons fails such a pull request too.
+ * @typedef {object} InvalidTaskBlock
+ * @property {false} ok
+ * @property {'invalid-task-block'} reason
+ * @property {string | null} author The issue's author.
+ * @property {boolean} member False when no member of the team wrote the issue (writtenByTeam).
+ * @property {string[]} errors Why, safe to print: the author outside the team, which the error
+ *   names; or a pull request, no task block, or the errors of parseTaskBlock.
+ */
+
+/**
+ * @typedef {{ ok: true, issue: number } | { ok: false, reason: TaskLinkReason | 'issue-not-open' } | InvalidTaskBlock} TaskLink
  */
 
 /** How many words of the title the slug keeps (A9). */
@@ -92,8 +106,8 @@ export function parseTaskLink({ branch, body }) {
 }
 
 /**
- * The task link of a pull request, checked against GitHub: the named issue is open and has a
- * valid task block (E11, E16; Gate stage 2; CI step 2).
+ * The task link of a pull request, checked against GitHub: the named issue is open, a member of
+ * the team wrote it, and it has a valid task block (E11, E16; Gate stage 2; CI step 2).
  * @param {GitHub} github
  * @param {OwnershipConfig} config
  * @param {Pick<PullRequest, 'headRef' | 'body'>} pull
@@ -104,7 +118,30 @@ export async function checkTaskLink(github, config, pull) {
   if (!link.ok) return link
   const issue = await github.getIssue(link.issue)
   if (issue === null || issue.state !== 'open') return { ok: false, reason: 'issue-not-open' }
-  const parsed = issue.isPullRequest ? null : parseTaskBlock(issue.body, config)
-  if (!parsed?.isTask || !parsed.valid) return { ok: false, reason: 'invalid-task-block' }
+  const { author } = issue
+  if (!writtenByTeam(issue, config)) {
+    const who = author ? shown(author) : 'an unknown account'
+    return invalidBlock(author, false, [
+      `issue #${link.issue} was written by ${who}, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task`,
+    ])
+  }
+  if (issue.isPullRequest) {
+    return invalidBlock(author, true, [`#${link.issue} is a pull request, not a task issue`])
+  }
+  const parsed = parseTaskBlock(issue.body, config)
+  if (!parsed.isTask) {
+    return invalidBlock(author, true, [`issue #${link.issue} has no # hackwin:task block`])
+  }
+  if (!parsed.valid) return invalidBlock(author, true, parsed.errors)
   return link
+}
+
+/**
+ * @param {string | null} author
+ * @param {boolean} member
+ * @param {string[]} errors
+ * @returns {InvalidTaskBlock}
+ */
+function invalidBlock(author, member, errors) {
+  return { ok: false, reason: 'invalid-task-block', author, member, errors }
 }
