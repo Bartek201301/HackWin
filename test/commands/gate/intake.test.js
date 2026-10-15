@@ -58,7 +58,7 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
     const later = await s.push(first.branch, {
       files: { 'src/features/counter/f70.js': 'export const n = 71\n' },
     })
-    s.poll()
+    await s.poll()
     await s.until(() => s.out.includes(`#${second.pr} passed stages 1 to 6`), 'the second run')
     expect(s.state().queue).toEqual([second.pr, first.pr])
     expect(s.state().prs[String(first.pr)]).toMatchObject({
@@ -71,7 +71,7 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
 
     const ready = /** @type {any} */ (s.fake.find(draft.pr)).pull
     ready.draft = false
-    s.poll()
+    await s.poll()
     await s.until(() => s.state().queue.includes(draft.pr), 'the pull request ready for review')
     expect(s.state().queue).toEqual([second.pr, first.pr, draft.pr])
     expect(gateLabels(s.labels(draft.pr))).toEqual(['gate:queued'])
@@ -109,7 +109,7 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
     for (const pr of [outside.pr, queued.pr]) {
       await s.as(BUILDER1).updatePullRequest(pr, { state: 'closed' })
     }
-    s.poll()
+    await s.poll()
     await s.until(
       () => s.out.includes(`#${queued.pr} was closed without a merge and left the queue`),
       'the closed pull requests',
@@ -160,7 +160,7 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
       () => s.out.includes(`retry #${secret.pr}: the head SHA of #${secret.pr} adds a secret`),
       'the refused retry',
     )
-    s.poll()
+    await s.poll()
     await s.until(() => s.out.includes(`#${unlinked.pr} passed stages 1 to 6`), 'the retried run')
     expect(s.out).toContain(
       `retry #${unlinked.pr}: the head ${unlinked.head} joined the back of the queue`,

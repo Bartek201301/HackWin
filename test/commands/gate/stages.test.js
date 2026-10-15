@@ -176,7 +176,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     const second = await s.push(branch, {
       files: { 'src/features/counter/m.js': 'export const m = 2\n' },
     })
-    s.poll()
+    await s.poll()
     await s.until(() => s.state().prs[String(pr)]?.head_sha === second, 'the new head SHA')
     expect(s.out).toContain(
       `#${pr}: the new head ${second} arrived during the run of ${first}, which stops after its current stage`,
@@ -189,7 +189,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
       stage: 'task-link',
       note: `the new head ${second} joined the back of the queue`,
     })
-    s.poll()
+    await s.poll()
     await s.until(
       () => s.out.includes(`#${pr} passed stages 1 to 6 with head ${second}`),
       'the run of the new head',

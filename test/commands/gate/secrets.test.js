@@ -63,7 +63,7 @@ describe('AC26: a pull request that adds a line matching a secret pattern', () =
     const { branch, head, pr } = await todosPull(s, 42, {
       'src/features/todos/config.js': `export const url = 'https://example.invalid'\nexport const token = '${githubToken}'\n`,
     })
-    s.poll()
+    await s.poll()
     await s.ended(pr, 'failed')
 
     const [comment] = s.comments(pr)
@@ -91,7 +91,7 @@ describe('AC26: a pull request that adds a line matching a secret pattern', () =
     expect(s.digest().join('\n')).not.toContain(githubToken)
 
     // The next edit of the status issue shows the open item.
-    s.poll()
+    await s.poll()
     await s.until(
       () => s.status()?.attention.some((item) => item.type === 'secret' && item.pr === pr),
       'the secret item in the status issue',
@@ -100,7 +100,7 @@ describe('AC26: a pull request that adds a line matching a secret pattern', () =
     const later = await s.push(branch, {
       files: { 'src/features/todos/config.js': "export const url = 'https://example.invalid'\n" },
     })
-    s.poll()
+    await s.poll()
     await s.until(() => s.state().queue.includes(pr), 'the later head SHA in the queue')
     expect(s.state().queue).toEqual([ahead, pr])
     expect(s.state().prs[String(pr)]).toMatchObject({ head_sha: later, result: null })
@@ -199,7 +199,7 @@ describe('AC79: a secret attention item raises one operating system notification
         'src/features/todos/token.js': `export const t = '${githubToken}'\nexport const u = '${githubToken}'\n`,
       },
     })
-    s.poll()
+    await s.poll()
     await s.ended(pr, 'failed', 2)
     expect(s.comments(pr)).toHaveLength(2)
     expect(s.notifications).toHaveLength(1)

@@ -91,6 +91,33 @@ export async function createScene({ configure, issues = [], files: mainFiles = {
   let gate = null
   /** @type {Awaited<ReturnType<typeof startDirect>> | null} */
   let stopped = null
+  // What the scene sees of the Gate's polls, through its intake: the Gate object, how many
+  // intakes ended, and the poll time (`last_poll_at`, set when a poll starts) of the last one.
+  /** @type {any} */
+  let running = null
+  let intakes = 0
+  /** @type {string | null} */
+  let lastIntakeOf = null
+  /** True when the poll that started last has finished its intake. */
+  const pollDone = () => running !== null && lastIntakeOf === running.state.last_poll_at
+
+  /**
+   * The pipeline, with an intake that records when it ended and for which poll.
+   * @param {import('../../../src/commands/gate/gate.js').Pipeline} pipeline
+   * @returns {import('../../../src/commands/gate/gate.js').Pipeline}
+   */
+  const observed = (pipeline) => ({
+    ...pipeline,
+    intake: async (/** @type {any} */ own) => {
+      running = own
+      try {
+        await pipeline.intake?.(own)
+      } finally {
+        lastIntakeOf = own.state.last_poll_at
+        intakes += 1
+      }
+    },
+  })
 
   const scene = {
     fixture,
@@ -154,12 +181,14 @@ export async function createScene({ configure, issues = [], files: mainFiles = {
         login: LEAD,
         clock: manualClock(),
         options: {
-          pipeline: createPipeline({
-            notifier: async (notification) => {
-              notifications.push(notification)
-              return notifyAnswer
-            },
-          }),
+          pipeline: observed(
+            createPipeline({
+              notifier: async (notification) => {
+                notifications.push(notification)
+                return notifyAnswer
+              },
+            }),
+          ),
           keepAwake: noKeepAwake,
         },
       })
@@ -177,9 +206,18 @@ export async function createScene({ configure, issues = [], files: mainFiles = {
       return (gate ?? stopped ?? scene.gate).io.out
     },
 
-    /** Move the clock by one poll interval, which starts a poll. */
-    poll() {
+    /**
+     * Start the next poll and wait until its intake ended. The Gate starts no poll while one is
+     * under way: a poll that comes due then is left out (gate.js, runLoop). So the clock moves
+     * only once the poll under way has finished its intake, after which the Gate has nothing
+     * left of that poll but the write of the state file, which the next poll's heartbeat waits
+     * for. No wait depends on how fast the machine is, only on what the Gate did.
+     */
+    async poll() {
+      await scene.until(pollDone, 'the end of the poll under way')
+      const before = intakes
       scene.gate.clock.advance(POLL_MS)
+      await scene.until(() => intakes > before && pollDone(), 'the next poll')
     },
 
     /** @param {string} line */

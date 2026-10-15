@@ -72,7 +72,7 @@ describe("AC25: a pull request with a file outside its author's scope", () => {
     ).toBe(false)
 
     const later = await s.push(branch, { remove: ['src/features/greeting/hello.js'] })
-    s.poll()
+    await s.poll()
     await s.until(
       () => s.out.includes(`#${pr} passed stages 1 to 6 with head ${later}`),
       'the later head SHA',

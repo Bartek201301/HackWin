@@ -98,8 +98,7 @@ describe('1.6c/outsiders: the Gate tests only the pull requests of the team', ()
     expect(s.notifications).toEqual([])
     // The next poll leaves them alone and prints nothing new about them.
     const before = s.out
-    s.poll()
-    await s.until(() => s.state().last_poll_at === s.gate.clock.iso(), 'the next poll')
+    await s.poll()
     await s.quit()
     expect(s.out.slice(before.length)).not.toContain('ATTENTION')
     const state = s.state()
@@ -135,7 +134,7 @@ describe('1.6c/outsiders: the Gate tests only the pull requests of the team', ()
     expect(s.comments(pr)).toEqual([])
 
     await s.as(BUILDER1).updatePullRequest(pr, { state: 'closed' })
-    s.poll()
+    await s.poll()
     await s.until(
       () =>
         s.out.includes(
@@ -198,12 +197,11 @@ describe('1.6c/intake: every open head SHA is scanned, whatever its base', () =>
 
     // The next poll scans neither head again.
     const writes = s.fake.calls.length
-    s.poll()
-    await s.until(() => s.state().last_poll_at === s.gate.clock.iso(), 'the next poll')
+    await s.poll()
     expect(s.fake.calls.slice(writes).filter((call) => call.method !== 'GET')).toEqual([])
 
     await s.as(BUILDER1).updatePullRequest(clean, { base: 'main' })
-    s.poll()
+    await s.poll()
     await s.until(() => s.out.includes(`#${clean} passed stages 1 to 6`), 'the retargeted run')
     await s.quit()
     expect(s.state().queue).toEqual([clean])
