@@ -17,6 +17,27 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.6g, status: the team's members through writtenByTeam, milestones from the harness (PR #84, issue #79)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/79-status-written-by-team`, created by the integrator from `241c149` after the merge of #81; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `c08cbc6`, on `241c149`, then a merge of `origin/main` at `1ce644a` (`f722c1a`); PR #84 opened at 07:36:18 UTC.
+  - `lead-55` sent `merge #84` with the head SHA by SendMessage, and asked for step 6 at a load average below about 15. Its review:
+    - 1.6g/members (2) is asserted.
+    - `status` decides membership only through `writtenByTeam`: `toTask` for task issues, and `writtenByTeam` for the authors of pull requests, `team.lead` included, in any case.
+    - `isMember` and `serveMilestones` are gone, and the tests of `status` use the milestones of #78.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 4 files inside issue #79's paths; neither `isMember` nor `serveMilestones` is left; no secret pattern; no conflict with `5b55441`. Step 6, with the PR merged into `5b55441`, started at a load average of 5.00 with no other vitest process (18.45 and 12 vitest processes at the end): `npm test` passed 830 of 830, and `npm run test:ac` passed 1.6g/members (2). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The session's first `npm test` after the merge failed 1 of 827 tests: 1.6d/step-timeout in `test/commands/gate/merge-test.test.js` (line 472). That test gives a `node -e` child a step timeout of 1 second. Right after the run the load average was 89.57 on 10 cores, with 6 vitest processes. The test passed alone, and the full suite passed once the load was below 15; about 6 minutes lost. The session of #24 makes that test hold under load.
+  - Two acceptance criteria of #79, written by the integrator, could not be met as written:
+    - "A pull request of an outsider is not among those that wait" contradicts 1.6f/members, which lists such a pull request in the waiting section with the stage `outsider`.
+    - "`team.lead` counts also when it is not in `team.members`" cannot be tested through the command, because the validation of the configuration refuses that case.
+    
+    The integrator wrote both without checking the existing test and the validation; the PR names them under "Remaining limitations".
+  - For a later integrator task: the sentence of contracts 4.5 on `status` is out of date, because `status` now uses `writtenByTeam`.
+- Measured: PR open 4 min 53 s (07:36:18 to 07:41:11 UTC); 2 commits (one a merge of `origin/main`), 1 PR run (102 s), 0 conflicts; local merge test `npm test` 127.55 s; the run on main after the merge 105 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/84; head `f722c1a`; merge commit `86f625e`; runs `38699878734` (PR) and `38700424019` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.4i, internal ci: no task link to an outsider's issue; join's install log under logs/ (PR #83, issue #76)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/76-ci-outsider-join-log`, created by the integrator from `61a2233` after the merge of #77, beside the sessions of #75 and #78; `lead-55` opened the session. The integrator's planning session for the merge.
