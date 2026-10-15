@@ -286,13 +286,16 @@ describe('AC80/setup: push protection on the fixture repositories', () => {
             expect(result.stdout).toContain('push protection: on, enabled by setup')
             expect(await readPushProtection(lead)).toBe('enabled')
           } finally {
-            if (initial !== null && (await readPushProtection(lead)) !== initial) {
+            // Always back to the setting the test found. A read right before did not do: on
+            // 15 October 2026 it skipped the restore, and the setting stayed disabled.
+            if (initial !== null) {
               await lead.api('repos/{owner}/{repo}', {
                 method: 'PATCH',
                 body: {
                   security_and_analysis: { secret_scanning_push_protection: { status: initial } },
                 },
               })
+              repo.log(`push protection after the test: ${await readPushProtection(lead)}`)
             }
           }
         },
