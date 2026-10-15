@@ -3,6 +3,8 @@ import { stringify } from 'yaml'
 import { parseHackwinConfig, parseOwners } from '../../../src/core/config/index.js'
 import {
   LABELS,
+  SCOPE_CHANGE,
+  WAITING_LABELS,
   branchName,
   checkTaskLink,
   dependenciesOf,
@@ -443,6 +445,19 @@ describe('1.3b/labels: the label catalogue of 8.2 and status transitions', () =>
       expect(label.description.length, label.name).toBeLessThanOrEqual(100)
     }
     expect(roleLabel('web')).toBe('role:web')
+  })
+
+  test("the labels that wait for a pull request's author and the prefix of a scope change are exported", () => {
+    // 7.7 step 3: a pull request labeled one of these waits for its author.
+    expect(WAITING_LABELS).toEqual(['needs-owner', 'gate:failed', 'scope-violation'])
+    expect(Object.isFrozen(WAITING_LABELS)).toBe(true)
+    const catalogue = LABELS.map((label) => label.name)
+    for (const label of WAITING_LABELS) expect(catalogue).toContain(label)
+    // 8.1: a scope change is an issue comment that starts with "Scope change:".
+    expect(SCOPE_CHANGE).toBe('Scope change:')
+    expect('Scope change: contract change #12: the field is renamed'.startsWith(SCOPE_CHANGE)).toBe(
+      true,
+    )
   })
 
   test('a status transition adds the new label and removes the other status labels only', async () => {
