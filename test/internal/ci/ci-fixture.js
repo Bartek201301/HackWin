@@ -3,6 +3,7 @@
 // commands, task issues on a fake GitHub, and a run of `hackwin internal ci` in a fresh clone
 // checked out at the head commit of a pull request, as the generated workflow checks it out.
 
+import { vi } from 'vitest'
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -206,6 +207,10 @@ export function recordingEnv(file, command) {
  * @property {string} [checkoutAt] The commit the clone checks out; the head by default.
  * @property {boolean} [event] False runs without GITHUB_EVENT_PATH.
  * @property {Record<string, string>} [env] More variables for the run, such as GH_TOKEN.
+ * @property {boolean} [processEnv] Run as the workflow's step runs it: the run's variables are
+ *   stubbed into process.env, without the variables of a runner, and main reads process.env, so
+ *   that code which falls back to process.env sees them too. The caller undoes the stubs with
+ *   vi.unstubAllEnvs().
  */
 
 /**
@@ -216,11 +221,12 @@ export function recordingEnv(file, command) {
  * @returns {Record<string, string | undefined>}
  */
 export function withoutRunnerEnv(env) {
-  return Object.fromEntries(
-    Object.entries(env).filter(
-      ([key]) => key !== 'CI' && !key.startsWith('GITHUB_') && !key.startsWith('RUNNER_'),
-    ),
-  )
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !isRunnerVariable(key)))
+}
+
+/** @param {string} key */
+function isRunnerVariable(key) {
+  return key === 'CI' || key.startsWith('GITHUB_') || key.startsWith('RUNNER_')
 }
 
 /**
@@ -269,6 +275,7 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
       checkoutAt = head,
       event = true,
       env = {},
+      processEnv = false,
     }) {
       const issue = /^task\/(\d+)/.exec(branch)?.[1]
       const prBody = body ?? (issue ? `Closes #${issue}\n` : '')
@@ -306,14 +313,22 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
       let stderr = ''
       /** @type {Array<{ args: string[], env: Record<string, string> }>} */
       const ghCalls = []
+      const runEnv = {
+        ...withoutRunnerEnv(hooks.env),
+        ...(event ? { GITHUB_EVENT_PATH: eventFile } : {}),
+        TMPDIR: tmp,
+        ...env,
+      }
+      if (processEnv) {
+        for (const key of Object.keys(process.env)) {
+          if (isRunnerVariable(key) && !(key in runEnv)) vi.stubEnv(key, undefined)
+        }
+        for (const [key, value] of Object.entries(runEnv)) vi.stubEnv(key, value)
+      }
+      const mainEnv = processEnv ? process.env : runEnv
       const code = await main(['internal', 'ci', '--json'], {
         cwd: checkout.path,
-        env: {
-          ...withoutRunnerEnv(hooks.env),
-          ...(event ? { GITHUB_EVENT_PATH: eventFile } : {}),
-          TMPDIR: tmp,
-          ...env,
-        },
+        env: mainEnv,
         ghExecutor: (args, call) => {
           ghCalls.push({ args, env: { ...call?.env } })
           return fake.executor(args, call)
@@ -322,7 +337,7 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
         stdout: { write: (chunk) => (stdout += chunk) },
         stderr: { write: (chunk) => (stderr += chunk) },
       })
-      return { code, json: JSON.parse(stdout), stderr, checkout, fake, ghCalls }
+      return { code, json: JSON.parse(stdout), stderr, checkout, fake, ghCalls, env: mainEnv }
     },
   }
 }
