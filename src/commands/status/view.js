@@ -3,13 +3,20 @@
 // merge" and "blocked" on every machine (AC44); only the header and the digest depend on the
 // clone: the local heartbeat on the Lead's laptop and the member's previous call.
 //
-// Only an issue written by a member of the team in hackwin.yml counts as a task (the Lead's review
-// of #73): on a public repository any account can open an issue with a task block, and `status`
-// would list it among the next tasks of the members. Every string of the result is cleaned of
-// control characters (text.js).
+// Only an issue that the team wrote counts as a task, and only a pull request of the team waits
+// for the Gate: `team.lead` or one of `team.members`, as `writtenByTeam` of src/core/tasks decides
+// for every command (the Lead's review of #73, #74). On a public repository any account can open
+// an issue with a task block, and `status` would list it among the next tasks of the members.
+// Every string of the result is cleaned of control characters (text.js).
 
 import { holderOf } from '../../core/config/index.js'
-import { WAITING_LABELS, dependenciesOf, queueOf, toTask } from '../../core/tasks/index.js'
+import {
+  WAITING_LABELS,
+  dependenciesOf,
+  queueOf,
+  toTask,
+  writtenByTeam,
+} from '../../core/tasks/index.js'
 import { UNDER_WAY } from '../gate/pulls.js'
 import { cleanStrings } from './text.js'
 
@@ -90,7 +97,8 @@ const WORKING = Object.freeze(['in-progress', 'in-review'])
  * @property {string | null} author
  * @property {string} stage `queued`, `testing`, `waiting-ci` or `merged` from the Gate label;
  *   `not-seen` without one; `draft` for a draft, which the Gate ignores (G7); `outsider` for a
- *   pull request whose author is not a member, which the Gate does not test (#64).
+ *   pull request that the team did not write (`writtenByTeam`), which the Gate does not test
+ *   (#64).
  * @property {number | null} position Its place in the Gate's queue, from 1, as the status issue
  *   shows it.
  * @property {string} url
@@ -137,29 +145,17 @@ const WORKING = Object.freeze(['in-progress', 'in-review'])
  */
 
 /**
- * The open task issues that members of the team wrote, valid or not, by number.
+ * The open task issues that the team wrote, valid or not, by number: `toTask` drops the issues
+ * that `writtenByTeam` rejects.
  * @param {Issue[]} openIssues
  * @param {Config} config
  * @returns {Task[]}
  */
 export function openTasks(openIssues, config) {
   return openIssues
-    .filter((issue) => isMember(config, issue.author))
     .map((issue) => toTask(issue, config))
     .filter((task) => task !== null)
     .sort((a, b) => a.number - b.number)
-}
-
-/**
- * True when the login is a member of the team in hackwin.yml, compared without case.
- * @param {Config} config
- * @param {string | null} login
- * @returns {boolean}
- */
-function isMember(config, login) {
-  if (login === null) return false
-  const wanted = login.toLowerCase()
-  return config.hackwin.team.members.some((member) => member.github.toLowerCase() === wanted)
 }
 
 /**
@@ -282,7 +278,7 @@ export function buildStatus(input) {
         : { number: wave.number, open_tasks: wave.tasks.length, milestone: input.milestone },
     attention: attentionOf({ identity, gateStatus, openIssues, pulls, latest }),
     who: whoDoesWhat({ config, tasks, issues, now }),
-    waiting: waitingFor(pulls, gateStatus?.queue ?? [], (login) => isMember(config, login)),
+    waiting: waitingFor(pulls, gateStatus?.queue ?? [], (pull) => writtenByTeam(pull, config)),
     blocked: blockedOf({ tasks, issues, failed, latest }),
     digest: digestOf(digest, input.lastStatusAt, new Set(failed.map((pull) => pull.number))),
   })
@@ -381,17 +377,17 @@ function whoDoesWhat({ config, tasks, issues, now }) {
  * ignores (G7).
  * @param {PullRequest[]} pulls Open, into the default branch, by number.
  * @param {number[]} queue
- * @param {(login: string | null) => boolean} member
+ * @param {(pull: PullRequest) => boolean} ofTeam True for a pull request of the team.
  * @returns {WaitingEntry[]}
  */
-function waitingFor(pulls, queue, member) {
+function waitingFor(pulls, queue, ofTeam) {
   const waiting = pulls.filter((pull) => !pull.labels.includes('gate:failed'))
   const byNumber = new Map(waiting.map((pull) => [pull.number, pull]))
   const queued = queue.filter((pr) => byNumber.has(pr))
   /** @param {PullRequest} pull */
   const stage = (pull) => {
     if (pull.draft) return 'draft'
-    if (!member(pull.author)) return 'outsider'
+    if (!ofTeam(pull)) return 'outsider'
     return stageOf(pull)
   }
   const RANK = ['not-seen', 'outsider', 'draft']

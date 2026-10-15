@@ -173,7 +173,7 @@ export function parseTaskBlock(body, config) {
 
 /**
  * A value of the block as an error shows it: a string without a character of UNSAFE as it is,
- * anything else quoted. Not exported by index.js.
+ * anything else quoted. index.js exports it for any message that names a value of an issue.
  * @param {unknown} value
  * @returns {string}
  */

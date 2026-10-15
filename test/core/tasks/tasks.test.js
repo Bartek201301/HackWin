@@ -14,6 +14,7 @@ import {
   queueOf,
   roleLabel,
   setTaskStatus,
+  shown,
   slugOf,
   toTask,
   writtenByTeam,
@@ -636,6 +637,26 @@ describe('1.3b/task-block-errors: no control character, line break or bidi forma
       'role "\\u2028" is not a role of owners.yml',
       'wave must be a whole number, not "1\\u202egnp.exe"',
     ])
+  })
+
+  test('shown names a value as these errors do: a safe string as it is, any other quoted', () => {
+    expect(shown('web')).toBe('web')
+    expect(shown('src/features/web/[id].js')).toBe('src/features/web/[id].js')
+    for (const [value, quoted] of [
+      ['web\u001b[2J', '"web\\u001b[2J"'],
+      ['a\r\nb', '"a\\r\\nb"'],
+      ['\u009b31m', '"\\u009b31m"'],
+      ['\u007f', '"\\u007f"'],
+      ['\u0085', '"\\u0085"'],
+      ['\u2028', '"\\u2028"'],
+      ['1\u202egnp.exe', '"1\\u202egnp.exe"'],
+      ['\u061c', '"\\u061c"'],
+      ['\u200f', '"\\u200f"'],
+      ['\u2066', '"\\u2066"'],
+    ]) {
+      expect(shown(value)).toBe(quoted)
+      expect(shown(value)).not.toMatch(UNSAFE)
+    }
   })
 })
 
