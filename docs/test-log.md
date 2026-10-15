@@ -17,6 +17,34 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.4d, setup: questions, detection, generated files, bootstrap commit (PR #65, issue #11)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/11-setup-questions-bootstrap`, created by the integrator from `653bb8c` after the merge of #58; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9cdff16`, on `653bb8c`, then a merge of `origin/main` at `2013b56` (`8ec7a3d`); PR #65 opened at 04:34:37 UTC, and CI passed.
+  - The Lead's review round brought `4067559`:
+    - no ignored file gets into the bootstrap commit (`check-ignore` before any write);
+    - the commit is built in its own index from setup's journal only, and scanned with `src/core/secrets` before `commit-tree`;
+    - the local branch moves only after origin holds the commit;
+    - `setup` never writes through a symlink (a `CLAUDE.md` that links to `AGENTS.md` is kept);
+    - the push uses `--no-follow-tags`;
+    - signals are held from the first write.
+    
+    A merge of `origin/main` at `58fde88` followed (`768fe60`).
+  - `lead-55` sent `merge #65` with the head SHA by SendMessage. Its review:
+    - AC3, AC4 (24), AC6/files (10), AC76/setup and 1.4d/bootstrap (7) are asserted.
+    - The 13 Release 1 texts match `hackwin-template` at `65c2916` byte for byte.
+    - A re-review probed the fixes in scratch repositories with a local origin and found no blocker. It covered a commit built in a separate index, the exit codes of `check-ignore`, an empty repository, a token in `hackwin.yml`, and a real SIGINT during the push.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 33 files inside issue #11's paths; no secret pattern; no conflict with `7924918`. Step 6, with the PR merged into `7924918` at a load average of 1.64 and no other vitest process: `npm test` passed 710 of 710, and `npm run test:ac` passed AC3 (2), AC4 (24), AC6/files (10), AC76/setup (4) and 1.4d/bootstrap (7). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: a scope change on #13 with five gaps the re-review found in `src/commands/setup/bootstrap.js`, and a worktree for #13 at `0bf16f6`. The five gaps: a failed `ls-remote` read as "not landed"; signal handlers left installed when `mkdtemp` throws; Ctrl+C reaching the git child; exit 128 of `check-ignore` under a symlinked folder; `git add --all --` with an empty list.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The session stopped twice in the middle of a response, as `lead-55` reported: "API Error: Connection lost mid-response" (00:09 UTC) and "API Error: Your computer went to sleep mid-response" (04:18 UTC). Both times the uncommitted files were intact, and work went on after a message from `lead-55`.
+  - The fake GitHub cannot answer `gh --version` (its routes match words, not flags), so `setup` reads the version with `gh version`. It has no route for `GET users/<login>`; the setup tests register it with `fake.on`.
+  - A test helper read through a symlink to a directory (EISDIR) until it recorded links as links.
+  - Not covered, from the Lead's review: hard links in a checkout are not detected (only `lstat`); real OS signals and SIGHUP are untested. The commands of pnpm, yarn and bun go to the manual check per release.
+- Measured: PR open 35 min 14 s (04:34:37 to 05:09:51 UTC), including the Lead's review, one round of fixes and a re-review; 4 commits (two merges of `origin/main`), 2 PR runs (91 s each), 0 conflicts; local merge test `npm test` 103.68 s; the run on main after the merge 75 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/65; head `768fe60`; merge commit `0bf16f6`; runs `38682195605` and `38684113383` (PR) and `38685299753` (main).
+
 ### 2026-10-15 · Phase 1 · Contracts: the Gate comment marker, and enforceVersion in 4.4 (PR #67, issue #66)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/66-contracts-gate-comment-marker`, created by the integrator from `58fde88` after the merge of #64. The integrator's planning session for the merge.
