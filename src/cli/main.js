@@ -1,39 +1,39 @@
 // The runner: parses the command line, builds the context, loads the command module lazily,
-// runs it, and maps the result or the error to output and an exit code (CM2, CM6).
+// runs it, and maps the result or the error to output and an exit code (CM2, CM6). When GitHub is
+// unreachable while it prepares the context, a command can still print what it knows locally
+// through the `unreachable` export of its module.
 
 import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import {
-  ConfigError,
   EXIT,
   HackwinError,
   NotBuiltError,
-  PreconditionError,
+  RemoteError,
   UsageError,
   exitCodeOf,
 } from '../core/runtime/errors.js'
 import { createOutput, formatError, runIn } from '../core/runtime/output.js'
 import { systemClock } from '../core/runtime/clock.js'
 import {
-  checkVersion,
+  HACKWIN_FILE,
+  enforceVersion as enforcePinnedVersion,
   fastForwardMainCheckout,
-  installCommand,
-  loadConfig,
+  loadCheckedConfig,
+  mainRef,
   resolveIdentity,
 } from '../core/config/index.js'
-import { HACKWIN_FILE, pinnedVersionOf } from '../core/config/load.js'
-import { phaseOf } from '../core/config/version.js'
 import { COMMANDS, resolveCommand } from './registry.js'
 import { PACKAGE_ROOT, REPOSITORY_URL, VERSION, createContext } from './context.js'
 
 /** @import { CommandEntry } from './registry.js' */
-/** @import { CommandContext, CommandResult, CommandRun } from './context.js' */
+/** @import { CommandContext, CommandResult, CommandRun, CommandUnreachable, UnreachableResult } from './context.js' */
 /** @import { GhExecutor } from '../core/github/index.js' */
 /** @import { Clock } from '../core/runtime/clock.js' */
 /** @import { Output, Writer } from '../core/runtime/output.js' */
-/** @import { Config, VersionStatus } from '../core/config/index.js' */
+/** @import { VersionStatus } from '../core/config/index.js' */
 /** @import { Git } from '../core/git/index.js' */
 
 /**
@@ -92,6 +92,9 @@ export async function main(argv, options = {}) {
 
   const entry = line.entry
   const out = createOutput({ stdout, stderr, json: line.json })
+  const moduleRoot = options.moduleRoot ?? fileURLToPath(PACKAGE_ROOT)
+  /** @type {UnreachableResult | null} */
+  let unreachable = null
   try {
     const ctx = await createContext({
       command: entry.name,
@@ -105,8 +108,13 @@ export async function main(argv, options = {}) {
       clock: options.clock ?? systemClock,
       ghExecutor: options.ghExecutor,
     })
-    await prepareContext(ctx, entry)
-    const run = await loadCommand(entry, options.moduleRoot ?? fileURLToPath(PACKAGE_ROOT))
+    try {
+      await prepareContext(ctx, entry)
+    } catch (error) {
+      unreachable = await runUnreachable(ctx, entry, error, moduleRoot)
+      throw error
+    }
+    const run = await loadCommand(entry, moduleRoot)
     const result = checkResult(entry, await run(ctx))
     const exitCode = result.exitCode ?? EXIT.OK
     if (out.json) {
@@ -123,7 +131,7 @@ export async function main(argv, options = {}) {
     }
     return exitCode
   } catch (error) {
-    return report(error, { out, stdout, stderr, command: entry.name, debug })
+    return report(error, { out, stdout, stderr, command: entry.name, debug, unreachable })
   }
 }
 
@@ -145,7 +153,13 @@ export async function prepareContext(ctx, entry) {
   const ref = await mainRef(ctx.git)
   const setup = entry.name === 'setup'
   if (setup && !(await isConfigured(ctx.git, ref))) return
-  const config = await loadCheckedConfig(ctx, ref, { fetch: !setup })
+  const config = await loadCheckedConfig(ctx.git, {
+    ref,
+    fetch: !setup,
+    running: ctx.version,
+    repositoryUrl: REPOSITORY_URL,
+    out: ctx.out,
+  })
   ctx.config = config
   ctx.identity = resolveIdentity(config, await ctx.github.login())
   const defaultBranch = config.hackwin.project.default_branch
@@ -158,9 +172,10 @@ export async function prepareContext(ctx, entry) {
 }
 
 /**
- * The version check as the runner applies it (CM12): an older CLI, or one of another phase,
- * is a PreconditionError (exit 2) that prints the install command of the pinned version; a
- * newer release of the same phase prints a one-line warning and continues (20.6).
+ * The version check of CM12 with `repository.url` of this package (src/core/config,
+ * `enforceVersion`): an older CLI, or one of another phase, is a PreconditionError (exit 2) that
+ * prints the install command of the pinned version; a newer release of the same phase prints a
+ * one-line warning and continues (20.6).
  * @param {object} versions
  * @param {string} versions.running
  * @param {string} versions.pinned `cli_version` of hackwin.yml on origin/main.
@@ -169,73 +184,20 @@ export async function prepareContext(ctx, entry) {
  * @returns {VersionStatus}
  */
 export function enforceVersion({ running, pinned, out, repositoryUrl = REPOSITORY_URL }) {
-  const { status } = checkVersion({ running, pinned })
-  if (status === 'older' || status === 'other-phase') {
-    const message =
-      status === 'older'
-        ? `hackwin ${running} is older than ${pinned}, the version pinned in hackwin.yml on origin/main`
-        : `hackwin ${running} is a release of phase ${phaseOf(running)}, but this project is on phase ${phaseOf(pinned)}: hackwin.yml on origin/main pins ${pinned}`
-    throw new PreconditionError(message, {
-      resolve: { command: installCommand(pinned, repositoryUrl), dir: 'any directory' },
-    })
-  }
-  if (status === 'newer-patch') {
-    out?.warn(
-      `hackwin ${running} is newer than ${pinned}, the version pinned in hackwin.yml; continuing`,
-    )
-  }
-  return status
+  return enforcePinnedVersion({ running, pinned, repositoryUrl, out })
 }
 
 /**
- * Load the configuration and check the version. When the configuration is invalid, the version
- * is checked first from the raw file, so that a CLI of another phase says which version to
- * install instead of failing on keys it does not know.
- * @param {CommandContext} ctx
- * @param {string} ref
- * @param {{ fetch: boolean }} options
- * @returns {Promise<Config>}
- */
-async function loadCheckedConfig(ctx, ref, { fetch }) {
-  /** @type {Config} */
-  let config
-  try {
-    config = await loadConfig(ctx.git, { ref, fetch })
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      const text = await ctx.git.showFile(ref, HACKWIN_FILE).catch(() => null)
-      const pinned = text === null ? null : pinnedVersionOf(text)
-      if (pinned !== null) enforceVersion({ running: ctx.version, pinned, out: null })
-    }
-    throw error
-  }
-  enforceVersion({ running: ctx.version, pinned: config.hackwin.cli_version, out: ctx.out })
-  return config
-}
-
-/**
- * The remote-tracking ref of the default branch: what `origin/HEAD` points to, or `origin/main`.
- * @param {Git} git
- * @returns {Promise<string>}
- */
-async function mainRef(git) {
-  const result = await git.run(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], {
-    allowFailure: true,
-  })
-  const ref = result.stdout.trim()
-  return result.code === 0 && ref.startsWith('origin/') ? ref : 'origin/main'
-}
-
-/**
- * True when origin has hackwin.yml on its default branch, after a fetch. A clone without a
- * remote origin is not configured; `setup` reports its own preconditions.
+ * True when origin has hackwin.yml on its default branch, after a fetch that prunes, as the
+ * fetch of loadConfig does. A clone without a remote origin is not configured; `setup` reports
+ * its own preconditions.
  * @param {Git} git
  * @param {string} ref
  * @returns {Promise<boolean>}
  */
 async function isConfigured(git, ref) {
   if ((await git.remoteUrl('origin')) === null) return false
-  await git.fetch({ remote: 'origin' })
+  await git.fetch({ remote: 'origin', prune: true })
   const sha = await git.tryRevParse(ref)
   return sha !== null && (await git.showFile(sha, HACKWIN_FILE)) !== null
 }
@@ -247,9 +209,8 @@ async function isConfigured(git, ref) {
  * @returns {Promise<CommandRun>}
  */
 export async function loadCommand(entry, moduleRoot) {
-  const file = join(moduleRoot, entry.module)
-  if (!existsSync(file)) throw new NotBuiltError(entry.name, entry.module)
-  const module = await import(pathToFileURL(file).href)
+  const module = await importCommand(entry, moduleRoot)
+  if (module === null) throw new NotBuiltError(entry.name, entry.module)
   if (typeof module.run !== 'function') {
     throw new NotBuiltError(
       entry.name,
@@ -257,7 +218,49 @@ export async function loadCommand(entry, moduleRoot) {
       `${entry.module} does not export a run function`,
     )
   }
-  return module.run
+  return /** @type {CommandRun} */ (module.run)
+}
+
+/**
+ * What a user command still prints when preparing its context failed with a RemoteError
+ * (contracts section 3.2): the runner loads the command's module anyway and calls its
+ * `unreachable(ctx, error)` with the context it built, without config and identity. Null when
+ * the error is another one, the command is plumbing, or its module does not exist yet or exports
+ * no `unreachable`; the runner then prints the error alone. GitHub unreachable exits 3 (7.6), so
+ * when the import of the module or the hook throws, the runner still reports the RemoteError: the
+ * failure becomes one warning that says why the local information could not be shown, and null.
+ * @param {CommandContext} ctx
+ * @param {CommandEntry} entry
+ * @param {unknown} error The error of prepareContext.
+ * @param {string} moduleRoot
+ * @returns {Promise<UnreachableResult | null>}
+ */
+async function runUnreachable(ctx, entry, error, moduleRoot) {
+  if (entry.plumbing || !(error instanceof RemoteError)) return null
+  try {
+    const module = await importCommand(entry, moduleRoot)
+    if (typeof module?.unreachable !== 'function') return null
+    delete ctx.config
+    delete ctx.identity
+    const hook = /** @type {CommandUnreachable} */ (module.unreachable)
+    return (await hook(ctx, error)) ?? {}
+  } catch (failure) {
+    const why = failure instanceof Error ? failure.message : String(failure)
+    ctx.out.warn(`the local information of hackwin ${entry.name} could not be shown: ${why}`)
+    return null
+  }
+}
+
+/**
+ * The entry module of a command, or null when it does not exist yet.
+ * @param {CommandEntry} entry
+ * @param {string} moduleRoot
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
+async function importCommand(entry, moduleRoot) {
+  const file = join(moduleRoot, entry.module)
+  if (!existsSync(file)) return null
+  return import(pathToFileURL(file).href)
 }
 
 /**
@@ -362,7 +365,8 @@ function checkResult(entry, result) {
 }
 
 /**
- * Print an error and return its exit code.
+ * Print an error and return its exit code. The lines of an `unreachable` hook come first, on
+ * stdout; with --json they and the hook's data are fields of the one document.
  * @param {unknown} error
  * @param {object} options
  * @param {Output} options.out
@@ -370,15 +374,19 @@ function checkResult(entry, result) {
  * @param {Writer} options.stderr
  * @param {string | undefined} options.command
  * @param {boolean} options.debug
+ * @param {UnreachableResult | null} [options.unreachable]
  * @returns {number}
  */
-function report(error, { out, stdout, stderr, command, debug }) {
+function report(error, { out, stdout, stderr, command, debug, unreachable = null }) {
   const exitCode = exitCodeOf(error)
   if (out.json) {
     writeJson(stdout, {
       command: command ?? null,
       ok: false,
       exitCode,
+      ...(unreachable === null
+        ? {}
+        : { lines: unreachable.lines ?? [], data: unreachable.data ?? null }),
       error:
         error instanceof HackwinError
           ? error.toJSON()
@@ -389,6 +397,7 @@ function report(error, { out, stdout, stderr, command, debug }) {
       stderr.write(`${error.stack}\n`)
     }
   } else {
+    for (const text of unreachable?.lines ?? []) stdout.write(`${text}\n`)
     for (const text of formatError(error, { command, stack: debug })) stderr.write(`${text}\n`)
   }
   return exitCode

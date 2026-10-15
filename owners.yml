@@ -12,36 +12,37 @@ roles:
   integrator:
     shared: true
     paths:
-      - "bin/**"
-      - "src/cli/**"
-      - "src/core/**"
-      - "test/cli/**"
-      - "test/core/**"
-      - "test/harness/**"
-      - "test/integration/**"
-      - "docs/build/**"
-      - ".github/**"
+      - 'bin/**'
+      - 'scripts/**'
+      - 'src/cli/**'
+      - 'src/core/**'
+      - 'test/cli/**'
+      - 'test/core/**'
+      - 'test/harness/**'
+      - 'test/integration/**'
+      - 'docs/build/**'
+      - '.github/**'
   lane-a:
     paths:
-      - "src/commands/setup/**"
-      - "src/commands/join/**"
-      - "src/internal/**"
-      - "src/generate/**"
-      - "test/commands/setup/**"
-      - "test/commands/join/**"
-      - "test/internal/**"
-      - "test/generate/**"
+      - 'src/commands/setup/**'
+      - 'src/commands/join/**'
+      - 'src/internal/**'
+      - 'src/generate/**'
+      - 'test/commands/setup/**'
+      - 'test/commands/join/**'
+      - 'test/internal/**'
+      - 'test/generate/**'
   lane-b:
     paths:
-      - "src/commands/take/**"
-      - "src/commands/ship/**"
-      - "test/commands/take/**"
-      - "test/commands/ship/**"
-      - "docs/verification.md"
+      - 'src/commands/take/**'
+      - 'src/commands/ship/**'
+      - 'test/commands/take/**'
+      - 'test/commands/ship/**'
+      - 'docs/verification.md'
   lane-c:
     paths:
-      - "src/commands/status/**"
-      - "src/commands/gate/**"
-      - "test/commands/status/**"
-      - "test/commands/gate/**"
+      - 'src/commands/status/**'
+      - 'src/commands/gate/**'
+      - 'test/commands/status/**'
+      - 'test/commands/gate/**'
 open: []

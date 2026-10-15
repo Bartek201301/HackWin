@@ -1,11 +1,12 @@
 // The Gate's local files under `<git-common-dir>/hackwin/gate/` (6.4): the state file
-// `state.json` of 9.6 (G4) and the heartbeat (G5). Both are written atomically: a temporary file
-// in the same directory, then a rename, so a crash never leaves half a file behind.
+// `state.json` of 9.6 (G4), the heartbeat (G5) and the id of this clone's Gate. They are written
+// atomically with `writeAtomic` of `src/core/state`: a temporary file in the same directory, then
+// a rename, so a crash never leaves half a file behind.
 
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { gateDir } from '../../core/state/index.js'
+import { rename } from 'node:fs/promises'
+import { join } from 'node:path'
+import { gateDir, parseJson, readText, writeAtomic } from '../../core/state/index.js'
 
 /** The schema of every file the Gate writes. */
 export const GATE_SCHEMA = 1
@@ -17,6 +18,7 @@ export const GATE_SCHEMA = 1
  * @property {string} heartbeat `heartbeat`, renewed at every poll and stage change (G5).
  * @property {string} digest `digest.log`, one line per pull request run (9.6).
  * @property {string} lock `gate.lock`, held by the running Gate (7.5 step 2).
+ * @property {string} id `gate-id`, the id of this clone's Gate, which the status issue shows.
  * @property {string} logs `logs/`, the full logs of the stage commands.
  * @property {string} cache `cache/`, the dependency install cache (A11).
  * @property {string} worktrees `worktrees/`, the scratch worktrees.
@@ -35,6 +37,7 @@ export function gateFiles(gitCommonDir) {
     heartbeat: join(root, 'heartbeat'),
     digest: join(root, 'digest.log'),
     lock: join(root, 'gate.lock'),
+    id: join(root, 'gate-id'),
     logs: join(root, 'logs'),
     cache: join(root, 'cache'),
     worktrees: join(root, 'worktrees'),
@@ -57,6 +60,22 @@ export function gateFiles(gitCommonDir) {
  * @property {Record<string, PullRecord>} prs By pull request number.
  * @property {AttentionItem[]} attention
  * @property {unknown[]} hotspots Phase 3.
+ * @property {Streaks} streaks The failures in a row that make a repeated failure (G23, A24):
+ *   a key of this Gate beside those of 9.6.
+ */
+
+/**
+ * Runs in a row that failed the same stage (G23), with the newest last.
+ * @typedef {object} Streak
+ * @property {string} stage
+ * @property {Array<{ pr: number, sha: string, at: string }>} runs
+ */
+
+/**
+ * @typedef {object} Streaks
+ * @property {Streak | null} queue The queue items in a row whose runs failed the same stage.
+ * @property {Record<string, Streak>} prs By pull request: its head SHAs in a row whose runs failed
+ *   the same stage.
  */
 
 /**
@@ -74,6 +93,10 @@ export function gateFiles(gitCommonDir) {
  * @property {unknown[]} resolver Phase 3.
  * @property {Array<{ stage: string, sha: string, at: string }>} failures
  * @property {Record<string, number>} stage_times Seconds per stage.
+ * @property {boolean} [merge_unknown] True when the run of this head ended failed or was given
+ *   up at stage 10 without a readable answer whether GitHub merged it: a fault of the Gate, not a
+ *   refusal of the merge. Intake then takes a later merge of the head as the Gate's own. A key of
+ *   this Gate beside those of 9.6.
  */
 
 /**
@@ -83,6 +106,10 @@ export function gateFiles(gitCommonDir) {
  * @property {string} since
  * @property {string} todo
  * @property {string | null} resolved_at
+ * @property {string | null} [stage] For a repeated failure: the stage whose pass closes it
+ *   (9.6). A key of this Gate beside those of 9.6.
+ * @property {boolean} [across] For a repeated failure across queue items: the pass of any queue
+ *   item closes it, not only one of its own pull request.
  */
 
 /**
@@ -103,6 +130,7 @@ export function emptyState() {
     prs: {},
     attention: [],
     hotspots: [],
+    streaks: { queue: null, prs: {} },
   }
 }
 
@@ -131,6 +159,18 @@ export function pullRecord(headSha, time) {
 }
 
 /**
+ * True when the secret scan failed the record's head SHA, at intake or at stage 4: `retry` never
+ * queues that head SHA again, a new head SHA without the secret joins the queue.
+ * @param {PullRecord} record
+ * @returns {boolean}
+ */
+export function addsSecret(record) {
+  return record.failures.some(
+    (failure) => failure.stage === 'secrets' && failure.sha === record.head_sha,
+  )
+}
+
+/**
  * Load the state file. A missing file is the state of a Gate that never ran. A file that is not
  * a state of this schema is kept beside it under another name, so nothing is lost, and the Gate
  * starts from an empty state; `kept` names that file.
@@ -151,7 +191,42 @@ export async function loadState(file, now) {
   for (const [key, fallback] of Object.entries(state)) {
     if (sameKind(loaded[key], fallback)) /** @type {any} */ (state)[key] = loaded[key]
   }
+  state.streaks = cleanStreaks(state.streaks)
   return { state, kept: null }
+}
+
+/**
+ * The streaks of a loaded state file: anything that is not a streak reads as none.
+ * @param {unknown} value
+ * @returns {Streaks}
+ */
+export function cleanStreaks(value) {
+  const loaded = isObject(value) ? value : {}
+  /** @type {Record<string, Streak>} */
+  const prs = {}
+  for (const [key, streak] of Object.entries(isObject(loaded.prs) ? loaded.prs : {})) {
+    if (/^[1-9]\d*$/.test(key) && isStreak(streak)) prs[key] = streak
+  }
+  return { queue: isStreak(loaded.queue) ? loaded.queue : null, prs }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Streak}
+ */
+function isStreak(value) {
+  return (
+    isObject(value) &&
+    typeof value.stage === 'string' &&
+    Array.isArray(value.runs) &&
+    value.runs.every(
+      (/** @type {unknown} */ run) =>
+        isObject(run) &&
+        Number.isInteger(run.pr) &&
+        typeof run.sha === 'string' &&
+        typeof run.at === 'string',
+    )
+  )
 }
 
 /**
@@ -197,48 +272,29 @@ export async function readHeartbeat(file) {
   return /** @type {Heartbeat} */ (heartbeat)
 }
 
-/**
- * Write a file atomically: a temporary file in the same directory, then a rename.
- * @param {string} file
- * @param {string} text
- * @returns {Promise<void>}
- */
-export async function writeAtomic(file, text) {
-  await mkdir(dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    await writeFile(temporary, text)
-    await rename(temporary, file)
-  } catch (error) {
-    await rm(temporary, { force: true })
-    throw error
-  }
-}
+/** A Gate id: 16 hex digits, random, made once per clone. */
+const GATE_ID = /^[0-9a-f]{16}$/
 
 /**
- * The text of a file, or null when it does not exist.
+ * The id of this clone's Gate, which tells its heartbeat in the status issue from another
+ * clone's. It is random and says nothing about the machine. The first call in a clone makes it;
+ * a missing or unreadable file gets a new one, and `created` says so.
  * @param {string} file
- * @returns {Promise<string | null>}
+ * @param {Date} now
+ * @returns {Promise<{ id: string, created: boolean }>}
  */
-export async function readText(file) {
-  try {
-    return await readFile(file, 'utf8')
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
-    throw error
+export async function loadGateId(file, now) {
+  const text = await readText(file)
+  const record = text === null ? null : parseJson(text)
+  if (isObject(record) && record.schema === GATE_SCHEMA && GATE_ID.test(record.gate_id)) {
+    return { id: record.gate_id, created: false }
   }
-}
-
-/**
- * @param {string} text
- * @returns {unknown}
- */
-export function parseJson(text) {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return null
-  }
+  const id = randomBytes(8).toString('hex')
+  await writeAtomic(
+    file,
+    `${JSON.stringify({ schema: GATE_SCHEMA, gate_id: id, created_at: now.toISOString() })}\n`,
+  )
+  return { id, created: true }
 }
 
 /**

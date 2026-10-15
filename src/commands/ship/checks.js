@@ -48,7 +48,7 @@ import {
  * The green check record of the head commit for this task, written by an earlier `ship` whose
  * later steps failed. The checks then do not run again for the same commit (7.9, failure
  * behavior). A record of the same commit for another task does not count: its acceptance tests
- * were others.
+ * were others. Nor does a record that another version of hackwin wrote: its checks may differ.
  * @param {CommandContext} ctx
  * @param {TaskWorktree} worktree
  * @param {Synced} synced
@@ -59,6 +59,12 @@ export async function recordedChecks(ctx, worktree, synced) {
   const record = await readCheckRecord(ctx.gitCommonDir, head)
   if (record === null || !isGreen(record, head)) return null
   if (record.issue !== task.number || record.branch !== worktree.branch) return null
+  if (record.cli_version !== ctx.version) {
+    ctx.out.line(
+      `steps 3 to 9, checks: the green check record of ${head} was written by hackwin ${record.cli_version}, not ${ctx.version}, so the checks run again`,
+    )
+    return null
+  }
   ctx.out.line(
     `steps 3 to 9, checks: passed for ${head} at ${record.created_at}, so they do not run again`,
   )

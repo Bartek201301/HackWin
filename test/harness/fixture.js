@@ -27,15 +27,21 @@ export const FIXTURE_IDENTITY = Object.freeze({
 /** Variables that would tie a child process to the user's GitHub login, repository or session. */
 const DROPPED_VARIABLES = [
   'GH_TOKEN',
-  'GITHUB_TOKEN',
   'GH_ENTERPRISE_TOKEN',
-  'GITHUB_ENTERPRISE_TOKEN',
   'GH_HOST',
   'GH_REPO',
   'GH_CONFIG_DIR',
   'HACKWIN_CALLER',
+  'CI',
   TOKEN_VARIABLE,
 ]
+
+/**
+ * Prefixes of variables that are dropped as well: `GIT_*` of the user's git, and `GITHUB_*` and
+ * `RUNNER_*` of a GitHub Actions runner, such as `GITHUB_EVENT_PATH`, which names the event of
+ * the run that tests this repository, and `GITHUB_TOKEN`.
+ */
+const DROPPED_PREFIXES = ['GIT_', 'GITHUB_', 'RUNNER_']
 
 const ACTIVE = Symbol.for('hackwin.harness.fixtures')
 
@@ -53,7 +59,9 @@ export function cleanupFixtures() {
 
 /**
  * An environment for child processes with this HOME: no inherited GIT_* variable, a global git
- * config of its own, no system git config, an empty gh config and no GitHub token.
+ * config of its own, no system git config, an empty gh config, no GitHub token, and none of the
+ * variables of a CI runner (`GITHUB_*`, `RUNNER_*`, `CI`), so that no test reads the run that tests
+ * this repository.
  * @param {string} home
  * @param {Record<string, string | undefined>} [base]
  * @returns {Record<string, string | undefined>}
@@ -62,7 +70,9 @@ export function isolatedEnv(home, base = process.env) {
   /** @type {Record<string, string | undefined>} */
   const env = {}
   for (const [key, value] of Object.entries(base)) {
-    if (!key.startsWith('GIT_') && !DROPPED_VARIABLES.includes(key)) env[key] = value
+    const dropped =
+      DROPPED_VARIABLES.includes(key) || DROPPED_PREFIXES.some((prefix) => key.startsWith(prefix))
+    if (!dropped) env[key] = value
   }
   return Object.assign(env, {
     HOME: home,

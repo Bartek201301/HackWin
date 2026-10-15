@@ -132,6 +132,27 @@ It returns a result or throws a typed error (section 3.4). It never calls `proce
 | `lines` | string[] | The short output (CM6), printed one per line without `--json` |
 | `data` | any | The full machine readable result, printed with `--json` |
 
+**When GitHub is unreachable** (#71). A user command's module may also export a second function, `CommandUnreachable` in `src/cli/context.js`:
+
+```js
+/** @import { CommandContext, UnreachableResult } from '../../cli/context.js' */
+/** @import { RemoteError } from '../../core/runtime/errors.js' */
+
+/**
+ * @param {CommandContext} ctx Without `config` and `identity`.
+ * @param {RemoteError} error The error of the preparation.
+ * @returns {Promise<UnreachableResult | void>}
+ */
+export async function unreachable(ctx, error) {}
+```
+
+- The runner calls it only when preparing the context (section 3.6, step 4) throws a `RemoteError`: the fetch of `origin`, or `gh api user` for the identity. It then loads the module although the preparation failed and calls `unreachable`; `run` is not called.
+- `ctx` is the context the runner built, without `config` and `identity`, also when the configuration was loaded before `gh api user` failed. The function reads only local state.
+- It returns `{ lines, data }`, both optional, or nothing. Without `--json` the runner prints the lines on stdout, then the error on stderr as for any error. With `--json` the one document is the error's, with the lines and data added (section 3.3). The exit code is 3, the `RemoteError`'s.
+- GitHub unreachable exits 3 (7.6), also when the import of the module or the function throws. The runner then reports the `RemoteError` as without the function, after one warning (section 3.3) that says why: `the local information of hackwin <command> could not be shown: <message>`. With `--json` the warning is in `warnings`, and the document has no `lines` and no `data`.
+- The error alone is printed, as for any error, when the module does not export `unreachable`, when it does not exist yet (the `RemoteError`, not `not built yet`), for a plumbing command (which the runner does not prepare, section 3.6), and for a `RemoteError` that `run` throws after the preparation succeeded.
+- `status` exports it to print the local heartbeat on the Lead's laptop while GitHub is unreachable (7.6, #25).
+
 ### 3.3 Output
 
 - Short by default (CM6): the runner prints `result.lines` on stdout. With `--json` stdout carries exactly one JSON document:
@@ -141,7 +162,11 @@ It returns a result or throws a typed error (section 3.4). It never calls `proce
   { "command": "take", "ok": false, "exitCode": 1, "error": { "kind": "blocked", "message": "...", "rule": "...", "objects": ["..."], "resolve": { "command": "...", "dir": "..." } }, "warnings": [] }
   ```
 
-  `command` is null when the command line itself is wrong. The fields of `error` are those of section 3.4.
+  `command` is null when the command line itself is wrong. The fields of `error` are those of section 3.4. After an `unreachable` function that returned (section 3.2) the error's document also has `lines` (empty when it returned none) and `data` (null when it returned none), before `error`:
+
+  ```json
+  { "command": "status", "ok": false, "exitCode": 3, "lines": ["..."], "data": {}, "error": { "kind": "remote", "message": "...", "details": { "status": null, "tail": ["..."] } }, "warnings": [] }
+  ```
 - `ctx.out.line(text)` prints a progress or report line while the command runs: on stdout, or on stderr with `--json`. `ctx.out.write(text)` prints raw text on the same stream, for a question. `ctx.out.warn(text)` prints `warning: <text>` on stderr and adds the text to `warnings`.
 - The runner prints an error on stderr as `hackwin <command>: <message>`, followed by indented lines: for a block the rule, one line per object and `to resolve: ...`; for a configuration error the key; for a remote error the last lines of gh's or git's output; and `to resolve: ...` whenever the error has one. An unexpected error prints `internal error: <message>`; with `HACKWIN_DEBUG=1` also its stack.
 - CM4: every message that tells someone to run something names the directory. `runIn(command, dir)` returns ``run `<command>` in <dir>`` and refuses an empty directory. An error's `resolve` is either `{ command, dir }` or a plain instruction that names no command, such as "ask the Lead to add you to `hackwin.yml`". `dir` is an absolute path, or "any directory" when the place does not matter.
@@ -163,7 +188,7 @@ All in `src/core/runtime/errors.js`. The runner maps each to its exit code of CM
 | `RemoteError` | 3 | `remote` | GitHub or the network failed: a gh call, a fetch, a push | `status` (HTTP status or none), `details.tail` |
 | Any other error | 2 | `internal` | A bug in hackwin | |
 
-Every error has `message`, `exitCode`, `kind` and optional `resolve` and `details`, and `toJSON()` gives its JSON form. `exitCodeOf(error)` returns the exit code of any thrown value. A command that finishes with a failed check returns `exitCode: 1` instead of throwing (section 3.2).
+Every error has `message`, `exitCode`, `kind` and optional `resolve` and `details`, and `toJSON()` gives its JSON form. `exitCodeOf(error)` returns the exit code of any thrown value. A command that finishes with a failed check returns `exitCode: 1` instead of throwing (section 3.2). A Claude Code `PreToolUse` hook is the one exception to "a block exits 1": it blocks with exit 0 (section 3.6).
 
 ### 3.5 Caller kind
 
@@ -171,21 +196,25 @@ Every error has `message`, `exitCode`, `kind` and optional `resolve` and `detail
 
 | Kind | When | Used by |
 | --- | --- | --- |
-| `claude-code` | `HACKWIN_CALLER=claude-code` is set. The command wrappers of task 1.4c set it | `take` prints the prompt for the running session (A12); `gate` starts nothing and prints the instruction to run `hackwin gate` in a separate terminal (AC58) |
+| `claude-code` | `HACKWIN_CALLER=claude-code` is set. The command wrappers of task 1.4c set it | `take` does steps 1 to 6 of 7.7, then prints the prompt file and the command that starts the agent in the worktree, for a new terminal: Claude Code with the worktree as its directory (`docs/verification.md` row 3), or Codex with `--cd` (row A). The session never moves to another directory (the scope change on #16, row 4). `gate` starts nothing and prints the instruction to run `hackwin gate` in a separate terminal (AC58) |
 | `terminal` | Otherwise, when stdin and stdout are both terminals | `take` starts the agent; `gate` runs |
-| `non-interactive` | Otherwise: hooks, CI, scripts, tests | `gate` refuses to start; questions come from `--answers <file>` (CM11) |
+| `non-interactive` | Otherwise: hooks, CI, scripts, tests | `take` prints the start command instead of starting the agent (PR #49); `gate` refuses to start; questions come from `--answers <file>` (CM11) |
 
-Any other value of `HACKWIN_CALLER` is ignored.
+Any other value of `HACKWIN_CALLER` is ignored. With `--json`, `take` also prints the start command and starts no agent, in every caller kind, because stdout carries the one JSON document (PR #49).
 
 ### 3.6 What the runner does
 
 1. Parse the command line. A wrong command line exits 2.
 2. `--version` prints the version; `--help` prints the help. Both exit 0.
 3. Build the context: the top-level directory (outside a git checkout: exit 2), the git common directory, and the GitHub repository from the URL of `origin` (`owner/name`, passed to gh as `GH_REPO`; none for a local remote).
-4. Prepare the context (`prepareContext` in `src/cli/main.js`, filled by task 1.3b): fetch and read `hackwin.yml` and `owners.yml` from `origin/main` (CM9, A17) and validate them (exit 2 naming the key); the version check (CM12); the caller's identity (5.4); the fast-forward of the main checkout (CM10). `setup` on a repository without `hackwin.yml` on `origin/main` skips this step.
+4. Prepare the context (`prepareContext` in `src/cli/main.js`, filled by task 1.3b): fetch and read `hackwin.yml` and `owners.yml` from `origin/main` (CM9, A17) and validate them (exit 2 naming the key), and the version check (CM12), both through `loadCheckedConfig` of `src/core/config` (section 4.4); the caller's identity (5.4); the fast-forward of the main checkout (CM10). The fetch prunes, so a branch deleted on GitHub leaves no remote-tracking ref for the command to act on, such as the base of a new task branch in `take`. `setup` on a repository without `hackwin.yml` on `origin/main` skips this step; its check for `hackwin.yml` fetches with pruning as well.
 
-   The runner prepares the six user commands only. `internal hook` and `internal ci` get no prepared config, identity, version check or fast-forward, because every hook except `SessionStart` must stay offline (10.4) and in CI the caller is GitHub's token, not a member. Each internal command loads what it needs through `src/core/config` itself: a hook from the local `origin/main` without a fetch, with the member's login recorded locally by `join` (section 5.1); `internal ci` from the base branch and the proposed copy as 10.2 step 1 says, with the pull request's author. How a hook applies CM12 without the network is decided in 1.4a (#8) and 1.4c (#10), not here.
+   When this step throws a `RemoteError`, the runner loads the command's module all the same and, when it exports `unreachable(ctx, error)`, calls it with the context without `config` and `identity`, prints its lines before the error and exits 3 (section 3.2).
+
+   The runner prepares the six user commands only. `internal hook` and `internal ci` get no prepared config, identity, version check or fast-forward, because every hook except `SessionStart` must stay offline (10.4) and in CI the caller is GitHub's token, not a member. Each internal command loads what it needs through `src/core/config` itself: a hook from the local `origin/main` without a fetch, with the member's login recorded locally by `join` (section 5.1); `internal ci` from the base branch and the proposed copy as 10.2 step 1 says, with the pull request's author. 1.4a (#8) decided how a hook applies CM12 without the network: against `cli_version` on the local `origin/main`. `loadCheckedConfig(git, { fetch: false, ... })` of section 4.4 does exactly that, so the hooks and the runner can share one loader.
 5. Load the command's module, run it, print the result or the error, and return the exit code.
+
+**The exit code of a Claude Code `PreToolUse` hook.** Claude Code treats exit 1 of a `PreToolUse` hook as a non-blocking error: the tool runs anyway. So `hackwin internal hook pre-tool-use` (1.4c, #10) blocks a tool call with exit 0 and a JSON permission decision `deny` on stdout, `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"<the block as the runner prints it>"}}` (PR #58). The review of #58 checked this in Claude Code's hooks reference on 15 October 2026. It is the one exception to "a block exits 1" of section 3.4.
 
 `main(argv, options)` takes the process from `options` where given (`cwd`, `env`, `stdin`, `stdout`, `stderr`, `clock`, `ghExecutor`, `moduleRoot`), so tests run commands in-process.
 
@@ -274,7 +303,7 @@ Labels, assignees and comments of a pull request use the issue helpers with its 
 
 **Errors.** A failed call is a `RemoteError` (exit 3) with the HTTP status when gh printed one; gh exit code 4 or a request to run `gh auth login` is a `PreconditionError` (exit 2). `nullWhenNotFound(lookup)` turns a 404 into null.
 
-**Calls of one lane.** A call that only one lane makes goes through `ctx.github.run` or `ctx.github.api` from inside that lane's directory: branch rules, rule sets, push protection and invitations (lane A; reading the protection state goes through section 4.11); the pinned merge `gh pr merge <PR> --merge --match-head-commit <full SHA>`, branch deletion, issue pinning, check runs and CI reruns (lane C).
+**Calls of one lane.** A call that only one lane makes goes through `ctx.github.run` or `ctx.github.api` from inside that lane's directory: branch rules, rule sets, push protection and invitations (lane A; reading the protection state goes through section 4.11); `gh pr ready <N>`, which marks a draft pull request of the branch ready in `ship` step 11 (lane B, PR #48); the pinned merge `gh pr merge <PR> --merge --match-head-commit <full SHA>`, branch deletion, issue pinning, check runs and CI reruns (lane C).
 
 ### 4.4 `src/core/config` (1.3b)
 
@@ -282,18 +311,26 @@ The parsed objects keep the key names of the files (`cli_version`, `team.members
 
 | Export | Inputs | Output and errors |
 | --- | --- | --- |
-| `loadConfig(git, { ref, fetch })` | `ref` is `origin/main` by default; `fetch` true by default (CM9) | `Config`: `{ hackwin, owners, ref, sha }`. `RemoteError` when the fetch fails; `PreconditionError` when `hackwin.yml` is missing on the ref ("not configured", resolve: `hackwin setup` in the main checkout); `ConfigError` naming the key for every broken rule |
+| `loadConfig(git, { ref, fetch })` | `ref` is `origin/main` by default; `fetch` true by default (CM9): `git fetch --prune origin` | `Config`: `{ hackwin, owners, ref, sha }`. `RemoteError` when the fetch fails; `PreconditionError` when `hackwin.yml` is missing on the ref ("not configured", resolve: `hackwin setup` in the main checkout); `ConfigError` naming the key for every broken rule |
+| `loadCheckedConfig(git, { ref, fetch, running, repositoryUrl, out })` | `ref` is `mainRef(git)` by default; `fetch` true by default, false in a hook; `running` the version of the CLI; `repositoryUrl` `repository.url` of `package.json`; `out` an `Output` for the warning, or null | `Config`, after the version check of `enforceVersion`. When the configuration is invalid, `cli_version` is read from the raw `hackwin.yml` first, so a CLI of another phase gets the `PreconditionError` with the version to install, not the `ConfigError` of a key it does not know. The runner (section 3.6, step 4) calls it; the hooks call it with `fetch: false`, through `loadHookConfig` of `src/internal/hook/config.js` (#61, PR #62). Errors: those of `loadConfig` and `enforceVersion` |
+| `mainRef(git)` | | The remote-tracking ref of the default branch: what `origin/HEAD` points to, or `origin/main` |
+| `enforceVersion({ running, pinned, repositoryUrl, out })` | Two versions; `out` as above | The `VersionStatus`. `older` and `other-phase` are a `PreconditionError` (exit 2) whose resolve is the install command of the pinned version (section 6.3) in any directory; `newer-patch` warns on `out` and continues. No hook calls it directly: the hooks load through `loadCheckedConfig` (#61, PR #62). `src/cli/main.js` still exports `enforceVersion({ running, pinned, out, repositoryUrl })` with `repository.url` of this package as default; only `test/cli/prepare.test.js` imports it |
+| `pinnedVersionOf(text)` | The text of `hackwin.yml` | Its `cli_version`, read without validating the rest, or null when it has no valid version |
+| `HACKWIN_FILE`, `OWNERS_FILE` | | `hackwin.yml`, `owners.yml`: the two files at the repository root |
 | `parseHackwinConfig(text)` | The text of `hackwin.yml` | The object of 6.1 with the defaults of 6.3, or `ConfigError` |
 | `parseOwners(text)` | The text of `owners.yml` | `{ schema, roles: { <role>: { shared, paths } }, open }`, or `ConfigError` (exactly one shared role; overlapping globs) |
 | `validateConfig(hackwin, owners)` | | Nothing, or `ConfigError` naming the key: every rule of 6.1 and 6.2 |
 | `loadProposedConfig(git, { ref, base })` | A branch's own copy, for CI (10.2 step 1) and `setup --regenerate` | As `loadConfig`, plus: a `cli_version` of another phase than on `base` is a `ConfigError` on `cli_version` |
 | `ownerOf(config, path)` | | `{ role, holder, open }`: the matching role, or the shared role for a path without one (A16); `open` when the path is on the `open` list |
+| `holderOf(config, role)` | | The login of the member who holds the role, or null when no member does |
 | `rolesOf(config, login)` | | The roles the member holds |
 | `scopeCheck(config, { login, files, taskPaths })` | Paths of the change; the task's allowed paths, optional | `{ violations: [{ path, role, holder }], outsideTask: [path] }`. A violation is a path that is not open and whose role the login does not hold (E1); `outsideTask` lists paths inside the roles but outside `taskPaths`, a warning only (A15) |
 | `resolveIdentity(config, login)` | The gh login | `Identity`: `{ login, member, roles, isLead }`. A login outside the team is a `PreconditionError` with the resolve "ask the Lead to add you to `hackwin.yml`" (7.2) |
 | `checkVersion({ running, pinned })` | Two versions | `{ status }`: `same`, `newer-patch` (same phase, newer), `older` or `other-phase`. Phase is major and minor; older and newer follow semver precedence with pre-release identifiers (section 6.2) |
 | `installCommand(version, repositoryUrl)` | The pinned version; `repository.url` of `package.json` | The install command of section 6.3 |
 | `fastForwardMainCheckout(git, { defaultBranch })` | Run in the main checkout | `{ status }`: `fast-forwarded`, `up-to-date`, `behind` (local changes or another branch: nothing changes) or `not-main-checkout` (a task worktree) |
+| `createMatcher(globs)` | Globs of the syntax below | A function that is true for a path, relative to the repository root, that matches any of the globs; dot files included |
+| `samplePath({ inside, alsoInside, outside })` | Globs of the syntax below | A path that matches a glob of `inside`, also a glob of `alsoInside` when given, and no glob of `outside`, or null when there is none. Two globs share a path: `{ inside: [a], alsoInside: [b] }`; a glob reaches a path outside a list: `{ inside: [a], outside: list }` |
 
 The runner (section 3.6, step 4) turns `older` and `other-phase` into a `PreconditionError` that prints the install command of the pinned version, a `newer-patch` into a one-line warning, and `behind` into the warning that the checkout is behind `origin/main`.
 
@@ -304,17 +341,27 @@ The runner (section 3.6, step 4) turns `older` and `other-phase` into a `Precond
 
 | Export | Inputs | Output |
 | --- | --- | --- |
-| `parseTaskBlock(body, config)` | An issue body | `{ isTask: false }` without a `# hackwin:task` block; otherwise `{ isTask: true, valid: true, block }` or `{ isTask: true, valid: false, errors: [reason] }`. `block` keeps the keys of 8.1: `kind`, `role`, `wave`, `paths`, `depends_on`, `acceptance_tests`, `deadline`. The three rules of 8.1 make a block invalid |
-| `toTask(issue, config)` | An `Issue` | `Task`: `{ number, title, state, labels, assignees, status, block, valid, errors }`, `status` one of `ready`, `blocked`, `in-progress`, `in-review`, `cut`, `closed` or `open` (no status label) |
+| `parseTaskBlock(body, config)` | An issue body | `{ isTask: false }` without a `# hackwin:task` block; otherwise `{ isTask: true, valid: true, block }` or `{ isTask: true, valid: false, errors: [reason] }`. `block` keeps the keys of 8.1: `kind`, `role`, `wave`, `paths`, `depends_on`, `acceptance_tests`, `deadline`. The three rules of 8.1 make a block invalid. No error contains a control character, a line break or a bidirectional format character (see "Safe errors" below). It does not check the author: a reader that calls it directly calls `writtenByTeam` first |
+| `writtenByTeam(issue, config)` | An `Issue`, or any `{ author }` | True when the issue's author is `team.lead` or the `github` of one of `team.members`, compared without case; false for any other author and for none (see "Who writes a task" below) |
+| `toTask(issue, config)` | An `Issue` | `Task`: `{ number, title, state, labels, assignees, status, block, valid, errors }`, `status` one of `ready`, `blocked`, `in-progress`, `in-review`, `cut`, `closed` or `open` (no status label). Null for an issue without a task block, and for an issue that `writtenByTeam` rejects, whose body it does not parse |
 | `queueOf(tasks, roles)` | Open tasks; the member's roles | The member's queue of 8.1: their roles, not in progress, in review or cut; ordered by wave (none last), deadline, number |
 | `dependenciesOf(task, issues)` | The task; issues by number | `{ takeable, open: [number] }`: takeable when every dependency is closed (8.3, I12) |
 | `slugOf(title)` | | The first four words of the title, lower case, every run of characters other than `a` to `z` and `0` to `9` replaced by one hyphen |
 | `branchName(number, title)`, `parseBranch(name)` | | `task/<N>-<slug>` (A9); `{ kind: 'task', issue }`, `{ kind: 'spike' }` or `{ kind: 'other' }` |
 | `parseTaskLink({ branch, body })` | Branch and pull request body | `{ ok: true, issue }` or `{ ok: false, reason }` with the reasons `no-task-branch`, `spike-branch`, `no-closes-line`, `several-closing-references`, `branch-issue-mismatch` (section 5.5) |
-| `checkTaskLink(github, config, pull)` | A `PullRequest` | As `parseTaskLink`, plus `issue-not-open` and `invalid-task-block` (E11, E16) |
+| `checkTaskLink(github, config, pull)` | A `PullRequest` | As `parseTaskLink`, plus `issue-not-open` and `invalid-task-block` (E11, E16). An `invalid-task-block` failure is `{ ok: false, reason: 'invalid-task-block', author, member, errors }`: `author` the issue's author or null; `member` false when `writtenByTeam` rejects the issue; `errors` the reasons, safe to print. For an issue that no member wrote, the one error names the author: ``issue #<N> was written by <author>, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task``. Otherwise it is `#<N> is a pull request, not a task issue`, `issue #<N> has no # hackwin:task block`, or the errors of `parseTaskBlock` |
 | `LABELS` | | The catalogue of 8.2: `[{ name, color, description }]`, every label except the `role:` labels |
+| `WAITING_LABELS` | | The labels on a pull request that wait for its author, in the order of 7.7 step 3: `['needs-owner', 'gate:failed', 'scope-violation']` |
+| `SCOPE_CHANGE` | | `Scope change:`, the start of an issue comment that changes the scope of a task (8.1) |
+| `shown(value)` | Any value, for example a value of a task block or the author of an issue | The value as the errors of `parseTaskBlock` name it (see "Safe errors" below): a string without a control character, a line break or a bidirectional format character as it is; anything else quoted as JSON with each such character escaped. `take` and `ship` import it from `block.js` until their next tasks switch them to the index |
 | `roleLabel(role)` | | `role:<role>` |
 | `setTaskStatus(github, number, status)` | `ready`, `in-progress`, `in-review` | Removes the other status labels of the issue and adds this one; a label edit only (8.3) |
+
+`take` (`WAITING_LABELS` in `src/commands/take/index.js`, `HANDBACK_LABELS` in `src/commands/take/resume.js`, `SCOPE_CHANGE` in `src/commands/take/prompt.js`) and the SessionStart hook (`src/internal/hook/session-start.js`) still define their own copies of these two values. Each lane switches to `WAITING_LABELS` and `SCOPE_CHANGE` of `src/core/tasks` in its first task that starts after #60 is merged; #57 and #61 may start earlier.
+
+- **Who writes a task.** An issue counts as a task only when its author is a member of the team: `team.lead` or one of `team.members` of `hackwin.yml`, compared without case (the Lead's review of PR #73, #74). On a public repository any account can open an issue with a valid `# hackwin:task` block, and `take` hands a task's body to an agent as its prompt. `writtenByTeam` decides it, in one place. `toTask` and `checkTaskLink` apply it, so every reader through them gets the rule: `take` (`src/commands/take/board.js`, `index.js`), the Gate's stage 2 (`checkTaskLink`) and stage 11 (`toTask` for the dependents), `internal ci` (`checkTaskLink`), `ship` and `join`. A reader that calls `parseTaskBlock` directly calls `writtenByTeam` first: `internal ci` does so since #76 (PR #83). The Gate's stage 7 (`acceptanceTests` in `src/commands/gate/merge-test.js`) reads the task issue again, because its block may have changed after stage 2. Since #24 (PR #80) it reads the issue through `toTask` and checks `writtenByTeam` when `toTask` gives no valid block: the rule holds there as in stage 2, also under a configuration of main that changed since (A17), and its failure for an issue that no member wrote names the author. `status` decides membership through `writtenByTeam` since #79 (PR #84): `toTask` for task issues and `writtenByTeam` for the authors of pull requests.
+- **The reason code.** A pull request that names an issue that no member wrote fails `checkTaskLink` with the reason `invalid-task-block`, not with a new reason. The Gate's stage 2 (`TASK_LINK` in `src/commands/gate/stages.js`) and `internal ci` (`checkTaskLinkStep` in `src/internal/ci/index.js`) handle exactly the reasons above, so a new one would fail their type check and leave the Gate's table without an entry. With `invalid-task-block` they fail such a pull request unchanged; `member` and `errors` let them name the author: the Gate from the scope change on #24, `internal ci` since #76 (PR #83).
+- **Safe errors.** Any account can write a task block, and `take` prints its errors, so no error of `parseTaskBlock` contains a control character (U+0000 to U+001F, U+007F to U+009F), a line break (also U+2028 and U+2029) or a bidirectional format character, which reorders what a line shows (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069): the characters that `status` escapes too (`cleanText` in `src/commands/status/text.js`, PR #73; scope change on #74). A value of the block that an error names (a key, `kind`, `role`, `wave`, a path, a sample path of a path, `deadline`) is shown as it is when it has none of these characters; otherwise it is quoted as JSON with each of them escaped as `\uXXXX` or by JSON's own escape, for example `role "web\u001b[2J" is not a role of owners.yml`. `kind`, `wave` and `deadline` are quoted as before. The YAML parser's message, which can quote a character of the block ("Invalid escape sequence"), has each such character escaped. The errors of `checkTaskLink` follow the same rule, the author included.
 
 ### 4.6 `src/core/secrets` (1.3b)
 
@@ -332,14 +379,18 @@ Local state of a clone lives in `<gitCommonDir>/hackwin/`, shared by every workt
 
 | Export | Inputs | Output |
 | --- | --- | --- |
-| `statePaths(gitCommonDir)` | | `{ root, local, checks, sessions, prompts, gate }`, absolute |
+| `statePaths(gitCommonDir)` | | `{ root, local, checks, sessions, prompts, gate, logs }`, absolute |
 | `readLocal(dir)`, `writeLocal(dir, record)` | `dir` is `gitCommonDir` | The record of 5.1, or null |
 | `isJoinComplete(record, login)` | | True when the record has `join` and its `login` equals the caller's |
 | `readCheckRecord(dir, sha)`, `writeCheckRecord(dir, record)` | | The record of 5.2, or null |
-| `isGreen(record, sha)` | | True when the record is for this full SHA and no check failed (E4) |
+| `isGreen(record, sha)` | | True when the record is for this full SHA, holds each check of `CHECK_NAMES`, and every check passed, `generated` also `skipped` (E4, section 5.2). A record that lacks one of the six checks is not green |
+| `CHECK_NAMES`, `SKIPPABLE_CHECKS` | | The six checks that `ship` records, `scope`, `secrets`, `format`, `generated`, `check` and `acceptance` (section 5.2); the checks that may be `skipped`, `generated` alone |
 | `readMainSeen(dir, worktree)`, `latestMainSeen(dir)`, `writeMainSeen(dir, worktree, sha, time)` | An absolute worktree path | `{ main_sha, recorded_at }` for the worktree, or the latest of any worktree, or null |
 | `readLastStatus(dir)`, `writeLastStatus(dir, time)` | | ISO 8601 time or null |
 | `promptPath(dir, issue)`, `gateDir(dir)` | | `prompts/<issue>.md` (lane B writes it); `gate/` (lane C owns its content) |
+| `shipLogPath(dir, issue, step)` | A check name such as `check` or `acceptance` | `logs/ship/<issue>/<step>.log` (section 5.6; lane B writes it) |
+| `joinLogPath(dir)` | | `logs/join/install.log`, the log of `commands.install` in `join`'s step 4 (section 5.6; lane A writes it) |
+| `writeAtomic(file, text)`, `readText(file)`, `parseJson(text)` | Any file, for example a lane's own file under `gate/` | Writes through a temporary file in the same directory and a rename, creating the directory; the text, or null when the file or a directory on its path does not exist or the path is a directory; the parsed JSON, or null when the text is not JSON |
 
 ### 4.8 `src/core/worktrees` (1.3c)
 
@@ -349,20 +400,20 @@ Local state of a clone lives in `<gitCommonDir>/hackwin/`, shared by every workt
 | `taskWorktreePath(mainCheckout, issue, slug)` | | `<repo-parent>/<repo-name>.worktrees/<N>-<slug>` (A9) |
 | `currentTask(git)` | | `{ issue, branch, path }` when the current worktree is on a `task/` branch, else null |
 | `taskWorktrees(git)` | | `[{ issue, branch, path }]` of every task worktree of the clone |
-| `removeMergedWorktrees(git, github)` | | `{ removed: [path], kept: [{ path, reason }] }`: removes the worktree of every task whose pull request is merged (A35) |
+| `removeMergedWorktrees(git, github)` | | `{ removed: [path], kept: [{ path, reason, merged }] }`: removes the worktree of every task whose pull request is merged (A35). `merged` is true for a kept worktree whose task's pull request is merged (the current worktree, a locked one, or one with changes), false for a task whose pull request is not merged, so a caller need not read `reason` |
 | `checkHooksPath(git)`, `repairHooksPath(git)` | | `{ ok, value }`; sets `core.hooksPath` to `.githooks` in the clone's config and returns `{ changed }` (E20) |
 
 ### 4.9 `src/core/project` (1.3c)
 
-Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs, logFile }`. A run without `timeoutMs` has the default timeout of 20 minutes (`PROJECT_TIMEOUT_MS`).
+Each run returns `ProjectRun`: `{ ok, command, code, timedOut, tail, durationMs, logFile }`. A run without `timeoutMs` has the default timeout of 20 minutes (`PROJECT_TIMEOUT_MS`). Every run takes `env`, the whole environment of every process the run starts, `process.env` by default (as `execShell`, section 4.1): a caller that must keep a variable from the project's code, such as `internal ci` with the token of its run, passes an environment without it. That covers git as well: the `git ls-files` of `runInstall` that looks for a manifest, and the git calls of `generatedFileCheck`, which with `env` run with it in place of the environment of the `git` passed in, and without `env` keep that environment.
 
 | Export | Inputs | Output |
 | --- | --- | --- |
-| `runInstall({ cwd, config, timeoutMs, logFile })` | | `ProjectRun`, or `{ skipped: true, notice }` while no file matches `paths.manifests` (A62) |
-| `runCheck({ cwd, config, timeoutMs, logFile })` | | `ProjectRun` of `commands.check` |
-| `runAcceptanceTests({ cwd, config, files, timeoutMs, logFile })` | The task's `acceptance_tests` | `{ ok, missing: [entry], run }`. Every entry is a file path; an entry that is not an existing file fails before anything runs (T5); otherwise `commands.test` runs with the files appended. An empty list passes with nothing run: `{ ok: true, missing: [], run: null }` |
-| `formatCheck({ cwd, config, files })` | The changed files | `{ ok, unformatted: [path], run }`: runs `commands.format` on the files and compares their content before and after, restoring the original (E14). It takes no timeout and no log file: it runs with the default timeout of 20 minutes |
-| `generatedFileCheck({ cwd, config, git })` | | `{ ok, changed: [path], run }`: runs `commands.generate` and fails when it changes a tracked file (E10); `ok` when `commands.generate` is null. Only the changes that `commands.generate` made count: changes in the checkout before the run do not. It restores every tracked file it changed. It takes no timeout and no log file: it runs with the default timeout of 20 minutes |
+| `runInstall({ cwd, config, timeoutMs, logFile, env })` | | `ProjectRun`, or `{ skipped: true, notice }` while no file matches `paths.manifests` (A62) |
+| `runCheck({ cwd, config, timeoutMs, logFile, env })` | | `ProjectRun` of `commands.check` |
+| `runAcceptanceTests({ cwd, config, files, timeoutMs, logFile, env })` | The task's `acceptance_tests` | `{ ok, missing: [entry], run }`. Every entry is a file path; an entry that is not an existing file fails before anything runs (T5); otherwise `commands.test` runs with the files appended. An empty list passes with nothing run: `{ ok: true, missing: [], run: null }` |
+| `formatCheck({ cwd, config, files, env })` | The changed files | `{ ok, unformatted: [path], run }`: runs `commands.format` on the files and compares their content before and after, restoring the original (E14). It takes no timeout and no log file: it runs with the default timeout of 20 minutes |
+| `generatedFileCheck({ cwd, config, git, env })` | | `{ ok, changed: [path], run }`: runs `commands.generate` and fails when it changes a tracked file (E10); `ok` when `commands.generate` is null. Only the changes that `commands.generate` made count: changes in the checkout before the run do not. It restores every tracked file it changed. It takes no timeout and no log file: it runs with the default timeout of 20 minutes |
 
 ### 4.10 `src/core/changes` (1.3c)
 
@@ -386,20 +437,35 @@ How the reader decides, according to `docs/verification.md` rows 5 and 6:
 - `checkPinned`: a required check `hackwin` with `integrationId` 15368 is in force. It is only reported: until the next PRD revision it does not change the state (issue #7).
 - `bypassable`: every rule in force that the reading account can bypass, its rule set's `current_user_can_bypass` being other than `never` or not returned, except the rule `update` of the update restriction. A rule other than `update` inside the update restriction's own rule set is listed. Empty when the Lead's account can skip no rule on the branch but the update restriction. It does not change the state. Whenever the update restriction is active (`rules.updateRestricted`), in any protection state, the Gate reads `rules.bypassable`, never the rule sets: at start (1.6a, #20) and before each merge with `--admin` (1.6d, #23).
 
-Tests that call `readProtection` against the fake GitHub, which answers no rule set request, register both reads with `serveRulesets(fake, rulesets, { offered })` of `test/core/protection/rulesets.js`. The same file has the bodies of the two rule sets of section 5.4.
+The fake GitHub of the test harness holds rule sets and answers both reads (section 4.12), so a test that calls `readProtection` against it gives the rule sets to `createFakeGitHub({ rulesets, rulesetsOffered })` or `addRuleset`. `test/core/protection/rulesets.js` has the bodies of the two rule sets of section 5.4, and `serveRulesets(fake, rulesets, { offered })`, which only gives the rule sets to that fake, for the tests that already import it.
 
 ### 4.12 `test/harness` (1.3d)
 
 | Export | Output |
 | --- | --- |
 | `createFixture(options)` | An offline fixture: a temporary bare origin and its main checkout, with its own HOME and git configuration; scripted states (files, commits, branches, task worktrees, a team of 1, 3 or 4 members, a joined clone); `cleanup()`. With `nodeProject: true` its `main` starts from the Node fixture |
-| `createFakeGitHub(state)` | `{ executor, state, on(request, handler), as, calls, unhandled, find, addCheckRun, setBranch }`: an in-memory repository behind the executor seam that answers the requests of section 4.3. A lane registers handlers for its own calls from its own test files. The other members are in the table below |
-| `withFixtureRepo(name, scenario, options)` | Runs a scenario on a fixture repository (section 6.4) under its lock, after the reset, and returns the scenario's result. `options`: `lockTimeoutMs`, how long to wait for another session's lock; `stateDir`, where the locks and run logs live; `logFile`, the run log in place of `<stateDir>/logs/<repository>.log`; `executors`, `{ lead, builder1 }` in place of the real gh, for the harness's own tests against the fake GitHub |
+| `cleanupFixtures()` | Removes every fixture a test file left behind; `test/harness/setup.js` calls it after each file |
+| `isolatedEnv(home, base)` | The environment of a fixture's child processes, from `base` (`process.env` by default): `HOME` and the git and gh configuration of its own, no system git configuration, no inherited `GIT_*` variable, no GitHub token or `GH_*` variable that names a host, repository or configuration, no `HACKWIN_CALLER`, and none of the variables of a CI runner (`GITHUB_*`, `RUNNER_*`, `CI`), so that no test reads the run that tests this repository |
+| `FIXTURE_IDENTITY` | `{ name, email }` of every commit a fixture makes |
+| `createFakeGitHub(state)` | `{ executor, state, on(request, handler), as, calls, unhandled, find, addCheckRun, setBranch, addRuleset, addMilestone }`: an in-memory repository behind the executor seam that answers the requests of section 4.3, and the rule set requests in the form `docs/verification.md` recorded (rows 5 and 6): `GET` and `POST repos/{owner}/{repo}/rulesets` (the list leaves out the rules), `GET`, `PUT` and `DELETE repos/{owner}/{repo}/rulesets/<id>`, and `GET repos/{owner}/{repo}/rules/branches/<branch>`. `state.rulesets` holds the rule sets, given as `rulesets` at creation; with `rulesetsOffered: false` every rule set request answers HTTP 403 with `RULESETS_NOT_OFFERED`, as on `hackwin-fixture-private`. A rule set read gives `current_user_can_bypass` as the rule set sets it, else `always` for an admin of the repository when the admin role is a bypass actor, and `never` otherwise. A pull request of the state takes `headRepo`: the fake's repository by default, a fork's `owner/name`, or null for a deleted fork (`head.repo` null); the head of a fork's pull request does not follow the fake's branch of the same name. `state.milestones` holds the milestones, given as `milestones` at creation in GitHub's field names (`title`, `state`, `description`, `due_on`), with `number` given when missing. A test gives an issue or pull request a milestone with `milestone`, the milestone's number: `createFakeGitHub({ milestones: [{ number: 1, title: 'Wave 1' }], issues: [{ number: 10, title: 'Task', milestone: 1 }] })`, or `addMilestone` and `find(10).milestone` later; `POST` and `PATCH .../issues` take `milestone` as GitHub does, and answer HTTP 422 for a number the state lacks. `GET .../issues/<N>`, the issue list and every other issue or pull request JSON of the fake carry that `milestone` as GitHub returns it on an issue (`id`, `number`, `title`, `description`, `state`, `open_issues`, `closed_issues`, `creator`, `html_url` as `https://github.com/<repo>/milestone/<number>`, the times and `due_on`), or `milestone: null`. `open_issues` and `closed_issues` count the issues and pull requests of the state that carry the milestone, unless the milestone gives them. `GET .../issues` filters by `milestone`: a number, `*` or `none`. A lane registers handlers for its own calls from its own test files. The other members are in the table below |
+| `httpError(status, message)`, `rawResult({ code, stdout, stderr })`, `FakeGitHubError` | For a handler: throw an HTTP error, as gh prints it; return gh's exact output; the class of `httpError` |
+| `DEFAULT_FAKE_REPO`, `RULESETS_NOT_OFFERED` | `hackwin-test/app`, the repository of a fake whose state names none; GitHub's message where it offers no rule sets (`docs/verification.md` E3) |
+| `withFixtureRepo(name, scenario, options)` | Runs a scenario on a fixture repository (section 6.4) under its lock, after the reset, and returns the scenario's result. `options`: `lockTimeoutMs`, how long to wait for another session's lock; `stateDir`, where the locks and run logs live; `logFile`, the run log in place of `<stateDir>/logs/<repository>.log`. The run log records every gh call, with gh's whole error output for a failed one, and a failed run's full error (stack, status, gh's output, causes). Before a run writes its log, it keeps the log of an earlier run that did not pass, failed or interrupted, as `<log name>.failed-<start of that run>.log` in the same directory; the log of a passed run is replaced. `executors`, `{ lead, builder1 }` in place of the real gh, for the harness's own tests against the fake GitHub; `accounts`, the accounts the scenario acts as, `['lead', 'builder1']` by default. Only these are checked before the reset, so a scenario with `accounts: ['lead']` needs only the Lead's gh login and no `HACKWIN_TEST_BUILDER_TOKEN`, and acting as builder1 in it throws; `logins.builder1` is then the name of `accounts.builder1`, not checked |
 | `inspectFixtureRepo(name, options)` | Reads the state of a fixture repository as the Lead, under its lock and through the guard, without a reset and without changing anything: `{ state, problems, calls }`, where `problems` lists what differs from the state a reset leaves. `options`: `lockTimeoutMs`, `stateDir` and `executors`, as for `withFixtureRepo` |
 | `nodeProjectFiles()` | The files of the Node fixture, each path relative to the project root with its content. The Node fixture is every file of the tree of the reset commit (section 6.4), kept as one text file, `test/harness/node-project.yml`, so that none of its files, such as `CLAUDE.md` or `.claude/`, acts as agent instructions or settings inside this repository |
 | `writeNodeProject(dir)` | Writes every file of the Node fixture into `dir`, a test's own directory |
 | `packNodeProject(dir)` | The text of `node-project.yml` for the files of `dir`, which must all be UTF-8 text: it makes the file again from a checkout of a new reset commit |
-| `accounts` | `lead`, `builder1`, `builder2`, `solo` (section 6.4) |
+| `NODE_PROJECT_FILE` | The absolute path of `test/harness/node-project.yml` |
+| `accounts` | `lead`, `builder1`, `builder2`, `solo` (section 6.4), each `{ key, login, live, description }`; `live` is true when a test may act as the account on real GitHub |
+| `accountOf(key)` | The account of a key, or an error that names the known keys |
+| `builderToken()`, `TOKEN_VARIABLE` | The token of `builder1`, or null when it was not set; `HACKWIN_TEST_BUILDER_TOKEN`, the variable it comes from (section 6.1). `test/harness/setup.js` moves the token out of `process.env` before each test file |
+| `redact(text, token)` | The text with the token of `builder1` replaced by `[HACKWIN_TEST_BUILDER_TOKEN]` |
+| `BUILDER3_LOGIN`, `NAME_ONLY_LOGINS` | `hackwin-test-builder3`; `[maljul, hackwin-test-builder3]`, the logins used only as names, which the guard never lets a real call invite, assign or mention (section 6.4) |
+| `teamConfig(size)`, `TEAM_SIZES` | The team configuration of a fixture of 1, 3 or 4 members (`TEAM_SIZES`): `{ size, hackwin, owners, members, answers, files }`, with `answers` for `setup --answers` (CM11) and `files` as YAML text |
+| `teamMembers(size)`, `hackwinObject(size)`, `ownersObject()` | The members of a team of this size; `hackwin.yml` of the Node fixture for it, pinned to the running version; `owners.yml` of the Node fixture; all as objects |
+| `yaml(value)` | The YAML text of a value |
+| `FIXTURE_REPOS`, `fixtureRepo(name)` | The four fixture repositories of section 6.4, each `{ name, repo, visibility, resetSha, usedBy, protectionRefused }`; the one of a name, given with or without the owner, and an error for any other repository, `hackwin-sandbox` above all |
+| `FIXTURE_OWNER`, `RESET_SHA`, `RESET_TREE`, `SANDBOX` | `Bartek201301`; the reset commit of section 6.4; its tree, which the Node fixture copies; `hackwin-sandbox`, which no automated test touches |
 
 The members of the fake GitHub besides `executor`, `state` and `on`:
 
@@ -411,6 +477,8 @@ The members of the fake GitHub besides `executor`, `state` and `on`:
 | `find(number)` | The issue or pull request with this number, or undefined |
 | `addCheckRun(sha, run)` | Adds a check run for a commit |
 | `setBranch(branch, sha)` | Points a branch at a commit, as a push does |
+| `addRuleset(body)` | Adds a rule set as `POST .../rulesets` creates it, with an `id` when the body has none, and returns it |
+| `addMilestone(body)` | Adds a milestone as `POST .../milestones` creates it, open unless the body says otherwise, with the next `number` when the body has none, and returns it |
 
 ## 5. Data formats
 
@@ -455,7 +523,7 @@ The green check record of one commit, named by its full SHA. `ship` writes it af
 }
 ```
 
-The check names are steps 3 to 8 of `ship`. A result is `passed`, or `skipped` when the project has no such command. A record never holds a failed check.
+The check names are steps 3 to 8 of `ship`, listed as `CHECK_NAMES` in `src/core/state`: `scope`, `secrets`, `format`, `generated`, `check` and `acceptance`. Every result is `passed`, except that `generated` is `skipped` when `hackwin.yml` sets no `commands.generate` (`SKIPPABLE_CHECKS`). A record never holds a failed check. A record is green (`isGreen`) only when it holds all six checks with these results, so a record that lacks one, for example one with a single passed check, does not let the `pre-push` hook pass.
 
 ### 5.3 `<gitCommonDir>/hackwin/sessions/`
 
@@ -499,6 +567,52 @@ The reader (section 4.11) computes the state from the rules in force, not from t
 
 `prompts/<issue>.md` belongs to lane B (`take`); everything under `gate/` belongs to lane C (6.4). `src/core/state` only names these paths.
 
+`logs/` (`statePaths(dir).logs`) holds the logs of the project commands that a command runs, one directory per command. `ship` writes the logs of its steps 7 and 8 to `logs/ship/<issue>/check.log` and `logs/ship/<issue>/acceptance.log` (`shipLogPath(dir, issue, step)`), replaced on each run; they belong to lane B. `join` writes the log of `commands.install`, its step 4, to `logs/join/install.log` (`joinLogPath(dir)`), replaced on each run; it belongs to lane A. `join` writes it there since #76 (PR #83) and builds the path itself (`installLog` in `src/commands/join/checks.js`) until a lane A task switches it to `joinLogPath`. The git common directory belongs to the member, so these logs are in no directory that other users of the machine share. `ship` writes them there since #57 (PR #68), no longer under `$TMPDIR/hackwin-ship/`.
+
+### 5.7 Gate comment marker
+
+The Gate, the Lead and the Lead's builder sessions all write on GitHub as the Lead's account (A5), so the author of a comment does not tell the Gate's comments from the Lead's. Every comment the Gate writes on a pull request (G21, A31) therefore starts with a marker line that names the pull request, the full head SHA, the stage and the result (scope change on #22, PR #64). The Gate (lane C) writes it; `take` (lane B) and the Gate itself read it.
+
+```text
+<!-- hackwin:gate-comment pr=<N> sha=<full head SHA> stage=<stage> result=<result> -->
+```
+
+- `pr`: the pull request's number. `sha`: the full head SHA of the run, 40 lower-case hex digits, or 64 in a SHA-256 repository. `stage`: the stage where the run failed, by its name in `STAGES` of `src/commands/gate/stages.js`. `result`: the digest result of 9.6 that the run ended with. A stage and a result are lower-case words joined by single hyphens.
+- The Gate writes a comment only for a failure before the merge (`endFailed` in `src/commands/gate/pulls.js`, which `endRun` in `src/commands/gate/pipeline.js` calls for a run, and intake for a head with a secret), so a marker carries one of these stages and results, since #24 (PR #80):
+
+  | `stage` | Stage | `result` |
+  | --- | --- | --- |
+  | `fetch` | 1 | `failed`, only with `gate-error` |
+  | `task-link` | 2 | `failed`, also with `gate-error` |
+  | `scope` | 3 | `scope-violation`; `failed` with `gate-error` |
+  | `secrets` | 4, and the scan at intake | `failed`; at stage 4 also with `gate-error` |
+  | `gated-paths` | 5 | `failed`, only with `gate-error` |
+  | `conflicts` | 6 | `needs-owner`; `failed` with `gate-error` |
+  | `merge-test` | 7 | `failed`, also with `gate-error`; `flaky` when a known flaky test still fails after its reruns; `needs-owner` when the merge conflicts although stage 6 found no conflict |
+  | `ci` | 8 | `failed`, also after `gate.ci_timeout_minutes` and with `gate-error`; `flaky` when a known flaky test fails after the last rerun |
+  | `freshness` | 9 | `failed`, only with `gate-error` |
+  | `merge` | 10 | `failed`, also with `gate-error` while the head is not merged |
+
+  `gate-error` is the reason of a run that a stage stopped with an error that waiting does not change (`gateError` in `src/commands/gate/pipeline.js`): a refusal of GitHub, an HTTP status that `isOutage` does not wait out, or any other error, a fault of the Gate. The stage loop (`runStages`) turns such an error of any stage into a failure with the result `failed`, and a run whose head is not merged ends through `endRun`, which writes the comment with its marker. `fetch` (1) and `freshness` (9) end no run with a failure of their own, since they try their fetch again while GitHub or the network is down, and neither does `gated-paths` (5), which raises attention items and lets the run go on; so a marker names them only with `gate-error`.
+
+  No marker names `after-merge` (11): a stage that began after the merge, stage 11 or stage 10 when it runs again after the merge, ends on such an error through `endMerged`, which leaves the pull request merged and writes no comment. Stage 11 returns no failure of its own: it tries its GitHub calls again while GitHub or the network is down, and reports a failed fetch of main, a merge commit whose first parent is not the tested main and a failed smoke test as attention items. A run that `abandon` ends, after an error outside its stages or when GitHub refused its end, posts no comment either. The digest's other results, `merged` and `requeued`, come with no comment. `parseGateMarker` accepts any stage and result of the form above, so a reader keeps working when the Gate adds one.
+- GitHub does not render an HTML comment, and the API returns the body as written.
+- Only the exact marker counts: at the very start of the body, with no space, tab, byte order mark or other character before it; the four keys once each, in this order, with single spaces; nothing else up to the end of its line (`\n`, `\r\n` or the end of the body). A reply that quotes a Gate comment, or a marker in a code block, is no Gate comment.
+
+`src/commands/gate/comment.js` exports:
+
+| Export | Inputs | Output and errors |
+| --- | --- | --- |
+| `MARKER_NAME` | | `hackwin:gate-comment` |
+| `formatGateMarker({ pr, sha, stage, result })` | A `GateMarker` | The marker line, without a line end. `TypeError` when `pr` is not a positive integer of at most 10 digits, `sha` is not a full SHA, or `stage` or `result` is not such a word |
+| `parseGateMarker(body)` | A comment body, or null or undefined | The `GateMarker` `{ pr, sha, stage, result }` with `pr` a number, or null when the body does not start with the exact marker. It takes time linear in the body's length |
+| `latestGateComment(comments, { pr, lead })` | `Comment[]` oldest first, as `listComments` returns them (section 4.3); the pull request's number; `lead` is `team.lead` of `hackwin.yml` | `{ comment, marker }` of the newest comment whose author is `lead`, compared without case, and whose marker names `pr`; or null. A marker in a comment of any other account never counts |
+
+The module's `failureComment` builds the whole body of a failed run's comment, marker first; only the Gate uses it.
+
+- **Whose marker.** A marker is the Gate's only when the comment's author is `team.lead`. A marker that the Lead types by hand under that account cannot be told apart from the Gate's (A5). A caller that acts on a Gate comment therefore also compares `marker.sha` with the head SHA it acts on.
+- **Who reads it.** `take` (#57, lane B) reads the Gate's comment of a pull request with `latestGateComment`, in `gateComment` of `src/commands/take/resume.js` (PR #68), and uses it only when `marker.sha` is the pull request's current head SHA (scope change on #57). Otherwise its fix prompt quotes no Gate comment and tells the session to ask the Lead what the Gate reported. The Gate's restart (#24, lane C) recognizes its own comments the same way, so that no comment is repeated (AC22): by the marker in comments by `team.lead` (`latestGateComment`, or `parseGateMarker` with the same author check), never by the author alone or by a marker in another account's comment, and it compares `marker.sha` with the head SHA where it acts on one.
+
 ## 6. Decisions of plan section 9
 
 ### 6.1 The machine account's credential
@@ -528,7 +642,7 @@ The reader (section 4.11) computes the state from the rules in force, not from t
 | `Bartek201301/hackwin-fixture-c` | Public | Lane C, and the integration tasks |
 | `Bartek201301/hackwin-fixture-private` | Private | The cases where GitHub refuses protection (AC2) and, if step 1.2 confirms it, push protection (AC80); the experiments of step 1.2 |
 
-- Before a test run the harness resets a fixture repository as the Lead (`test/harness/reset.js`), in this order: it deletes every rule set of the repository (an HTTP 403 is accepted on `hackwin-fixture-private` only, where GitHub offers no rule sets), deletes every branch rule on every pattern, closes every open pull request and then every open issue, unpins every pinned issue, deletes every branch but `main`, deletes every label, and resets `main` to the recorded commit `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` (all four; read back from GitHub on 10 October 2026), creating `main` when it is missing. The rules go first, so that no rule blocks a branch deletion or the reset of `main`. Then it reads the whole state back and fails when it does not hold: `main` at the recorded commit as the only branch, and no open issue or pull request, label, rule set, branch rule or pinned issue. The reset does not touch repository settings: secret scanning push protection, the default branch, collaborators and invitations stay as they are. A lock per repository keeps two sessions off the same repository.
+- Before a test run the harness resets a fixture repository as the Lead (`test/harness/reset.js`), in this order: it deletes every rule set of the repository (an HTTP 403 is accepted on `hackwin-fixture-private` only, where GitHub offers no rule sets), deletes every branch rule on every pattern, closes every open pull request and then every open issue, unpins every pinned issue, deletes every branch but `main`, deletes every label, and resets `main` to the recorded commit `bf2af037ab756d7051e35bdd7e3f18c92eda45b5` (all four; read back from GitHub on 10 October 2026), creating `main` when it is missing. The rules go first, so that no rule blocks a branch deletion or the reset of `main`. A deletion that GitHub answers with HTTP 404 counts as done, for a rule set, a branch or a label: the object is gone, as after an earlier attempt whose answer was lost. So does HTTP 422 "Reference does not exist" for a branch, the fake GitHub's answer for a branch that does not exist. Each such deletion is named in the report's `accepted`. A gh call of the reset that fails without an HTTP status (a network error, a timeout, a cut response such as "unexpected end of JSON input") or with a 5xx is made again, up to 4 times in all, after waits of 1, 2 and 4 seconds (`RESET_ATTEMPTS`, `RETRY_DELAY_MS`); a refusal of the guard and every other status fail at once. Then it reads the whole state back and fails when it does not hold: `main` at the recorded commit as the only branch, and no open issue or pull request, label, rule set, branch rule or pinned issue. The reset does not touch repository settings: secret scanning push protection, the default branch, collaborators and invitations stay as they are. A lock per repository keeps two sessions off the same repository.
 - No repository is ever deleted, and the `delete_repo` scope is never requested. Automated tests never touch `hackwin-sandbox`; it is for the human's live tests.
 - Accounts: `lead` is the gh login of the machine; `builder1` is `test-bot-builder`, with the token of section 6.1; `builder2` is `maljul`, a real teammate's account used only as a name in team configurations: it is never invited to any repository, and nobody acts as it on real GitHub, so every scenario in which it acts runs against the fake GitHub (plan section 9, decision 2; `AGENTS.md`, "GitHub repositories"); `solo` is the Lead's account.
 - `hackwin-test-builder3` is the third builder of a team of four, a name only like `maljul`: it is never invited, assigned or mentioned on real GitHub, and every scenario in which it acts runs against the fake GitHub (plan section 9, decision 2). GitHub answered 404 for this login on 12 October 2026 (PR #40), so nobody owns it today and anyone may register it later. The harness guard refuses, before gh runs, any call that would invite, assign or mention either name-only login (`NAME_ONLY_LOGINS` in `test/harness/accounts.js`).

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { createGit } from '../../../src/core/git/index.js'
 import {
   formatCheck,
@@ -306,6 +306,112 @@ describe('1.3c/project: every project command has a timeout and reports its log 
     const result = await runCheck({ cwd: repo.clone, config, timeoutMs: 300 })
     expect(result).toMatchObject({ ok: false, timedOut: true, tail: ['started'] })
     expect(result.durationMs).toBeLessThan(5000)
+  })
+
+  test('every project command runs with the environment the caller gives, process.env by default', async () => {
+    commit({ 'package.json': '{}\n', 'check.txt': 'all good\n', 'tests/a.test.txt': 'ok\n' })
+    const log = join(tools, 'env.log')
+    /** @param {string} name */
+    const probe = (name) =>
+      `echo ${name} "\${PROBE_GIVEN-unset}" "\${PROBE_SECRET-unset}" >> ${quoteShellArg(log)}`
+    const config = configOf({
+      generate: probe('generate'),
+      commands: {
+        install: probe('install'),
+        check: probe('check'),
+        test: probe('test'),
+        format: probe('format'),
+      },
+    })
+    const runAll = async (/** @type {Record<string, string | undefined> | undefined} */ env) => {
+      const cwd = repo.clone
+      expect(await runInstall({ cwd, config, env })).toMatchObject({ ok: true })
+      expect(await runCheck({ cwd, config, env })).toMatchObject({ ok: true })
+      const files = ['tests/a.test.txt']
+      expect(await runAcceptanceTests({ cwd, config, files, env })).toMatchObject({ ok: true })
+      expect(await formatCheck({ cwd, config, files: ['check.txt'], env })).toMatchObject({
+        ok: true,
+      })
+      const git = createGit({ cwd, env: repo.env })
+      expect(await generatedFileCheck({ cwd, config, git, env })).toMatchObject({ ok: true })
+      const lines = readFileSync(log, 'utf8').trim().split('\n')
+      writeFileSync(log, '')
+      // The test and format commands get the files appended after the redirection.
+      return lines.map((line) => line.split(' ').slice(0, 3).join(' '))
+    }
+
+    process.env.PROBE_SECRET = 'from-process'
+    try {
+      const { PROBE_SECRET, ...rest } = process.env
+      expect(await runAll({ ...rest, PROBE_GIVEN: 'given' })).toEqual([
+        'install given unset',
+        'check given unset',
+        'test given unset',
+        'format given unset',
+        'generate given unset',
+      ])
+      expect(await runAll(undefined)).toEqual([
+        'install unset from-process',
+        'check unset from-process',
+        'test unset from-process',
+        'format unset from-process',
+        'generate unset from-process',
+      ])
+    } finally {
+      delete process.env.PROBE_SECRET
+    }
+  })
+
+  test('with env, git runs with it too: the manifest listing of runInstall and the git calls of generatedFileCheck', async () => {
+    commit({ 'package.json': '{}\n', 'generated/version.js': 'export const version = "1"\n' })
+    // A git first on the PATH logs the variables it sees and its arguments, then runs the real git.
+    const realGit = String(process.env.PATH)
+      .split(delimiter)
+      .map((dir) => join(dir, 'git'))
+      .find((file) => existsSync(file))
+    const bin = join(tools, 'bin')
+    const log = join(tools, 'git.log')
+    mkdirSync(bin)
+    writeFileSync(
+      join(bin, 'git'),
+      `#!/bin/sh\necho "\${PROBE_GIVEN-unset} \${PROBE_SECRET-unset} $*" >> ${quoteShellArg(log)}\nexec ${quoteShellArg(String(realGit))} "$@"\n`,
+      { mode: 0o755 },
+    )
+    const gitCalls = () => {
+      const lines = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []
+      writeFileSync(log, '')
+      return lines.filter(Boolean)
+    }
+    const config = configOf({ generate: `${node('generate.mjs')} 1` })
+    const cwd = repo.clone
+    // The caller's git has an environment of its own, without the logging git on its PATH.
+    const git = createGit({ cwd, env: repo.env })
+    const listing = '-c core.quotePath=false ls-files -z --cached --others --exclude-standard'
+
+    const path = process.env.PATH
+    process.env.PROBE_SECRET = 'from-process'
+    try {
+      const env = { ...repo.env, PROBE_GIVEN: 'given', PATH: `${bin}${delimiter}${repo.env.PATH}` }
+      expect(await runInstall({ cwd, config, env })).toMatchObject({ ok: true })
+      expect(gitCalls()).toEqual([`given unset ${listing}`])
+      expect(await generatedFileCheck({ cwd, config, git, env })).toMatchObject({
+        ok: true,
+        changed: [],
+      })
+      const checks = gitCalls()
+      expect(checks.length).toBeGreaterThan(0)
+      for (const line of checks) expect(line).toMatch(/^given unset -c core\.quotePath=false /)
+
+      // Without env, the listing runs with process.env, and the git calls of generatedFileCheck
+      // keep the environment of the caller's git.
+      process.env.PATH = `${bin}${delimiter}${path}`
+      expect(await runInstall({ cwd, config })).toMatchObject({ ok: true })
+      expect(await generatedFileCheck({ cwd, config, git })).toMatchObject({ ok: true })
+      expect(gitCalls()).toEqual([`unset from-process ${listing}`])
+    } finally {
+      process.env.PATH = path
+      delete process.env.PROBE_SECRET
+    }
   })
 
   test('a missing command is a configuration error naming its key', async () => {

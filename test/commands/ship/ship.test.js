@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readCheckRecord, statePaths } from '../../../src/core/state/index.js'
+import { readCheckRecord, shipLogPath, statePaths } from '../../../src/core/state/index.js'
 import { accounts, httpError } from '../../harness/index.js'
 import {
   BRANCH,
@@ -60,8 +60,8 @@ describe('AC15: ship exits 1 and leaves the remote branch unchanged', () => {
     expect(result.stderr).toContain(`\`${NODE} tools/test.mjs ${TEST_FILE}\` exited 1`)
     expect(result.stdout).toContain(`FAIL ${TEST_FILE}`)
     const log = /- log: (.+)$/m.exec(result.stderr)?.[1] ?? ''
-    expect(log.startsWith(join(s.env.TMPDIR, 'hackwin-ship'))).toBe(true)
-    expect(log.endsWith('acceptance.log')).toBe(true)
+    expect(log).toBe(shipLogPath(s.commonDir, ISSUE, 'acceptance'))
+    expect(existsSync(join(/** @type {string} */ (s.env.TMPDIR), 'hackwin-ship'))).toBe(false)
     expect(readFileSync(log, 'utf8')).toContain(`FAIL ${TEST_FILE}`)
   })
 
@@ -310,5 +310,33 @@ describe('1.5d/ship: merge main and local checks', () => {
     const result = await ship(s)
     expect(result.code, result.stderr).toBe(3)
     expect(await remoteBranch(s)).toBe(before)
+  })
+})
+
+describe('1.5g/outsider-task: ship refuses the worktree of an issue that no member of the team wrote', () => {
+  const message = (/** @type {string} */ who) =>
+    `#${ISSUE}, the issue of ${BRANCH}, is not a task: it was written by ${who}, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task`
+
+  test('ship exits 2, names the author and leaves the remote branch unchanged', async () => {
+    const s = await scene({ author: 'mallory' })
+    const before = await remoteBranch(s)
+    const result = await ship(s)
+    expect(result.code, result.stderr).toBe(2)
+    expect(result.stderr).toContain(`hackwin ship: ${message('mallory')}`)
+    expect(result.stderr).not.toContain('# hackwin:task')
+    expect(await remoteBranch(s)).toBe(before)
+
+    const json = JSON.parse((await ship(s, { json: true })).stdout)
+    expect(json).toMatchObject({ ok: false, exitCode: 2 })
+    expect(json.error.message).toBe(message('mallory'))
+    expect(json.error.details).toEqual({ author: 'mallory', member: false })
+  })
+
+  test('an author with a control character is quoted with it escaped', async () => {
+    const s = await scene({ author: 'mal\u001b[2Jlory' })
+    const result = await ship(s)
+    expect(result.code, result.stderr).toBe(2)
+    expect(result.stderr).toContain(message('"mal\\u001b[2Jlory"'))
+    expect(result.stderr).not.toContain('\u001b')
   })
 })

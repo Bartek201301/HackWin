@@ -1,17 +1,30 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { INHIBITOR_WHO } from '../../../src/commands/gate/awake.js'
 import { emptyState, gateFiles, pullRecord } from '../../../src/commands/gate/state.js'
-import { accounts, createFixture } from '../../harness/index.js'
+import { DEFAULT_FAKE_REPO, accounts, createFixture } from '../../harness/index.js'
 import {
   ADMIN_BYPASS,
   ONE_APPROVAL,
   branchRulesBody,
   updateRestrictionBody,
 } from '../../core/protection/rulesets.js'
-import { leadGitHub, manualClock, readJson, startMain, terminal, until } from './helpers.js'
+import {
+  leadGitHub,
+  manualClock,
+  noKeepAwake,
+  readJson,
+  startDirect,
+  startMain,
+  terminal,
+  until,
+} from './helpers.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 /** @typedef {import('./helpers.js').Terminal} Terminal */
@@ -52,6 +65,26 @@ afterEach(async () => {
  */
 async function startLeadGate(options = {}) {
   const gate = startMain(fixture, { fake: leadGitHub(), login: LEAD, ...options })
+  running.push(gate)
+  await until(
+    async () => gate.io.out.includes(HEADER_END) || (await isSettled(gate.done)),
+    'the header',
+  )
+  if (!gate.io.out.includes(HEADER_END)) throw new Error(`the Gate did not start: ${gate.io.err}`)
+  return gate
+}
+
+/**
+ * Start a Gate of the Lead without a pipeline, on a context that the runner prepared as for
+ * `hackwin gate` in a terminal, and wait for its header. `done` settles with the exit code.
+ */
+async function startProcessGate() {
+  const started = await startDirect(fixture, {
+    fake: leadGitHub(),
+    login: LEAD,
+    options: { pipeline: {}, keepAwake: noKeepAwake },
+  })
+  const gate = { io: started.io, done: started.done.then(() => 0) }
   running.push(gate)
   await until(
     async () => gate.io.out.includes(HEADER_END) || (await isSettled(gate.done)),
@@ -199,7 +232,8 @@ describe('1.6a/state: the state file survives a restart and counts every start',
     ]
     writeFileSync(files.state, JSON.stringify(state))
 
-    const second = await startLeadGate()
+    // Without a pipeline: intake would drop #7, which the fake GitHub does not hold.
+    const second = await startProcessGate()
     expect(second.io.out).toContain('Gate started: start 2, restart 1, pid')
     expect(second.io.out).toContain('queue: 1 pull request\n')
     expect(await quit(second)).toBe(0)
@@ -282,12 +316,16 @@ describe('1.6a/header: the header of a starting Gate', () => {
       'resolver: none',
       'poll: every 60 s',
       'queue: 0 pull requests',
-      'status issue: not created yet',
+      `status issue: #1 https://github.com/${DEFAULT_FAKE_REPO}/issues/1`,
     ])
     expect(header).toContain(
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
     )
     expect(header).toContain(
+      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
+    )
+    expect(header.filter((line) => line.includes('not built yet'))).toEqual([])
+    expect(header).not.toContain(
       'notice: the pipeline is not built yet: this Gate polls, but takes no pull request',
     )
     expect(await quit(gate)).toBe(0)

@@ -3,6 +3,8 @@ import { stringify } from 'yaml'
 import { parseHackwinConfig, parseOwners } from '../../../src/core/config/index.js'
 import {
   LABELS,
+  SCOPE_CHANGE,
+  WAITING_LABELS,
   branchName,
   checkTaskLink,
   dependenciesOf,
@@ -12,8 +14,10 @@ import {
   queueOf,
   roleLabel,
   setTaskStatus,
+  shown,
   slugOf,
   toTask,
+  writtenByTeam,
 } from '../../../src/core/tasks/index.js'
 import { createGitHub } from '../../../src/core/github/index.js'
 import { hackwinObject, ownersObject, yaml } from '../config/fixtures.js'
@@ -65,6 +69,51 @@ function issue(fields) {
     isPullRequest: false,
     ...fields,
   }
+}
+
+/**
+ * A GitHub client whose executor answers `GET issues/<n>` from a table.
+ * @param {Record<number, object>} issues
+ */
+function github(issues) {
+  return createGitHub({
+    repo: 'o/r',
+    executor: async (args) => {
+      const match = /^repos\/\{owner\}\/\{repo\}\/issues\/(\d+)$/.exec(args[3])
+      const found = match ? issues[Number(match[1])] : undefined
+      if (!found) return { code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }
+      return { code: 0, stdout: JSON.stringify(found), stderr: '' }
+    },
+  })
+}
+
+/**
+ * An issue as the REST API returns it.
+ * @param {number} number
+ * @param {{ state?: string, body?: string, pull?: boolean, author?: string | null }} [fields]
+ */
+function rawIssue(
+  number,
+  { state = 'open', body: text = body(blockObject()), pull = false, author = 'lead' } = {},
+) {
+  return {
+    number,
+    title: 'Login form',
+    body: text,
+    state,
+    labels: [],
+    assignees: [],
+    user: author === null ? null : { login: author },
+    ...(pull ? { pull_request: {} } : {}),
+  }
+}
+
+/**
+ * A pull request of a task branch that names this issue.
+ * @param {number} number
+ */
+function pullOf(number) {
+  return { headRef: `task/${number}-login`, body: `Closes #${number}\n` }
 }
 
 describe('1.3b/task-block: the task block of 8.1', () => {
@@ -338,40 +387,6 @@ describe('1.3b/task-link: the task link of a pull request', () => {
     expect(fail('feature/login', template)).toEqual({ ok: false, reason: 'no-task-branch' })
   })
 
-  /**
-   * A GitHub client whose executor answers `GET issues/<n>` from a table.
-   * @param {Record<number, object>} issues
-   */
-  function github(issues) {
-    return createGitHub({
-      repo: 'o/r',
-      executor: async (args) => {
-        const match = /^repos\/\{owner\}\/\{repo\}\/issues\/(\d+)$/.exec(args[3])
-        const found = match ? issues[Number(match[1])] : undefined
-        if (!found) return { code: 1, stdout: '', stderr: 'gh: Not Found (HTTP 404)' }
-        return { code: 0, stdout: JSON.stringify(found), stderr: '' }
-      },
-    })
-  }
-
-  /**
-   * @param {number} number
-   * @param {{ state?: string, body?: string, pull?: boolean }} [fields]
-   */
-  const rawIssue = (
-    number,
-    { state = 'open', body: text = body(blockObject()), pull = false } = {},
-  ) => ({
-    number,
-    title: 'Login form',
-    body: text,
-    state,
-    labels: [],
-    assignees: [],
-    user: { login: 'lead' },
-    ...(pull ? { pull_request: {} } : {}),
-  })
-
   test('an open task with a valid block passes; a closed issue, an invalid block and a spike fail', async () => {
     const client = github({
       42: rawIssue(42),
@@ -396,12 +411,19 @@ describe('1.3b/task-link: the task link of a pull request', () => {
       ok: false,
       reason: 'issue-not-open',
     })
-    for (const n of [44, 45, 46]) {
-      expect(await checkTaskLink(client, config, pull(`task/${n}-login`, n))).toEqual({
-        ok: false,
-        reason: 'invalid-task-block',
-      })
-    }
+    const invalid = { ok: false, reason: 'invalid-task-block', author: 'lead', member: true }
+    expect(await checkTaskLink(client, config, pull('task/44-login', 44))).toEqual({
+      ...invalid,
+      errors: ['deadline is missing; every task has one (T11)'],
+    })
+    expect(await checkTaskLink(client, config, pull('task/45-login', 45))).toEqual({
+      ...invalid,
+      errors: ['issue #45 has no # hackwin:task block'],
+    })
+    expect(await checkTaskLink(client, config, pull('task/46-login', 46))).toEqual({
+      ...invalid,
+      errors: ['#46 is a pull request, not a task issue'],
+    })
     expect(await checkTaskLink(client, config, pull('spike/42-login', 42))).toEqual({
       ok: false,
       reason: 'spike-branch',
@@ -410,6 +432,231 @@ describe('1.3b/task-link: the task link of a pull request', () => {
       ok: false,
       reason: 'no-closes-line',
     })
+  })
+})
+
+describe('1.3b/task-author: an issue is a task only when a member of the team wrote it', () => {
+  test("an outsider's issue with a valid block gives no task; the Lead's or a member's does", () => {
+    expect(toTask(issue({ number: 7, author: 'mallory' }), config)).toBeNull()
+    expect(toTask(issue({ number: 7, author: null }), config)).toBeNull()
+    for (const author of ['lead', 'builder-one', 'builder-two']) {
+      expect(toTask(issue({ number: 7, author }), config)).toMatchObject({ number: 7, valid: true })
+    }
+    // Not even an invalid block of an outsider is a task, so its errors are never shown.
+    const broken = body({ ...blockObject(), deadline: null })
+    expect(toTask(issue({ number: 7, author: 'mallory', body: broken }), config)).toBeNull()
+  })
+
+  test('the case of the login does not matter', () => {
+    for (const author of ['Lead', 'LEAD', 'Builder-One', 'BUILDER-TWO']) {
+      expect(writtenByTeam({ author }, config)).toBe(true)
+      expect(toTask(issue({ number: 7, author }), config)).toMatchObject({ valid: true })
+    }
+    expect(writtenByTeam({ author: 'Mallory' }, config)).toBe(false)
+    expect(writtenByTeam({ author: null }, config)).toBe(false)
+    expect(writtenByTeam({ author: '' }, config)).toBe(false)
+  })
+
+  test('team.lead counts even where team.members leaves the Lead out', () => {
+    const team = { lead: 'Chief', members: config.hackwin.team.members }
+    const other = { ...config, hackwin: { ...config.hackwin, team } }
+    expect(writtenByTeam({ author: 'chief' }, other)).toBe(true)
+    expect(writtenByTeam({ author: 'builder-one' }, other)).toBe(true)
+    expect(writtenByTeam({ author: 'mallory' }, other)).toBe(false)
+  })
+
+  test("checkTaskLink fails for a pull request that names an outsider's issue, naming the author", async () => {
+    const client = github({
+      50: rawIssue(50, { author: 'mallory' }),
+      51: rawIssue(51, { author: null }),
+      52: rawIssue(52, { author: 'mallory', body: 'no block' }),
+      53: rawIssue(53, { author: 'Builder-One' }),
+      54: rawIssue(54, { author: 'LEAD' }),
+      55: rawIssue(55, { author: 'mal\u001b[2Jlory' }),
+    })
+    expect(await checkTaskLink(client, config, pullOf(50))).toEqual({
+      ok: false,
+      reason: 'invalid-task-block',
+      author: 'mallory',
+      member: false,
+      errors: [
+        'issue #50 was written by mallory, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task',
+      ],
+    })
+    expect(await checkTaskLink(client, config, pullOf(51))).toMatchObject({
+      ok: false,
+      reason: 'invalid-task-block',
+      author: null,
+      member: false,
+      errors: [expect.stringMatching(/^issue #51 was written by an unknown account, who is not/)],
+    })
+    expect(await checkTaskLink(client, config, pullOf(52))).toMatchObject({
+      reason: 'invalid-task-block',
+      member: false,
+      errors: [expect.stringContaining('written by mallory')],
+    })
+    expect(await checkTaskLink(client, config, pullOf(53))).toEqual({ ok: true, issue: 53 })
+    expect(await checkTaskLink(client, config, pullOf(54))).toEqual({ ok: true, issue: 54 })
+    const strange = /** @type {any} */ (await checkTaskLink(client, config, pullOf(55)))
+    expect(strange.errors[0]).toContain('written by "mal\\u001b[2Jlory", who is not')
+    expect(strange.errors[0]).not.toMatch(UNSAFE)
+  })
+})
+
+/**
+ * A control character (C0, DEL, C1), a Unicode line or paragraph separator, or a bidirectional
+ * format character.
+ */
+const UNSAFE =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
+
+describe('1.3b/task-block-errors: no control character, line break or bidi format character in the errors of a task block', () => {
+  /** @param {string} text The block after its marker line. */
+  const errorsOf = (text) => {
+    const parsed = /** @type {any} */ (
+      parseTaskBlock(`\`\`\`yaml\n# hackwin:task\n${text}\n\`\`\`\n`, config)
+    )
+    expect(parsed).toMatchObject({ isTask: true, valid: false })
+    for (const error of parsed.errors) expect(error).not.toMatch(UNSAFE)
+    return /** @type {string[]} */ (parsed.errors)
+  }
+
+  // A YAML escape in double quotes, and how an error writes the character it decodes to: the
+  // escape character (clear the screen, reset the terminal), a carriage return, a line feed,
+  // both, the C1 control sequence introducer, DEL, the next line of C1, the line and paragraph
+  // separators, and bidirectional format characters (the right-to-left override, the Arabic
+  // letter mark, the right-to-left mark and the left-to-right isolate).
+  const values = [
+    ['\\e[2J', '\\u001b[2J'],
+    ['\\ec', '\\u001bc'],
+    ['\\r', '\\r'],
+    ['\\n', '\\n'],
+    ['a\\r\\nb', 'a\\r\\nb'],
+    ['\\x9b31m', '\\u009b31m'],
+    ['\\x7f', '\\u007f'],
+    ['\\N', '\\u0085'],
+    ['\\L', '\\u2028'],
+    ['\\P', '\\u2029'],
+    ['\\u202E', '\\u202e'],
+    ['\\u061C', '\\u061c'],
+    ['\\u200F', '\\u200f'],
+    ['\\u2066', '\\u2066'],
+  ]
+
+  for (const [yaml, shown] of values) {
+    test(`"${yaml}" in every value that an error names is quoted with the character escaped`, () => {
+      const errors = errorsOf(
+        [
+          `"x${yaml}": 1`,
+          `kind: "task${yaml}"`,
+          `role: "web${yaml}"`,
+          `wave: "1${yaml}"`,
+          `paths: ["src/features/web/${yaml}[id].js", "**/z${yaml}"]`,
+          'acceptance_tests: [test/web/form.test.js]',
+          `deadline: "2026-10-25${yaml}"`,
+        ].join('\n'),
+      )
+      expect(errors).toHaveLength(7)
+      expect(errors[0]).toBe(`"x${shown}" is not a key of the task block`)
+      expect(errors[1]).toBe(
+        `kind "task${shown}" is not one of task, proposal, integration, contract-change, foundation`,
+      )
+      expect(errors[2]).toBe(`role "web${shown}" is not a role of owners.yml`)
+      expect(errors[3]).toBe(`wave must be a whole number, not "1${shown}"`)
+      expect(errors[4].startsWith(`paths[0] ("src/features/web/${shown}[id].js") "[" is not`)).toBe(
+        true,
+      )
+      // The bracket of \e[2J makes both globs below fail the glob syntax instead.
+      const bracket = yaml.includes('[')
+      expect(errors[5].startsWith(`paths[1] ("**/z${shown}") `)).toBe(true)
+      if (!bracket) expect(errors[5]).toMatch(/\) spans the roles web \(/)
+      expect(errors[6].startsWith(`deadline "2026-10-25${shown}" is not an ISO 8601 time`)).toBe(
+        true,
+      )
+
+      const other = errorsOf(
+        [
+          'kind: task',
+          'role: web',
+          `paths: ["src/features/api/${yaml}x"]`,
+          'acceptance_tests: [test/web/form.test.js]',
+          'deadline: "2026-10-25T12:00:00+02:00"',
+        ].join('\n'),
+      )
+      expect(other).toHaveLength(1)
+      expect(other[0].startsWith(`paths[0] ("src/features/api/${shown}x") `)).toBe(true)
+      if (!bracket) {
+        expect(other[0]).toBe(
+          `paths[0] ("src/features/api/${shown}x") lies in the role api, not in the task's role web`,
+        )
+      }
+    })
+  }
+
+  test('a value without a control character or line break is shown as before', () => {
+    const errors = errorsOf(
+      [
+        'owner: lead',
+        'kind: x',
+        'role: webb',
+        'wave: one',
+        'paths: ["src/features/web/[id].js"]',
+        'acceptance_tests: [t]',
+        'deadline: tomorrow',
+      ].join('\n'),
+    )
+    expect(errors).toEqual([
+      'owner is not a key of the task block',
+      'kind "x" is not one of task, proposal, integration, contract-change, foundation',
+      'role webb is not a role of owners.yml',
+      'wave must be a whole number, not "one"',
+      'paths[0] (src/features/web/[id].js) "[" is not supported: character classes, groups and extglobs are not; write \\[ for the character itself',
+      'deadline "tomorrow" is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00"',
+    ])
+  })
+
+  test('raw characters in the body, and in the message of the YAML parser', () => {
+    // The parser's message for an invalid escape quotes the character after the backslash.
+    for (const [char, shown] of [
+      ['\u001b', '\\u001b'],
+      ['\u009b', '\\u009b'],
+      ['\u007f', '\\u007f'],
+      ['\u2028', '\\u2028'],
+      ['\u202e', '\\u202e'],
+    ]) {
+      expect(errorsOf(`kind: "a\\${char}b"`)).toEqual([
+        `the task block is not valid YAML: Invalid escape sequence \\${shown}`,
+      ])
+    }
+    const errors = errorsOf(
+      'k\u001b[31m: 1\nkind: "a\u009bb"\nrole: "\u2028"\nwave: "1\u202egnp.exe"',
+    )
+    expect(errors.slice(0, 4)).toEqual([
+      '"k\\u001b[31m" is not a key of the task block',
+      'kind "a\\u009bb" is not one of task, proposal, integration, contract-change, foundation',
+      'role "\\u2028" is not a role of owners.yml',
+      'wave must be a whole number, not "1\\u202egnp.exe"',
+    ])
+  })
+
+  test('shown names a value as these errors do: a safe string as it is, any other quoted', () => {
+    expect(shown('web')).toBe('web')
+    expect(shown('src/features/web/[id].js')).toBe('src/features/web/[id].js')
+    for (const [value, quoted] of [
+      ['web\u001b[2J', '"web\\u001b[2J"'],
+      ['a\r\nb', '"a\\r\\nb"'],
+      ['\u009b31m', '"\\u009b31m"'],
+      ['\u007f', '"\\u007f"'],
+      ['\u0085', '"\\u0085"'],
+      ['\u2028', '"\\u2028"'],
+      ['1\u202egnp.exe', '"1\\u202egnp.exe"'],
+      ['\u061c', '"\\u061c"'],
+      ['\u200f', '"\\u200f"'],
+      ['\u2066', '"\\u2066"'],
+    ]) {
+      expect(shown(value)).toBe(quoted)
+      expect(shown(value)).not.toMatch(UNSAFE)
+    }
   })
 })
 
@@ -443,6 +690,19 @@ describe('1.3b/labels: the label catalogue of 8.2 and status transitions', () =>
       expect(label.description.length, label.name).toBeLessThanOrEqual(100)
     }
     expect(roleLabel('web')).toBe('role:web')
+  })
+
+  test("the labels that wait for a pull request's author and the prefix of a scope change are exported", () => {
+    // 7.7 step 3: a pull request labeled one of these waits for its author.
+    expect(WAITING_LABELS).toEqual(['needs-owner', 'gate:failed', 'scope-violation'])
+    expect(Object.isFrozen(WAITING_LABELS)).toBe(true)
+    const catalogue = LABELS.map((label) => label.name)
+    for (const label of WAITING_LABELS) expect(catalogue).toContain(label)
+    // 8.1: a scope change is an issue comment that starts with "Scope change:".
+    expect(SCOPE_CHANGE).toBe('Scope change:')
+    expect('Scope change: contract change #12: the field is renamed'.startsWith(SCOPE_CHANGE)).toBe(
+      true,
+    )
   })
 
   test('a status transition adds the new label and removes the other status labels only', async () => {

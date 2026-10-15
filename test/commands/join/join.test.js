@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   chmodSync,
   existsSync,
@@ -8,13 +8,13 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { parse } from 'yaml'
 import { VERSION } from '../../../src/cli/context.js'
 import { main } from '../../../src/cli/main.js'
 import { createFakeClock, exec } from '../../../src/core/runtime/index.js'
-import { isJoinComplete, readLocal } from '../../../src/core/state/index.js'
+import { isJoinComplete, readLocal, statePaths } from '../../../src/core/state/index.js'
 import { checkNode, envKeys } from '../../../src/commands/join/checks.js'
 import { withSettingsBlock } from '../../../src/commands/join/settings.js'
 import { accounts, createFakeGitHub, httpError, teamConfig, yaml } from '../../harness/index.js'
@@ -22,8 +22,41 @@ import { createHookFixture } from '../../internal/hook/hook-fixture.js'
 
 /** @typedef {import('../../harness/index.js').FakeGitHub} FakeGitHub */
 
+// removeMergedWorktrees as it is, unless a test rewords the reasons it gives for the worktrees it
+// keeps, as a later wording of src/core/worktrees might: join reads `merged`, not the reason.
+const keptReasons = vi.hoisted(() => ({ reword: false }))
+vi.mock('../../../src/core/worktrees/index.js', async (importOriginal) => {
+  /** @type {typeof import('../../../src/core/worktrees/index.js')} */
+  const actual = await importOriginal()
+  /** @type {Record<string, string>} */
+  const reworded = {
+    'its pull request is not merged': 'the task is still open',
+    'it is the current worktree': 'join runs in it',
+  }
+  return {
+    ...actual,
+    /** @type {typeof actual.removeMergedWorktrees} */
+    removeMergedWorktrees: async (git, github) => {
+      const result = await actual.removeMergedWorktrees(git, github)
+      if (!keptReasons.reword) return result
+      const kept = result.kept.map((entry) => ({
+        ...entry,
+        reason: reworded[entry.reason] ?? entry.reason,
+      }))
+      return { ...result, kept }
+    },
+  }
+})
+afterEach(() => {
+  keptReasons.reword = false
+})
+
 const LEAD = accounts.lead.login
 const BUILDER1 = accounts.builder1.login // counter, todos
+const BUILDER2 = accounts.builder2.login // greeting
+
+/** An account outside the team. */
+const OUTSIDER = 'mallory'
 
 /** The checks of the checklist, in order (7.2 steps 1 to 10 without step 8). */
 const CHECK_NAMES = [
@@ -46,15 +79,16 @@ const INSTALL_MARKER = 'node_modules/.hackwin-install'
 /**
  * A team repository of 3 members whose main holds the hook shims, with `hackwin` and a `claude`
  * command on PATH. With `nodeProject` main is the Node fixture, whose .gitignore holds the
- * entries of 6.4 and whose package.json matches `paths.manifests`; its install runs offline.
- * @param {{ nodeProject?: boolean }} [options]
+ * entries of 6.4 and whose package.json matches `paths.manifests`; its install runs offline, or
+ * runs `install` when given.
+ * @param {{ nodeProject?: boolean, install?: string }} [options]
  */
-async function createJoinFixture({ nodeProject = true } = {}) {
+async function createJoinFixture({ nodeProject = true, install } = {}) {
   /** @type {Parameters<typeof createHookFixture>[0]} */
   let options = {}
   if (nodeProject) {
     const config = teamConfig(3)
-    config.hackwin.commands.install = `mkdir -p node_modules && pwd > ${INSTALL_MARKER}`
+    config.hackwin.commands.install = install ?? `mkdir -p node_modules && pwd > ${INSTALL_MARKER}`
     options = { nodeProject: true, config: { hackwin: config.hackwin, owners: config.owners } }
   }
   const hooks = await createHookFixture(options)
@@ -622,5 +656,111 @@ describe("1.4e/worktrees: join removes the worktrees of merged tasks and shows t
     // The rest of join works on the main checkout of the clone.
     expect(existsSync(join(clone.path, 'CLAUDE.local.md'))).toBe(true)
     expect(existsSync(join(worktree, 'CLAUDE.local.md'))).toBe(false)
+  })
+
+  test('join tells the kept worktrees of merged tasks by the field merged, whatever the text of the reason', async () => {
+    const { fixture, env, answers } = await createJoinFixture({ nodeProject: false })
+    const clone = await fixture.clone('builder1')
+    const fake = createFakeGitHub({
+      pulls: [
+        { number: 11, title: 'Counter', head: 'task/1-counter', state: 'closed', merged: true },
+        { number: 12, title: 'Todos', head: 'task/2-todos' },
+      ],
+    })
+    await clone.git.fetch()
+    const worktrees = join(fixture.dir, 'builder1.worktrees')
+    for (const [branch, dir] of [
+      ['task/1-counter', '1-counter'],
+      ['task/2-todos', '2-todos'],
+    ]) {
+      await clone.git.worktreeAdd(join(worktrees, dir), {
+        branch,
+        createBranch: true,
+        startPoint: 'origin/main',
+      })
+    }
+    keptReasons.reword = true
+
+    const result = await runJoin(join(worktrees, '1-counter'), {
+      env,
+      fake,
+      args: ['--answers', answers],
+    })
+
+    expect(result.code).toBe(0)
+    expect(existsSync(join(worktrees, '1-counter'))).toBe(true)
+    expect(existsSync(join(worktrees, '2-todos'))).toBe(true)
+    const at = result.lines.indexOf('pass  worktrees: no worktree of a merged task to remove')
+    expect(at).toBeGreaterThanOrEqual(0)
+    expect(result.lines.slice(at + 1, at + 3)).toEqual([
+      `      kept ${join(worktrees, '1-counter')}: join runs in it`,
+      `pass  queue: empty: no open task of your roles (counter, todos) waits to be taken`,
+    ])
+    expect(result.stdout).not.toContain(join(worktrees, '2-todos'))
+  })
+})
+
+describe('1.4i/join-log: join writes the log of its install under logs/ of the local state', () => {
+  test('a failed install names logs/join/install.log, which holds the install output and is replaced on each run; nothing goes to $TMPDIR/hackwin-join/', async () => {
+    const { fixture, env, answers } = await createJoinFixture({
+      install: 'echo install says hello && echo install failed >&2 && exit 7',
+    })
+    const clone = await fixture.clone('builder1')
+    const tmp = join(fixture.dir, 'tmp')
+    mkdirSync(tmp)
+    const log = join(statePaths(await clone.git.commonDir()).logs, 'join', 'install.log')
+    mkdirSync(dirname(log), { recursive: true })
+    writeFileSync(log, 'a line of an earlier run\n')
+
+    const result = await runJoin(clone.path, {
+      env: { ...env, TMPDIR: tmp },
+      fake: createFakeGitHub(),
+      args: ['--answers', answers],
+    })
+
+    expect(result.code).toBe(1)
+    const install = result.lines.findIndex((line) => line.startsWith('fail  install: '))
+    expect(result.lines[install]).toMatch(/ exited 7 in /)
+    // The last lines of the output, in the order the two streams arrived, then the log.
+    const notes = result.lines.slice(install + 1, install + 4)
+    expect(notes.slice(0, 2).sort()).toEqual([
+      '        install failed',
+      '        install says hello',
+    ])
+    expect(notes[2]).toBe(`      log: ${log}`)
+    const text = readFileSync(log, 'utf8')
+    expect(text).toContain('install says hello\n')
+    expect(text).toContain('install failed\n')
+    expect(text).not.toContain('a line of an earlier run')
+    expect(existsSync(join(tmp, 'hackwin-join'))).toBe(false)
+  })
+})
+
+describe("1.4i/outsider-task: join's queue holds no issue that an account outside the team wrote", () => {
+  test('an issue with a valid task block by an outsider is left out; the same issue by a member is listed', async () => {
+    const { fixture, env, answers } = await createJoinFixture({ nodeProject: false })
+    const clone = await fixture.clone('builder1')
+    const issue = {
+      title: 'Todo list',
+      body: taskBody({ role: 'todos', paths: ['src/features/todos/**'] }),
+      labels: ['ready'],
+    }
+    const fake = createFakeGitHub({
+      issues: [
+        { ...issue, number: 3, author: OUTSIDER },
+        { ...issue, number: 4, author: BUILDER2 },
+      ],
+    })
+
+    const result = await runJoin(clone.path, { env, fake, args: ['--answers', answers] })
+
+    expect(result.code).toBe(0)
+    const queue = result.lines.indexOf('pass  queue: 1 task of your roles (counter, todos)')
+    expect(queue).toBeGreaterThanOrEqual(0)
+    expect(result.lines[queue + 1]).toBe(
+      '      #4 Todo list: ready, role todos, wave 1, due 2026-10-25T12:00:00+02:00',
+    )
+    expect(result.stdout).not.toContain('#3 ')
+    expect(result.stdout).not.toContain(OUTSIDER)
   })
 })

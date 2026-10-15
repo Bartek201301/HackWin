@@ -2,13 +2,11 @@
 // failed with the fixes to print, or skipped with a notice. A check that throws a HackwinError
 // fails with the error's message and resolve, and the checks after it still run.
 
-import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { runInstall } from '../../core/project/index.js'
 import { exec } from '../../core/runtime/index.js'
-import { writeLocal } from '../../core/state/index.js'
+import { statePaths, writeLocal } from '../../core/state/index.js'
 import { queueOf, toTask } from '../../core/tasks/index.js'
 import { HOOKS_PATH, removeMergedWorktrees, repairHooksPath } from '../../core/worktrees/index.js'
 import { selfTestHooks } from '../../internal/hook/self-test.js'
@@ -261,7 +259,7 @@ async function worktreesCheck({ ctx }) {
   // Git where join started, so that the worktree join runs in is kept even when its task is merged.
   const { removed, kept } = await removeMergedWorktrees(ctx.git, ctx.github)
   // A worktree of a task that is still open is not news; one of a merged task that stays is.
-  const stays = kept.filter(({ reason }) => reason !== 'its pull request is not merged')
+  const stays = kept.filter(({ merged }) => merged)
   const detail =
     removed.length === 0
       ? 'no worktree of a merged task to remove'
@@ -276,7 +274,8 @@ async function worktreesCheck({ ctx }) {
 }
 
 /**
- * Step 10: the member's queue (8.1): open tasks of their roles that wait to be taken.
+ * Step 10: the member's queue (8.1): open tasks of their roles that wait to be taken. An issue that
+ * no member of the team wrote is no task (toTask, contracts 4.5), so it is never in the queue.
  * @param {Scope} scope
  * @returns {Promise<Outcome>}
  */
@@ -331,14 +330,13 @@ function failed(detail, fixes, extra = {}) {
 }
 
 /**
- * The log file of the install: in the temporary directory, outside the checkout, one per clone;
- * each run replaces it.
+ * The log file of the install: `logs/join/install.log` in the local state of the clone, outside
+ * the checkout (contracts 5.6); each run replaces it.
  * @param {CommandContext} ctx
  * @returns {string}
  */
 function installLog(ctx) {
-  const clone = createHash('sha256').update(resolve(ctx.gitCommonDir)).digest('hex').slice(0, 12)
-  return join(ctx.env.TMPDIR || tmpdir(), 'hackwin-join', clone, 'install.log')
+  return join(statePaths(ctx.gitCommonDir).logs, 'join', 'install.log')
 }
 
 /**

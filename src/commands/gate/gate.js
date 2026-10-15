@@ -1,29 +1,56 @@
-// The Gate process (7.5; 9.1 G1 to G6, G24): its own process in its own terminal on the Lead's
-// laptop, which never touches an agent conversation. It takes the lock, counts the start, keeps
-// the laptop awake, loads the state file and polls every `gate.poll_seconds` until the Lead types
-// `quit`.
+// The Gate process (7.5; 9.1 G1 to G6, G24, G25): its own process in its own terminal on the
+// Lead's laptop, which never touches an agent conversation. It takes the lock, counts the start,
+// keeps the laptop awake, loads the state file, writes the status issue and polls every
+// `gate.poll_seconds` until the Lead types `quit`.
 //
 // The poll loop and the pull request pipeline run side by side: a poll writes the heartbeat,
 // fetches origin and runs the intake, while one pull request at a time goes through the stages,
 // whose commands run as child processes. So polling and the heartbeat go on while a stage runs
 // (G5). The pipeline of section 9 plugs into the loop (`Pipeline`); without it the Gate polls but
 // takes no pull request.
+//
+// The Gate never exits because of an event (G3). While GitHub or the network fails, the loop goes
+// on: the local heartbeat records at every poll that the loop is alive, and `last_github_ok_at`
+// separately when GitHub last answered, a fetch of origin or a gh call (7.5, failure behavior).
+// When a heartbeat comes later than `gate.heartbeat_stale_seconds` after the one before, at a
+// start or while the Gate runs, as after the laptop slept, the state file records the gap (9.6,
+// M7). Every start counts, also in another clone: a start continues from the count of the status
+// issue when that is higher than the clone's own (scope change on #24).
 
 import { readProtection } from '../../core/protection/index.js'
 import { PreconditionError, runIn } from '../../core/runtime/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
 import { startKeepAwake } from './awake.js'
+import { hoursAndMinutes } from './digest.js'
 import { INPUT_HELP, readCommands } from './input.js'
 import { acquireLock, releaseLock, runningGate } from './lock.js'
-import { gateFiles, loadState, readHeartbeat, saveState, writeHeartbeat } from './state.js'
+import { duration, oneFetchAtATime } from './pulls.js'
+import { recoverScratch } from './scratch.js'
+import {
+  addsSecret,
+  gateFiles,
+  loadGateId,
+  loadState,
+  readHeartbeat,
+  saveState,
+  writeHeartbeat,
+} from './state.js'
+import {
+  createStatusPublisher,
+  findStatusIssue,
+  otherGateHeartbeat,
+  parseStatusBody,
+} from './status-issue.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { Git } from '../../core/git/index.js' */
+/** @import { Issue } from '../../core/github/index.js' */
 /** @import { Protection } from '../../core/protection/index.js' */
 /** @import { KeepAwake, StartKeepAwake } from './awake.js' */
 /** @import { TypedCommand } from './input.js' */
 /** @import { GateFiles, GateState } from './state.js' */
+/** @import { StatusPublisher } from './status-issue.js' */
 
 /** The longest wait between two looks at the clock and at `quit`. */
 const TICK_MS = 1000
@@ -37,6 +64,7 @@ const TICK_MS = 1000
  *   of the queue through the stages (G8, G17). It announces each stage with `gate.stage()`, which
  *   writes the heartbeat and the state, and returns between two stages once `gate.stopping` is
  *   true. A finished run takes the pull request off the head of the queue.
+ * @property {string[]} [notices] Lines for the header about what the pipeline does not do yet.
  */
 
 /**
@@ -47,6 +75,8 @@ const TICK_MS = 1000
  * @property {Git} git Git in this checkout with the member hooks switched off (10.3).
  * @property {GateFiles} files
  * @property {GateState} state
+ * @property {Protection} protection The latest protection read, which the status issue shows.
+ * @property {string} id The random id of this clone's Gate, which the status issue shows.
  * @property {Set<number>} retries The pull requests the Lead typed `retry` for, until the intake
  *   queues them again.
  * @property {number | null} running The pull request whose run is under way.
@@ -56,7 +86,10 @@ const TICK_MS = 1000
  * @property {(text: string) => void} line Prints a line with the time as hours and minutes.
  * @property {(pr: number, stage: string) => Promise<void>} stage Records a stage change.
  * @property {() => Promise<void>} save Writes the state file.
- * @property {(stoppedAt?: string | null) => Promise<void>} beat Renews the heartbeat.
+ * @property {(stoppedAt?: string | null, at?: string) => Promise<void>} beat Renews the local
+ *   heartbeat, with the time `at`, now by default, after recording a gap since the one before.
+ * @property {(from: string | null, to: string, when: 'start' | 'run') => void} gap Records a
+ *   heartbeat gap from `from` to `to` when it is longer than `gate.heartbeat_stale_seconds`.
  */
 
 /**
@@ -86,6 +119,13 @@ export async function startGate(ctx, options = {}) {
   const main = await mainCheckout(ctx.git)
   if (ctx.caller !== 'terminal') throw await notInTerminal(ctx, files, main)
 
+  // When GitHub last answered a gh call, for the state file once it is loaded.
+  /** @type {{ at: string | null, state: GateState | null }} */
+  const answered = { at: null, state: null }
+  watchGitHub(ctx, (at) => {
+    answered.at = at
+    if (answered.state !== null) answered.state.last_github_ok_at = at
+  })
   const lock = await acquireLock(files.lock, { pid, now: ctx.clock.now() })
   if (!lock.acquired) {
     const holder = lock.holder
@@ -109,6 +149,10 @@ export async function startGate(ctx, options = {}) {
       branch: config.hackwin.project.default_branch,
     })
     requireOnlyUpdateBypass(protection)
+    const issue = await findStatusIssue(ctx.github)
+    const own = await loadGateId(files.id, ctx.clock.now())
+    const previous = await readHeartbeat(files.heartbeat)
+    await refuseOtherGate({ ctx, config, files, issue, main, own, previous })
 
     const { state, kept } = await loadState(files.state, ctx.clock.now())
     if (kept !== null) {
@@ -116,10 +160,25 @@ export async function startGate(ctx, options = {}) {
         `the state file was not readable; it is kept as ${kept}, and the Gate starts empty`,
       )
     }
+    const published = issue === null ? 0 : (parseStatusBody(issue.body)?.starts ?? 0)
+    if (published > state.starts) {
+      ctx.out.line(
+        `the status issue #${issue?.number} counts ${published} Gate starts and this clone ${state.starts}, so the count goes on from the status issue (M7)`,
+      )
+      state.starts = published
+    }
     state.starts += 1
+    answered.state = state
+    if (answered.at !== null) state.last_github_ok_at = answered.at
     await saveState(files.state, state)
 
-    const gate = createGate({ ctx, config, files, state, pid })
+    const gate = createGate({ ctx, config, files, state, pid, protection, id: own.id })
+    gate.gap(previous?.heartbeat_at ?? null, ctx.clock.now().toISOString(), 'start')
+    if (await recoverScratch(gate)) {
+      ctx.out.line(
+        'removed the scratch worktree of a Gate that stopped during a run; the next merge test builds it again',
+      )
+    }
     awake = await keepAwake({
       pid,
       onLost: (reason) =>
@@ -130,14 +189,19 @@ export async function startGate(ctx, options = {}) {
         `the Gate cannot keep this laptop awake: ${awake.reason}; merges wait while it sleeps`,
       )
     }
-    for (const text of headerLines({ gate, protection, awake, pid, pipeline })) ctx.out.line(text)
+    // The first heartbeat in the status issue clears the stop time of the last `quit` (7.5 step 6).
+    const status = createStatusPublisher(gate, issue)
+    await status.publish()
+    await gate.save()
+    for (const text of headerLines({ gate, status, awake, pid, pipeline })) ctx.out.line(text)
 
     input = readCommands(ctx.stdin, (command) => onCommand(gate, command))
-    await runLoop(gate, pipeline)
+    await runLoop(gate, pipeline, status)
 
     const stoppedAt = ctx.clock.now().toISOString()
+    await status.publish({ stoppedAt })
     await gate.save()
-    await gate.beat(stoppedAt)
+    if (status.other !== null) throw anotherGate(status.other, own.id, main)
     return {
       lines: [
         `${hoursAndMinutes(ctx.clock.now())} Gate stopped; to start it again, ${runIn('hackwin gate', main)}`,
@@ -194,10 +258,75 @@ function requireOnlyUpdateBypass({ rules }) {
 }
 
 /**
- * @param {{ ctx: CommandContext, config: Config, files: GateFiles, state: GateState, pid: number }} parts
+ * Record when GitHub answers a gh call of the Gate: a call that exits 0. The Gate's client of
+ * the context sends every call through this.
+ * @param {CommandContext} ctx
+ * @param {(at: string) => void} onAnswer
+ */
+function watchGitHub(ctx, onAnswer) {
+  const { github } = ctx
+  const send = github.executor
+  github.executor = async (args, call) => {
+    const result = await send(args, call)
+    if (result.code === 0) onAnswer(ctx.clock.now().toISOString())
+    return result
+  }
+}
+
+/**
+ * The error of a Gate that stopped because another Gate writes the status issue (G2).
+ * @param {{ issue: number, heartbeat_at: string, gate_id: string | null }} other
+ * @param {string} id This clone's Gate id.
+ * @param {string} main
+ * @returns {PreconditionError}
+ */
+function anotherGate(other, id, main) {
+  const whose = other.gate_id === null ? 'a Gate without an id' : `the Gate ${other.gate_id}`
+  return new PreconditionError(
+    `another Gate is running for this project: the status issue #${other.issue} holds the heartbeat of ${whose} at ${other.heartbeat_at}, so this Gate ${id} stopped; there is one Gate per project`,
+    {
+      resolve: `use the other Gate, or type \`quit\` in its terminal and then ${runIn('hackwin gate', main)}`,
+      details: { other },
+    },
+  )
+}
+
+/**
+ * One Gate per project (G2): the lock holds only within one clone, so a start also refuses while
+ * the status issue shows the fresh heartbeat of a Gate that has not stopped, unless this clone's
+ * own Gate wrote it, as before a crash.
+ * @param {{ ctx: CommandContext, config: Config, files: GateFiles, issue: Issue | null, main: string, own: { id: string, created: boolean }, previous: import('./state.js').Heartbeat | null }} parts
+ *   `previous` is this clone's local heartbeat.
+ */
+async function refuseOtherGate({ ctx, config, files, issue, main, own, previous }) {
+  if (issue === null) return
+  const stale = config.hackwin.gate.heartbeat_stale_seconds
+  const other = otherGateHeartbeat(parseStatusBody(issue.body), {
+    gateId: own.id,
+    newId: own.created,
+    local: previous,
+    now: ctx.clock.now(),
+    staleSeconds: stale,
+  })
+  if (other === null) return
+  const whose = other.gate_id === null ? 'a Gate without an id' : `the Gate ${other.gate_id}`
+  const where =
+    other.gate_id === null ? '' : ` (its clone holds ${other.gate_id} in .git/hackwin/gate/gate-id)`
+  const staleAt = new Date(Date.parse(other.heartbeat_at) + stale * 1000).toISOString()
+  throw new PreconditionError(
+    `another Gate is running for this project: the status issue #${issue.number} shows the heartbeat of ${whose} at ${other.heartbeat_at}, ${other.age_seconds} s old, and no stop; this clone's Gate is ${own.id}; there is one Gate per project`,
+    {
+      resolve: `type \`quit\` in that Gate's terminal${where}; if it no longer runs, wait until ${staleAt}, when its heartbeat is ${stale} s old; then ${runIn('hackwin gate', main)}`,
+      details: { status_issue: issue.number, gate_id: own.id, other },
+    },
+  )
+}
+
+/**
+ * @param {{ ctx: CommandContext, config: Config, files: GateFiles, state: GateState, pid: number, protection: Protection, id: string }} parts
  * @returns {Gate}
  */
-function createGate({ ctx, config, files, state, pid }) {
+function createGate({ ctx, config, files, state, pid, protection, id }) {
   // State and heartbeat writes run one after another, each with the state of its turn.
   let writes = Promise.resolve()
   /** @param {() => Promise<void>} write */
@@ -208,6 +337,9 @@ function createGate({ ctx, config, files, state, pid }) {
   }
   /** @type {() => void} */
   let settle = () => {}
+  /** The time of the latest heartbeat of this Gate. */
+  /** @type {string | null} */
+  let beaten = null
   /** @type {Promise<void>} */
   const stopped = new Promise((resolve) => {
     settle = resolve
@@ -220,6 +352,8 @@ function createGate({ ctx, config, files, state, pid }) {
     git: ctx.git.with({ hooksOff: true }),
     files,
     state,
+    protection,
+    id,
     retries: new Set(),
     running: null,
     stopping: false,
@@ -235,33 +369,51 @@ function createGate({ ctx, config, files, state, pid }) {
       await Promise.all([gate.beat(), gate.save()])
     },
     save: () => serial(() => saveState(files.state, state)),
-    beat: (stoppedAt = null) =>
-      serial(() =>
+    beat: (stoppedAt = null, at = ctx.clock.now().toISOString()) => {
+      gate.gap(beaten, at, 'run')
+      if (beaten === null || at > beaten) beaten = at
+      return serial(() =>
         writeHeartbeat(files.heartbeat, {
           pid,
-          heartbeat_at: ctx.clock.now().toISOString(),
+          heartbeat_at: at,
           last_github_ok_at: state.last_github_ok_at,
           stopped_at: stoppedAt,
         }),
-      ),
+      )
+    },
+    gap: (from, to, when) => {
+      if (from === null) return
+      const ms = Date.parse(to) - Date.parse(from)
+      if (!(ms > config.hackwin.gate.heartbeat_stale_seconds * 1000)) return
+      state.heartbeat_gaps.push({ from, to })
+      gate.line(
+        when === 'start'
+          ? `heartbeat gap: the last heartbeat of this clone's Gate was at ${from}, ${duration(ms)} ago; merges waited meanwhile (M7)`
+          : `heartbeat gap: no heartbeat from ${from} to ${to}, ${duration(ms)}, as when the laptop sleeps; merges waited meanwhile (M7)`,
+      )
+    },
   }
   return gate
 }
 
 /**
- * The poll loop (G24): a poll every `gate.poll_seconds` until `quit`, then the end of the step
- * under way: the poll, or the stage of the running pull request.
+ * The poll loop (G24): a poll every `gate.poll_seconds` and an edit of the status issue every
+ * `gate.status_issue_seconds` (G25) until `quit`, then the end of the step under way: the poll,
+ * the edit, or the stage of the running pull request.
  * @param {Gate} gate
  * @param {Pipeline} pipeline
+ * @param {StatusPublisher} status
  * @returns {Promise<void>}
  */
-async function runLoop(gate, pipeline) {
+async function runLoop(gate, pipeline, status) {
   const { clock } = gate.ctx
   const interval = gate.config.hackwin.gate.poll_seconds * 1000
   /** @type {Promise<void> | null} */
   let polling = null
   /** @type {Promise<void> | null} */
   let working = null
+  /** @type {Promise<unknown> | null} */
+  let editing = null
   const run = pipeline.run
 
   const work = async () => {
@@ -302,10 +454,17 @@ async function runLoop(gate, pipeline) {
         startWork()
       })
     }
-    const wait = Math.max(0, Math.min(TICK_MS, next - clock.now().getTime()))
+    if (editing === null && clock.now().getTime() >= status.nextAt) {
+      editing = status.publish().finally(() => {
+        editing = null
+      })
+    }
+    // While an edit is under way the next one cannot be due.
+    const due = editing === null ? Math.min(next, status.nextAt) : next
+    const wait = Math.max(0, Math.min(TICK_MS, due - clock.now().getTime()))
     await Promise.race([clock.sleep(wait), gate.stopped])
   }
-  await Promise.all([polling, working])
+  await Promise.all([polling, working, editing])
 }
 
 /**
@@ -320,9 +479,11 @@ async function poll(gate, pipeline) {
   state.last_poll_at = clock.now().toISOString()
   const branch = gate.config.hackwin.project.default_branch
   try {
-    await gate.git.fetch({ remote: 'origin' })
-    state.main_sha = await gate.git.revParse(`refs/remotes/origin/${branch}`)
-    state.last_github_ok_at = clock.now().toISOString()
+    state.main_sha = await oneFetchAtATime(gate, async () => {
+      await gate.git.fetch({ remote: 'origin' })
+      state.last_github_ok_at = clock.now().toISOString()
+      return gate.git.revParse(`refs/remotes/origin/${branch}`)
+    })
   } catch (error) {
     gate.line(`poll: the fetch of origin failed, the next poll tries again: ${messageOf(error)}`)
   }
@@ -397,6 +558,10 @@ function retry(gate, pr) {
     gate.line(
       `retry #${pr}: only a failed or flaky run is retried, and the last run of #${pr} ended ${record.result ?? 'without a result'}; a new head SHA queues it again`,
     )
+  } else if (addsSecret(record)) {
+    gate.line(
+      `retry #${pr}: the head SHA of #${pr} adds a secret, so it is not queued again; a new head SHA without it is`,
+    )
   } else {
     gate.retries.add(pr)
     gate.line(`retry #${pr}: queued again at the next poll`)
@@ -405,24 +570,29 @@ function retry(gate, pr) {
 
 /**
  * The header (7.5 step 7).
- * @param {{ gate: Gate, protection: Protection, awake: KeepAwake, pid: number, pipeline: Pipeline }} parts
+ * @param {{ gate: Gate, status: StatusPublisher, awake: KeepAwake, pid: number, pipeline: Pipeline }} parts
  * @returns {string[]}
  */
-function headerLines({ gate, protection, awake, pid, pipeline }) {
-  const { ctx, config, state } = gate
+function headerLines({ gate, status, awake, pid, pipeline }) {
+  const { ctx, config, state, protection } = gate
   const { gated } = config.hackwin.paths
   const restarts = state.starts > 1 ? `, restart ${state.starts - 1}` : ''
   const queued = state.queue.length
-  const issue = state.status_issue.number
+  const issue = status.issue
   const lines = [
     `${hoursAndMinutes(ctx.clock.now())} Gate started: start ${state.starts}${restarts}, pid ${pid}`,
     `protection: ${protection.state}`,
     'resolver: none',
     `poll: every ${config.hackwin.gate.poll_seconds} s`,
     `queue: ${queued} pull ${queued === 1 ? 'request' : 'requests'}`,
-    `status issue: ${issue === null ? 'not created yet' : issueLink(ctx, issue)}`,
+    `status issue: ${issue === null ? 'not created yet' : `#${issue.number} ${issue.url}`}`,
     `keep awake: ${awake.active ? awake.command : 'off'}`,
   ]
+  if (protection.rules.updateRestricted) {
+    lines.push(
+      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
+    )
+  }
   if (gated.migrations.length === 0 && gated.production_config.length === 0) {
     lines.push(
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
@@ -431,27 +601,9 @@ function headerLines({ gate, protection, awake, pid, pipeline }) {
   if (!pipeline.run) {
     lines.push('notice: the pipeline is not built yet: this Gate polls, but takes no pull request')
   }
+  for (const notice of pipeline.notices ?? []) lines.push(`notice: ${notice}`)
   lines.push(INPUT_HELP)
   return lines
-}
-
-/**
- * @param {CommandContext} ctx
- * @param {number} number
- */
-function issueLink(ctx, number) {
-  return ctx.github.repo
-    ? `#${number} https://github.com/${ctx.github.repo}/issues/${number}`
-    : `#${number}`
-}
-
-/**
- * The time as the terminal prints it (9.6): hours and minutes, local time.
- * @param {Date} time
- */
-function hoursAndMinutes(time) {
-  const pad = (/** @type {number} */ value) => String(value).padStart(2, '0')
-  return `${pad(time.getHours())}:${pad(time.getMinutes())}`
 }
 
 /** @param {unknown} error */

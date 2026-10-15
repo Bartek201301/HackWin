@@ -1,6 +1,7 @@
-// Tasks from issues: the status from labels, the member's queue (8.1) and whether the
-// dependencies allow a task to be taken (8.3, I12).
+// Tasks from issues: who may write one, the status from labels, the member's queue (8.1) and
+// whether the dependencies allow a task to be taken (8.3, I12).
 
+import { memberOf } from '../config/ownership.js'
 import { parseTaskBlock } from './block.js'
 
 /** @import { Issue } from '../github/index.js' */
@@ -32,12 +33,33 @@ const STATUS_ORDER = /** @type {const} */ (['in-review', 'in-progress', 'ready',
 const NOT_QUEUED = Object.freeze(['in-progress', 'in-review', 'cut', 'closed'])
 
 /**
- * The task of a task issue, or null for an issue without a task block.
+ * Whether an issue counts as a task by its author: only an issue that a member of the team wrote,
+ * `team.lead` or one of `team.members`, compared without case (the Lead's review of PR #73). On a
+ * public repository any account can open an issue with a valid task block, and `take` hands the
+ * body of a task to an agent as its prompt. A reader that calls parseTaskBlock directly calls this
+ * first.
+ * @param {Pick<Issue, 'author'>} issue
+ * @param {OwnershipConfig} config
+ * @returns {boolean}
+ */
+export function writtenByTeam(issue, config) {
+  const { author } = issue
+  if (!author) return false
+  return (
+    author.toLowerCase() === config.hackwin.team.lead.toLowerCase() ||
+    memberOf(config, author) !== undefined
+  )
+}
+
+/**
+ * The task of a task issue, or null for an issue without a task block and for an issue that no
+ * member of the team wrote (writtenByTeam), whose body is not read.
  * @param {Issue} issue
  * @param {OwnershipConfig} config
  * @returns {Task | null}
  */
 export function toTask(issue, config) {
+  if (!writtenByTeam(issue, config)) return null
   const parsed = parseTaskBlock(issue.body, config)
   if (!parsed.isTask) return null
   return {

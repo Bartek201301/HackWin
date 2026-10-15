@@ -1,11 +1,12 @@
 // The fake GitHub: an in-memory repository behind the executor seam of src/core/github
 // (docs/build/contracts.md section 4.3). It answers the `gh api` requests of the typed helpers,
 // and a few calls of one lane in the form docs/verification.md recorded: the pinned merge
-// `gh pr merge <N> --merge --match-head-commit <SHA>`, `gh issue pin` and check runs.
+// `gh pr merge <N> --merge --match-head-commit <SHA>`, `gh issue pin`, check runs, and the rule
+// sets that `setup` creates and the protection reader and the reset read (rows 5 and 6).
 //
 // A lane registers handlers for the calls that only it makes from its own test files:
 //
-//   fake.on('GET repos/{owner}/{repo}/rulesets', (request) => [...])
+//   fake.on('GET repos/{owner}/{repo}/environments', (request) => ({ environments: [] }))
 //   fake.on('run rerun', (request) => rawResult({ stdout: '' }))
 //
 // A handler gets the parsed request and returns the JSON response, nothing for an empty one,
@@ -28,6 +29,13 @@ export const DEFAULT_FAKE_REPO = 'hackwin-test/app'
 const ACTIONS_APP = Object.freeze({ id: 15368, slug: 'github-actions', name: 'GitHub Actions' })
 
 const PIN_LIMIT = 3
+
+/** GitHub's answer to every rule set request where it offers none (docs/verification.md, E3). */
+export const RULESETS_NOT_OFFERED =
+  'Upgrade to GitHub Pro or make this repository public to enable this feature.'
+
+/** The bypass actor of the repository admin role (docs/verification.md, row 6). */
+const ADMIN_ROLE_ID = 5
 const RAW = Symbol('raw gh result')
 const CLOSING_REFERENCE =
   /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\b:?\s+#(\d+)\b/gi
@@ -74,7 +82,10 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
 /**
  * @typedef {object} FakePull
  * @property {string} head The head branch.
- * @property {string | null} headSha Set at creation; follows the head branch while it is open.
+ * @property {string | null} headRepo The repository of the head branch, `owner/name`: the fake's
+ *   own repository, a fork's, or null for a fork that was deleted (`head.repo` null).
+ * @property {string | null} headSha Set at creation; follows the head branch while it is open
+ *   and the head branch is in the fake's own repository.
  * @property {string} base
  * @property {boolean} draft
  * @property {boolean} merged
@@ -100,7 +111,28 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  * @property {string} createdAt
  * @property {string} updatedAt
  * @property {string | null} closedAt
+ * @property {number | null} milestone The number of its milestone in `state.milestones`, or null.
  * @property {FakePull | null} pull
+ */
+
+/**
+ * A milestone of the repository, in GitHub's field names. An issue or pull request carries one
+ * by its number, and its JSON gives the milestone as GitHub returns it on an issue: with
+ * `html_url` and `creator`, and with `open_issues` and `closed_issues` as given, or else counted
+ * over the issues and pull requests of the state that carry it, as GitHub counts them.
+ * @typedef {object} FakeMilestone
+ * @property {number} id
+ * @property {number} number
+ * @property {string} title
+ * @property {'open' | 'closed'} state
+ * @property {string | null} description
+ * @property {string | null} due_on
+ * @property {number} [open_issues]
+ * @property {number} [closed_issues]
+ * @property {string} creator The creator's login.
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {string | null} closed_at
  */
 
 /**
@@ -109,6 +141,28 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  * @property {string} name
  * @property {'queued' | 'in_progress' | 'completed'} status
  * @property {string | null} conclusion `success`, `failure`, ... or null while not completed.
+ */
+
+/**
+ * A rule set of the repository, as `POST .../rulesets` takes it and `GET .../rulesets/<id>`
+ * returns it. A key set to undefined, such as `bypass_actors` or `current_user_can_bypass`, is
+ * left out of every response.
+ * @typedef {object} FakeRuleset
+ * @property {number} id
+ * @property {string} name
+ * @property {string} target `branch` by default.
+ * @property {'active' | 'disabled' | 'evaluate'} enforcement
+ * @property {{ ref_name?: { include?: string[], exclude?: string[] } }} [conditions] Without
+ *   them the rule set targets no branch.
+ * @property {Array<{ type: string, parameters?: object }>} rules
+ * @property {Array<{ actor_id: number | null, actor_type: string, bypass_mode: string }>} [bypass_actors]
+ * @property {string} [current_user_can_bypass] Given, it is returned for every caller; otherwise
+ *   it is `always` for an admin of the repository when the admin role is a bypass actor, and
+ *   `never` for everyone else.
+ * @property {string} source_type
+ * @property {string} source
+ * @property {string} created_at
+ * @property {string} updated_at
  */
 
 /**
@@ -121,15 +175,21 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  *   `write`, `triage` or `read`.
  * @property {Array<{ id: number, login: string, permission: string, inviter: string }>} invitations
  * @property {Array<{ name: string, color: string, description: string }>} labels
+ * @property {FakeMilestone[]} milestones
  * @property {FakeItem[]} items Issues and pull requests, by number.
  * @property {Record<string, string>} branches Branch to SHA; with `origin`, a branch missing
  *   here is read from the origin.
  * @property {Record<string, FakeCheckRun[]>} checks Check runs by commit SHA.
  * @property {string[]} requiredChecks Check names a merge into the default branch requires.
+ * @property {FakeRuleset[]} rulesets The repository's rule sets, in the order they were created.
+ * @property {boolean} rulesetsOffered False answers every rule set request with HTTP 403, as
+ *   GitHub does on a private repository of a personal account without GitHub Pro.
  * @property {string | null} origin A bare repository that holds the branches; merges then make
  *   real merge commits in it.
  * @property {number} nextNumber
  * @property {number} nextId
+ * @property {number} nextRulesetId
+ * @property {number} nextMilestoneNumber
  */
 
 /**
@@ -169,10 +229,12 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  *     repo: 'acme/app', login: 'lead',
  *     collaborators: { lead: 'admin', 'test-bot-builder': 'write' },
  *     labels: ['ready', { name: 'in-review', color: '1d76db' }],
- *     issues: [{ number: 12, title: 'Task', body, labels: ['ready'] }],
+ *     milestones: [{ number: 1, title: 'Wave 1', due_on: '2026-10-25T10:00:00Z' }],
+ *     issues: [{ number: 12, title: 'Task', body, labels: ['ready'], milestone: 1 }],
  *     pulls: [{ number: 13, title, head: 'task/12-task', headSha, body, draft: false }],
  *     branches: { main: sha }, checks: { [sha]: [{ name: 'hackwin', conclusion: 'success' }] },
- *     requiredChecks: ['hackwin'], origin: fixture.origin, nextNumber: 40, clock,
+ *     requiredChecks: ['hackwin'], rulesets: [ruleset], rulesetsOffered: true,
+ *     origin: fixture.origin, nextNumber: 40, clock,
  *   })
  * @param {object} [initial]
  * @param {string} [initial.repo]
@@ -181,11 +243,19 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  * @param {'public' | 'private'} [initial.visibility]
  * @param {Record<string, string>} [initial.collaborators]
  * @param {Array<string | { name: string, color?: string, description?: string }>} [initial.labels]
+ * @param {Array<Partial<FakeMilestone> & { title: string }>} [initial.milestones] Milestone
+ *   bodies; `number` is given when missing. An issue or pull request names one with `milestone`,
+ *   its number.
  * @param {Array<Partial<FakeItem> & { title: string }>} [initial.issues]
  * @param {Array<Partial<FakeItem> & Partial<FakePull> & { title: string, head: string }>} [initial.pulls]
+ *   `headRepo` is the fake's repository unless given; a pull request from a fork gives the
+ *   fork's `owner/name`, or null for a deleted fork, with its `headSha` and `files`.
  * @param {Record<string, string>} [initial.branches]
  * @param {Record<string, Array<Partial<FakeCheckRun> & { name: string }>>} [initial.checks]
  * @param {string[]} [initial.requiredChecks]
+ * @param {Array<Partial<FakeRuleset> & { name: string }>} [initial.rulesets] Rule set bodies;
+ *   `id` is given when missing.
+ * @param {boolean} [initial.rulesetsOffered] True by default.
  * @param {string} [initial.origin]
  * @param {number} [initial.nextNumber] The number of the next issue or pull request.
  * @param {Clock} [initial.clock]
@@ -212,13 +282,18 @@ export function createFakeGitHub(initial = {}) {
     },
     invitations: [],
     labels: [],
+    milestones: [],
     items: [],
     branches: { ...initial.branches },
     checks: {},
     requiredChecks: [...(initial.requiredChecks ?? [])],
+    rulesets: [],
+    rulesetsOffered: initial.rulesetsOffered ?? true,
     origin: initial.origin ?? null,
     nextNumber: 1,
     nextId: 1,
+    nextRulesetId: 1,
+    nextMilestoneNumber: 1,
   }
 
   const nextId = () => state.nextId++
@@ -229,6 +304,7 @@ export function createFakeGitHub(initial = {}) {
   for (const label of initial.labels ?? []) {
     ensureLabel(typeof label === 'string' ? { name: label } : label)
   }
+  for (const milestone of initial.milestones ?? []) addMilestone(milestone)
   const numbered = [...(initial.issues ?? []), ...(initial.pulls ?? [])]
   state.nextNumber = Math.max(
     initial.nextNumber ?? 1,
@@ -236,9 +312,11 @@ export function createFakeGitHub(initial = {}) {
   )
   for (const issue of initial.issues ?? []) addItem(issue, null)
   for (const pull of initial.pulls ?? []) {
+    const headRepo = pull.headRepo === undefined ? state.repo : pull.headRepo
     addItem(pull, {
       head: pull.head,
-      headSha: pull.headSha ?? branchSha(pull.head),
+      headRepo,
+      headSha: pull.headSha ?? (headRepo === state.repo ? branchSha(pull.head) : null),
       base: pull.base ?? state.defaultBranch,
       draft: pull.draft ?? false,
       merged: pull.merged ?? false,
@@ -251,6 +329,7 @@ export function createFakeGitHub(initial = {}) {
   for (const [sha, runs] of Object.entries(initial.checks ?? {})) {
     for (const run of runs) addCheckRun(sha, run)
   }
+  for (const ruleset of initial.rulesets ?? []) addRuleset(ruleset)
 
   /**
    * @param {Partial<FakeItem> & { title: string }} input
@@ -280,11 +359,13 @@ export function createFakeGitHub(initial = {}) {
       createdAt: input.createdAt ?? time,
       updatedAt: input.updatedAt ?? input.createdAt ?? time,
       closedAt: input.closedAt ?? (state_ === 'closed' ? time : null),
+      milestone: input.milestone ?? null,
       pull,
     }
     if (state.items.some((other) => other.number === item.number)) {
       throw new Error(`fake GitHub: #${item.number} exists twice in the initial state`)
     }
+    if (item.milestone !== null) findMilestone(item.milestone)
     for (const name of item.labels) ensureLabel({ name })
     state.items.push(item)
     return item
@@ -305,6 +386,50 @@ export function createFakeGitHub(initial = {}) {
   }
 
   /**
+   * Add a milestone as `POST .../milestones` creates it: open, without a description or a due
+   * date unless the body names them, with the next free number unless it names one.
+   * @param {Partial<FakeMilestone> & { title: string }} body
+   * @returns {FakeMilestone}
+   */
+  function addMilestone(body) {
+    const time = now()
+    const number = body.number ?? state.nextMilestoneNumber
+    if (state.milestones.some((other) => other.number === number)) {
+      throw new Error(`fake GitHub: milestone ${number} exists twice`)
+    }
+    state.nextMilestoneNumber = Math.max(state.nextMilestoneNumber, number + 1)
+    const milestoneState = body.state ?? 'open'
+    /** @type {FakeMilestone} */
+    const milestone = {
+      id: body.id ?? nextId(),
+      number,
+      title: body.title,
+      state: milestoneState,
+      description: body.description ?? null,
+      due_on: body.due_on ?? null,
+      open_issues: body.open_issues,
+      closed_issues: body.closed_issues,
+      creator: body.creator ?? state.login,
+      created_at: body.created_at ?? time,
+      updated_at: body.updated_at ?? body.created_at ?? time,
+      closed_at: body.closed_at ?? (milestoneState === 'closed' ? time : null),
+    }
+    state.milestones.push(milestone)
+    return milestone
+  }
+
+  /**
+   * The milestone with this number. An item of the state that names a missing one is a mistake
+   * of the test, so it throws a plain error, not an HTTP one.
+   * @param {number} number
+   */
+  function findMilestone(number) {
+    const found = state.milestones.find((milestone) => milestone.number === number)
+    if (!found) throw new Error(`fake GitHub: there is no milestone ${number} in the state`)
+    return found
+  }
+
+  /**
    * @param {string} sha
    * @param {Partial<FakeCheckRun> & { name: string }} run
    */
@@ -319,6 +444,33 @@ export function createFakeGitHub(initial = {}) {
     }
     ;(state.checks[sha] ??= []).push(check)
     return check
+  }
+
+  /**
+   * Add a rule set as `POST .../rulesets` creates it: a branch rule set without rules or bypass
+   * actors unless the body names them.
+   * @param {Partial<FakeRuleset> & { name: string }} body
+   * @returns {FakeRuleset}
+   */
+  function addRuleset(body) {
+    const time = now()
+    const id = body.id ?? state.nextRulesetId
+    state.nextRulesetId = Math.max(state.nextRulesetId, id + 1)
+    /** @type {FakeRuleset} */
+    const ruleset = {
+      target: 'branch',
+      enforcement: 'active',
+      rules: [],
+      bypass_actors: [],
+      ...body,
+      id,
+      source_type: 'Repository',
+      source: state.repo,
+      created_at: time,
+      updated_at: time,
+    }
+    state.rulesets.push(ruleset)
+    return ruleset
   }
 
   // Branches: the state's own map first, then the linked origin.
@@ -412,7 +564,7 @@ export function createFakeGitHub(initial = {}) {
 
   /** @param {FakeItem & { pull: FakePull }} entry */
   function headShaOf(entry) {
-    if (entry.state === 'open') {
+    if (entry.state === 'open' && entry.pull.headRepo === state.repo) {
       const sha = branchSha(entry.pull.head)
       if (sha !== null) entry.pull.headSha = sha
     }
@@ -438,6 +590,32 @@ export function createFakeGitHub(initial = {}) {
     return { name: label.name, color: label.color, description: label.description, default: false }
   }
 
+  /** @param {FakeMilestone} milestone */
+  function milestoneJson(milestone) {
+    const carriers = state.items.filter((entry) => entry.milestone === milestone.number)
+    const count = (/** @type {'open' | 'closed'} */ wanted) =>
+      carriers.filter((entry) => entry.state === wanted).length
+    return {
+      id: milestone.id,
+      number: milestone.number,
+      title: milestone.title,
+      description: milestone.description,
+      state: milestone.state,
+      open_issues: milestone.open_issues ?? count('open'),
+      closed_issues: milestone.closed_issues ?? count('closed'),
+      creator: user(milestone.creator),
+      html_url: `https://github.com/${state.repo}/milestone/${milestone.number}`,
+      created_at: milestone.created_at,
+      updated_at: milestone.updated_at,
+      closed_at: milestone.closed_at,
+      due_on: milestone.due_on,
+    }
+  }
+
+  /** @param {FakeItem} entry */
+  const itemMilestoneJson = (entry) =>
+    entry.milestone === null ? null : milestoneJson(findMilestone(entry.milestone))
+
   /** @param {FakeItem} entry */
   function issueJson(entry) {
     return {
@@ -451,6 +629,7 @@ export function createFakeGitHub(initial = {}) {
       assignee: entry.assignees[0] ? user(entry.assignees[0]) : null,
       assignees: entry.assignees.map(user),
       user: user(entry.author),
+      milestone: itemMilestoneJson(entry),
       comments: entry.comments.length,
       html_url: htmlUrl(entry),
       created_at: entry.createdAt,
@@ -481,11 +660,16 @@ export function createFakeGitHub(initial = {}) {
       merged: pull.merged,
       merged_at: pull.mergedAt,
       merge_commit_sha: pull.mergeCommitSha,
-      head: { ref: pull.head, sha: headShaOf(entry), repo: { full_name: state.repo } },
+      head: {
+        ref: pull.head,
+        sha: headShaOf(entry),
+        repo: pull.headRepo === null ? null : { full_name: pull.headRepo },
+      },
       base: { ref: pull.base, sha: branchSha(pull.base), repo: { full_name: state.repo } },
       labels: entry.labels.map(labelJson),
       assignees: entry.assignees.map(user),
       user: user(entry.author),
+      milestone: itemMilestoneJson(entry),
       html_url: htmlUrl(entry),
       created_at: entry.createdAt,
       updated_at: entry.updatedAt,
@@ -709,11 +893,18 @@ export function createFakeGitHub(initial = {}) {
         if (query.assignee === '*') return entry.assignees.length > 0
         return entry.assignees.includes(query.assignee)
       })
+      .filter((entry) => {
+        if (query.milestone === undefined) return true
+        if (query.milestone === 'none') return entry.milestone === null
+        if (query.milestone === '*') return entry.milestone !== null
+        return entry.milestone === Number(query.milestone)
+      })
     return page(list, query).map(issueJson)
   })
 
   on(`POST ${REPO}/issues`, ({ body, login }) => {
     if (!body?.title) throw httpError(422, 'Validation Failed')
+    const milestone = milestoneOfBody(body.milestone)
     const entry = addItem(
       {
         title: body.title,
@@ -723,11 +914,27 @@ export function createFakeGitHub(initial = {}) {
           (/** @type {string} */ name) => state.collaborators[name],
         ),
         author: login,
+        milestone,
       },
       null,
     )
     return issueJson(entry)
   })
+
+  /**
+   * The milestone number of a request body, which GitHub takes as a number or its text; null for
+   * none, and HTTP 422 for one that the repository does not have.
+   * @param {unknown} value
+   * @returns {number | null}
+   */
+  function milestoneOfBody(value) {
+    if (value === undefined || value === null) return null
+    const number = Number(value)
+    if (!state.milestones.some((milestone) => milestone.number === number)) {
+      throw httpError(422, 'Validation Failed')
+    }
+    return number
+  }
 
   on(`GET ${REPO}/issues/:number`, ({ params }) => issueJson(item(params.number)))
 
@@ -742,6 +949,7 @@ export function createFakeGitHub(initial = {}) {
    * @param {Record<string, any>} changes
    */
   function applyIssueChanges(entry, changes) {
+    if (changes.milestone !== undefined) entry.milestone = milestoneOfBody(changes.milestone)
     if (changes.title !== undefined) entry.title = changes.title
     if (changes.body !== undefined) entry.body = changes.body ?? ''
     if (changes.labels !== undefined) {
@@ -931,6 +1139,7 @@ export function createFakeGitHub(initial = {}) {
       (entry) =>
         entry.pull &&
         entry.state === 'open' &&
+        entry.pull.headRepo === state.repo &&
         entry.pull.head === head &&
         entry.pull.base === base,
     )
@@ -939,6 +1148,7 @@ export function createFakeGitHub(initial = {}) {
       { title, body: body.body ?? '', author: login },
       {
         head,
+        headRepo: state.repo,
         headSha,
         base,
         draft: Boolean(body.draft),
@@ -1057,6 +1267,132 @@ export function createFakeGitHub(initial = {}) {
   on(`DELETE ${REPO}/git/refs/heads/:branch*`, ({ params }) => {
     if (branchSha(params.branch) === null) throw httpError(422, 'Reference does not exist')
     setBranch(params.branch, null)
+  })
+
+  // Rule sets, in the form docs/verification.md recorded (rows 5 and 6): `GET .../rulesets` lists
+  // them without their rules, `POST` creates one, `PUT .../rulesets/<id>` changes the fields it
+  // names, `DELETE` removes one, `GET .../rulesets/<id>` returns one with `bypass_actors` and
+  // `current_user_can_bypass`, and `GET .../rules/branches/<branch>` lists the rules of the active
+  // rule sets that target the branch, each with its `ruleset_id`.
+
+  /** Where GitHub offers no rule sets, it refuses every request for them (E3). */
+  function requireRulesets() {
+    if (!state.rulesetsOffered) throw httpError(403, RULESETS_NOT_OFFERED)
+  }
+
+  /**
+   * The fields of a rule set body that the caller may set: GitHub gives the id, the source and
+   * the times, and computes whether the caller can bypass it. An empty name or an unknown
+   * enforcement is refused.
+   * @param {any} body
+   * @param {{ create: boolean }} mode
+   */
+  function rulesetFields(body, { create }) {
+    const { id, source_type, source, created_at, updated_at, current_user_can_bypass, ...fields } =
+      body ?? {}
+    // A new rule set needs both; an update checks only the fields it names.
+    const badName =
+      (create || 'name' in fields) && (typeof fields.name !== 'string' || fields.name === '')
+    const badEnforcement =
+      (create || 'enforcement' in fields) &&
+      !['active', 'disabled', 'evaluate'].includes(fields.enforcement)
+    if (badName || badEnforcement) throw httpError(422, 'Validation Failed')
+    return fields
+  }
+
+  /** @param {string} id */
+  function findRuleset(id) {
+    const ruleset = state.rulesets.find((own) => own.id === Number(id))
+    if (!ruleset) throw httpError(404, 'Not Found')
+    return ruleset
+  }
+
+  /**
+   * @param {FakeRuleset} ruleset
+   * @param {string} login
+   */
+  function rulesetJson(ruleset, login) {
+    const adminBypass = (ruleset.bypass_actors ?? []).some(
+      (actor) => actor.actor_type === 'RepositoryRole' && actor.actor_id === ADMIN_ROLE_ID,
+    )
+    return {
+      ...ruleset,
+      current_user_can_bypass:
+        'current_user_can_bypass' in ruleset
+          ? ruleset.current_user_can_bypass
+          : adminBypass && state.collaborators[login] === 'admin'
+            ? 'always'
+            : 'never',
+    }
+  }
+
+  /**
+   * @param {FakeRuleset} ruleset
+   * @param {string} branch
+   */
+  function targetsBranch(ruleset, branch) {
+    return (ruleset.conditions?.ref_name?.include ?? []).some(
+      (pattern) =>
+        pattern === '~ALL' ||
+        (pattern === '~DEFAULT_BRANCH' && branch === state.defaultBranch) ||
+        pattern === `refs/heads/${branch}`,
+    )
+  }
+
+  on(`GET ${REPO}/rulesets`, ({ query }) => {
+    requireRulesets()
+    return page(state.rulesets, query).map((ruleset) => ({
+      id: ruleset.id,
+      name: ruleset.name,
+      target: ruleset.target,
+      source_type: ruleset.source_type,
+      source: ruleset.source,
+      enforcement: ruleset.enforcement,
+      created_at: ruleset.created_at,
+      updated_at: ruleset.updated_at,
+    }))
+  })
+
+  on(`POST ${REPO}/rulesets`, ({ body, login }) => {
+    requireRulesets()
+    const fields = /** @type {FakeRuleset} */ (rulesetFields(body, { create: true }))
+    return rulesetJson(addRuleset(fields), login)
+  })
+
+  on(`GET ${REPO}/rulesets/:id`, ({ params, login }) => {
+    requireRulesets()
+    return rulesetJson(findRuleset(params.id), login)
+  })
+
+  // An update changes only the fields it names (docs/verification.md, E1: `-f enforcement=...`).
+  on(`PUT ${REPO}/rulesets/:id`, ({ params, body, login }) => {
+    requireRulesets()
+    const ruleset = findRuleset(params.id)
+    Object.assign(ruleset, rulesetFields(body, { create: false }), { updated_at: now() })
+    return rulesetJson(ruleset, login)
+  })
+
+  on(`DELETE ${REPO}/rulesets/:id`, ({ params }) => {
+    requireRulesets()
+    state.rulesets.splice(state.rulesets.indexOf(findRuleset(params.id)), 1)
+  })
+
+  on(`GET ${REPO}/rules/branches/:branch*`, ({ params, query }) => {
+    requireRulesets()
+    const rules = state.rulesets
+      .filter(
+        (ruleset) => ruleset.enforcement === 'active' && targetsBranch(ruleset, params.branch),
+      )
+      .flatMap((ruleset) =>
+        ruleset.rules.map((rule) => ({
+          type: rule.type,
+          ...(rule.parameters ? { parameters: rule.parameters } : {}),
+          ruleset_source_type: ruleset.source_type,
+          ruleset_source: ruleset.source,
+          ruleset_id: ruleset.id,
+        })),
+      )
+    return page(rules, query)
   })
 
   // Checks.
@@ -1253,6 +1589,16 @@ export function createFakeGitHub(initial = {}) {
      * @param {string} sha
      */
     setBranch: (branch, sha) => setBranch(branch, sha),
+    /**
+     * Add a rule set, as `POST .../rulesets` does; `id` is given when missing.
+     * @param {Partial<FakeRuleset> & { name: string }} body
+     */
+    addRuleset,
+    /**
+     * Add a milestone, as `POST .../milestones` does; `number` is given when missing.
+     * @param {Partial<FakeMilestone> & { title: string }} body
+     */
+    addMilestone,
   }
 }
 

@@ -17,6 +17,19 @@ export const STATE_SCHEMA = 1
 /** The results a check of a green check record may have; a record never holds a failed check. */
 export const CHECK_RESULTS = Object.freeze(['passed', 'skipped'])
 
+/** The checks that `ship` records, steps 3 to 8 of 7.9; a green record has every one of them. */
+export const CHECK_NAMES = Object.freeze([
+  'scope',
+  'secrets',
+  'format',
+  'generated',
+  'check',
+  'acceptance',
+])
+
+/** The checks of a green record that may be `skipped`: the project has no `commands.generate`. */
+export const SKIPPABLE_CHECKS = Object.freeze(['generated'])
+
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 /**
@@ -27,6 +40,7 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
  * @property {string} sessions `sessions/`, the last main commit per worktree and the last `status`.
  * @property {string} prompts `prompts/`, whose content belongs to lane B (`take`).
  * @property {string} gate `gate/`, whose content belongs to lane C (the Gate).
+ * @property {string} logs `logs/`, the logs of the project commands that a command runs.
  */
 
 /**
@@ -48,7 +62,7 @@ const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 /**
  * One check of a green check record (contracts 5.2).
  * @typedef {object} CheckResult
- * @property {string} name `scope`, `secrets`, `format`, `generated`, `check` or `acceptance`.
+ * @property {string} name One of CHECK_NAMES.
  * @property {'passed' | 'skipped'} result
  * @property {number} [duration_ms]
  */
@@ -87,6 +101,7 @@ export function statePaths(gitCommonDir) {
     sessions: join(root, 'sessions'),
     prompts: join(root, 'prompts'),
     gate: join(root, 'gate'),
+    logs: join(root, 'logs'),
   }
 }
 
@@ -177,8 +192,9 @@ export async function writeCheckRecord(dir, record) {
 }
 
 /**
- * True when the record is the green check record of this full SHA: it is for this commit and no
- * check failed (E4).
+ * True when the record is the green check record of this full SHA (E4): it is for this commit,
+ * it holds every check of CHECK_NAMES, and every check passed, except that `generated` may be
+ * skipped.
  * @param {CheckRecord | null | undefined} record
  * @param {string} sha
  * @returns {boolean}
@@ -186,8 +202,14 @@ export async function writeCheckRecord(dir, record) {
 export function isGreen(record, sha) {
   if (!record || record.schema !== STATE_SCHEMA) return false
   if (!FULL_SHA.test(sha) || record.sha !== sha) return false
-  if (!Array.isArray(record.checks) || record.checks.length === 0) return false
-  return record.checks.every((check) => CHECK_RESULTS.includes(check?.result))
+  if (!Array.isArray(record.checks)) return false
+  const green = (/** @type {CheckResult | undefined} */ check) =>
+    check?.result === 'passed' ||
+    (check?.result === 'skipped' && SKIPPABLE_CHECKS.includes(check.name))
+  return (
+    record.checks.every(green) &&
+    CHECK_NAMES.every((name) => record.checks.some((check) => check?.name === name))
+  )
 }
 
 // sessions/ (contracts 5.3).
@@ -269,7 +291,7 @@ export async function writeLastStatus(dir, time) {
   await writeAtomic(statusFile(dir), `${JSON.stringify(record, null, 2)}\n`)
 }
 
-// prompts/ and gate/ (contracts 5.6): only their paths; lanes B and C own the content.
+// prompts/, gate/ and logs/ (contracts 5.6): only their paths; the lanes own the content.
 
 /**
  * The path of the prompt file of a task: `prompts/<issue>.md`. Lane B (`take`) writes it.
@@ -291,6 +313,81 @@ export function promptPath(dir, issue) {
  */
 export function gateDir(dir) {
   return statePaths(dir).gate
+}
+
+/**
+ * The log of one step of `ship` for a task: `logs/ship/<issue>/<step>.log`, for example
+ * `check.log`. Lane B (`ship`) writes it and replaces it on each run.
+ * @param {string} dir The git common directory.
+ * @param {number} issue
+ * @param {string} step The name of the check, such as `check` or `acceptance`.
+ * @returns {string}
+ */
+export function shipLogPath(dir, issue, step) {
+  if (!Number.isInteger(issue) || issue < 1) {
+    throw new TypeError(`shipLogPath needs an issue number, not ${issue}`)
+  }
+  if (!/^[a-z][a-z0-9-]*$/.test(step)) throw new TypeError(`not a step name: ${step}`)
+  return join(statePaths(dir).logs, 'ship', String(issue), `${step}.log`)
+}
+
+/**
+ * The log of `commands.install`, which `join` runs in its step 4: `logs/join/install.log`. Lane A
+ * (`join`) writes it and replaces it on each run.
+ * @param {string} dir The git common directory.
+ * @returns {string}
+ */
+export function joinLogPath(dir) {
+  return join(statePaths(dir).logs, 'join', 'install.log')
+}
+
+// File helpers, also for the lanes' own files under the git common directory.
+
+/**
+ * The text of a file, or null when it does not exist (also when a directory on its path is a
+ * file) or is a directory.
+ * @param {string} file
+ * @returns {Promise<string | null>}
+ */
+export async function readText(file) {
+  try {
+    return await readFile(file, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR') return null
+    throw error
+  }
+}
+
+/**
+ * The parsed JSON of a text, or null when it is not JSON.
+ * @param {string} text
+ * @returns {unknown}
+ */
+export function parseJson(text) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Write a file atomically: a temporary file in the same directory, then a rename. The directory
+ * is created when it is missing.
+ * @param {string} file
+ * @param {string} text
+ * @returns {Promise<void>}
+ */
+export async function writeAtomic(file, text) {
+  await mkdir(dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+  try {
+    await writeFile(temporary, text)
+    await rename(temporary, file)
+  } catch (error) {
+    await rm(temporary, { force: true })
+    throw error
+  }
 }
 
 // Helpers.
@@ -398,48 +495,11 @@ function sameLogin(a, b) {
 }
 
 /**
- * The text of a file, or null when it does not exist.
- * @param {string} file
- * @returns {Promise<string | null>}
- */
-async function readText(file) {
-  try {
-    return await readFile(file, 'utf8')
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR') return null
-    throw error
-  }
-}
-
-/**
  * The parsed JSON of a file, or null when it does not exist or is not JSON.
  * @param {string} file
  * @returns {Promise<unknown>}
  */
 async function readJson(file) {
   const text = await readText(file)
-  if (text === null) return null
-  try {
-    return JSON.parse(text)
-  } catch {
-    return null
-  }
-}
-
-/**
- * Write a file atomically: a temporary file in the same directory, then a rename.
- * @param {string} file
- * @param {string} text
- * @returns {Promise<void>}
- */
-async function writeAtomic(file, text) {
-  await mkdir(dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    await writeFile(temporary, text)
-    await rename(temporary, file)
-  } catch (error) {
-    await rm(temporary, { force: true })
-    throw error
-  }
+  return text === null ? null : parseJson(text)
 }

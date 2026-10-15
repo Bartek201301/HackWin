@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'vitest'
-import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { VERSION } from '../../../src/cli/context.js'
 import { pullRequestBody, reportBody, reportMarker } from '../../../src/commands/ship/publish.js'
+import { statePaths } from '../../../src/core/state/index.js'
 import { parseTaskLink } from '../../../src/core/tasks/index.js'
 import { accounts, httpError, rawResult } from '../../harness/index.js'
+import { rewritePulls } from '../take/helpers.js'
 import { BRANCH, ISSUE, TEMPLATE, TITLE, remoteBranch, scene, ship, stepsOf } from './scene.js'
 
 /** @import { Scene } from './scene.js' */
@@ -39,10 +42,7 @@ function lastLine(stdout) {
  * @param {Scene} s
  */
 function clearLogs(s) {
-  rmSync(join(/** @type {string} */ (s.env.TMPDIR), 'hackwin-ship'), {
-    recursive: true,
-    force: true,
-  })
+  rmSync(join(statePaths(s.commonDir).logs, 'ship'), { recursive: true, force: true })
 }
 
 /**
@@ -50,7 +50,7 @@ function clearLogs(s) {
  * @param {Scene} s
  */
 function checksRan(s) {
-  return existsSync(join(/** @type {string} */ (s.env.TMPDIR), 'hackwin-ship'))
+  return existsSync(join(statePaths(s.commonDir).logs, 'ship'))
 }
 
 /**
@@ -291,5 +291,58 @@ describe('1.5e/ship: push, pull request, report and rerun', () => {
     expect(body).toContain('| 3 | scope check | passed |')
     expect(body).toContain('| 6 | generated file check | skipped |')
     expect(body).toContain('| 7 | full check | passed in 1.2 s |')
+  })
+})
+
+describe('1.5c/ship: a rerun reuses only a pull request of this repository and only a check record of the same version of hackwin', () => {
+  test('an open pull request of a fork from a branch of the same name is not reused: ship opens the pull request of the task', async () => {
+    const s = await scene({ push: false })
+    const fork = {
+      number: 30,
+      title: 'Work in a fork',
+      body: 'Closes #12',
+      state: 'open',
+      draft: false,
+      head: { ref: BRANCH, sha: 'f'.repeat(40), repo: { full_name: 'someone/fork' } },
+      base: { ref: 'main', repo: { full_name: s.fake.state.repo } },
+      labels: [],
+      user: { login: accounts.builder2.login },
+      html_url: `https://github.com/${s.fake.state.repo}/pull/30`,
+    }
+    rewritePulls(s.fake, (list) => [fork, ...list])
+
+    const result = await ship(s)
+    expect(result.code, result.stderr).toBe(0)
+    const head = await s.worktree.git.revParse('HEAD')
+    const number = await expectShipped(s, head)
+    expect(number).not.toBe(30)
+    expect(result.stdout).toContain(`step 11, pull request: opened PR #${number} into main`)
+    const touched = s.fake.calls.filter((call) => call.endpoint?.includes('pulls/30'))
+    expect(touched).toEqual([])
+    expect(result.stderr).not.toContain('#30')
+  })
+
+  test('a green check record that another version of hackwin wrote does not skip the checks', async () => {
+    const s = await scene({ push: false })
+    const restore = INTERRUPTIONS[0].interrupt(s)
+    const first = await ship(s)
+    expect(first.code, first.stderr).toBe(3)
+    restore()
+    const head = await s.worktree.git.revParse('HEAD')
+    const file = join(statePaths(s.commonDir).checks, `${head}.json`)
+    const record = JSON.parse(readFileSync(file, 'utf8'))
+    expect(record.cli_version).toBe(VERSION)
+    writeFileSync(file, JSON.stringify({ ...record, cli_version: '0.0.9' }))
+
+    clearLogs(s)
+    const again = await ship(s)
+    expect(again.code, again.stderr).toBe(0)
+    expect(checksRan(s)).toBe(true)
+    expect(again.stdout).toContain(
+      `steps 3 to 9, checks: the green check record of ${head} was written by hackwin 0.0.9, not ${VERSION}, so the checks run again`,
+    )
+    expect(stepsOf(again.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
+    expect(JSON.parse(readFileSync(file, 'utf8')).cli_version).toBe(VERSION)
+    await expectShipped(s, head)
   })
 })
