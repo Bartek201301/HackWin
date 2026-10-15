@@ -17,6 +17,25 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.4h, lane A follow-up: the CI token by environment, join's merged field, the hooks' config loader (PR #62, issue #61)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/61-lane-a-follow-up`, created by the integrator from `653bb8c` after the merge of #58; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9457470`, on `653bb8c`; PR #62 opened at 00:07:40 UTC, and CI passed.
+  - The Lead's review sent it back: `git ls-files` of `hasManifest` (`src/core/project`) still got the token, and the token test did not record git processes. `89f7960` took the token variables out of `process.env` while the checks ran. Then the merge of `origin/main` at `3b9083a` (`0841d37`) brought #63, which gives that git call the run's `env`, and `1a52cb6` removed the step again, so `process.env` is not edited.
+  - `lead-55` sent `merge #62` with the head SHA by SendMessage. Its review:
+    - `internal ci` goes on with a copy of the context whose `env` and git hold no token, and every project command and git call of `src/core/project` gets that `env`.
+    - 1.4b/token runs `internal ci` with the token in `process.env`, as the runner does, and records every git process it starts; the session showed that it fails on the old `hasManifest`.
+    - `join` reads the field `merged`, and the hooks load through `loadCheckedConfig`.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 9 files inside issue #61's paths; no secret pattern; no conflict with `3b9083a`. Step 6, with the PR merged into `3b9083a`: `npm test` passed 621 of 621, and `npm run test:ac` passed 1.4b/token (3), 1.4e/worktrees (3) and 1.4h/hooks-config (3). After the merge, only `test/cli/prepare.test.js` imports `enforceVersion` from `src/cli/main.js`. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - A correction to the Lead's first review: the old test did put the token into `process.env`; what it lacked was a record of the git processes.
+  - Not covered by any test: the runner's own git calls before `internal ci`, the environment of a real gh process, and `/proc/<pid>/environ` of an ancestor process on Linux.
+  - Contracts 4.4 still says `src/cli/main.js` exports `enforceVersion` "for the hooks of 1.4a"; no hook imports it now. It goes to the next integrator task, with the Gate comment marker.
+  - Before the `npm test` run, 15 processes with `vitest` in their command line were running, at a load average of 3.58; nothing timed out.
+- Measured: PR open 15 min 54 s (00:07:40 to 00:23:34 UTC), including the Lead's review and one round of fixes; 4 commits (one a merge of `origin/main`), 2 PR runs (81 s on `9457470`, 73 s on `1a52cb6`), 0 conflicts; local merge test `npm test` 49.63 s; the run on main after the merge 66 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/62; head `1a52cb6`; merge commit `2013b56`; runs `38658214608` and `38659454715` (PR) and `38659767360` (main).
+
 ### 2026-10-15 · Phase 1 · Shared follow-up 2: reset retries, shared task constants, contracts and plan (PR #63, issue #60)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/60-shared-follow-up-2`, created by the integrator from `f5052ab`; the session fast-forwarded it to `653bb8c` before its first change. Its session was opened by `lead-55`. The integrator's planning session for the merge.
