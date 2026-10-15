@@ -3,10 +3,8 @@
 // the last lines of the log, and nothing is pushed. A failed step from 10 to 14 exits 3, and a
 // rerun continues at it (CM3).
 
-import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
 import { BlockedError, RemoteError } from '../../core/runtime/errors.js'
+import { shipLogPath } from '../../core/state/index.js'
 
 /** @import { CommandContext } from '../../cli/context.js' */
 /** @import { ProjectRun } from '../../core/project/index.js' */
@@ -155,17 +153,16 @@ export function seconds(ms) {
 }
 
 /**
- * The log file of one step. The logs of a task stay in one directory of the temporary
- * directory, outside the worktree, and each run replaces them.
+ * The log file of one step: `logs/ship/<issue>/<name>.log` in the local state of the clone
+ * (contracts 5.6), outside the worktree and in no directory that other users of the machine
+ * share. Each run replaces it.
  * @param {CommandContext} ctx
  * @param {number} issue
  * @param {string} name
  * @returns {string}
  */
 export function logFile(ctx, issue, name) {
-  const clone = createHash('sha256').update(resolve(ctx.gitCommonDir)).digest('hex').slice(0, 12)
-  const base = ctx.env.TMPDIR || tmpdir()
-  return join(base, 'hackwin-ship', `${clone}-${issue}`, `${name}.log`)
+  return shipLogPath(ctx.gitCommonDir, issue, name)
 }
 
 /**

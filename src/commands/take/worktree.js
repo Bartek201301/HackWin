@@ -9,14 +9,18 @@
 // one with commits of its own gets a merge, never a rebase. Where that cannot happen, because the
 // worktree has uncommitted changes or the merge conflicts, nothing changes and the update says
 // why; `ship` merges both later.
+//
+// A worktree of the task that is in a detached state, or switched to another branch, is not
+// reused and not replaced: `take` names its state and the command that brings it back onto the
+// task's branch, and adds no worktree.
 
 import { lstat, symlink } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { GitError } from '../../core/runtime/index.js'
+import { basename, dirname, join, resolve } from 'node:path'
+import { GitError, PreconditionError } from '../../core/runtime/index.js'
 import { branchName, parseBranch, slugOf } from '../../core/tasks/index.js'
 import { taskWorktreePath, taskWorktrees } from '../../core/worktrees/index.js'
 
-/** @import { Git } from '../../core/git/index.js' */
+/** @import { Git, Worktree } from '../../core/git/index.js' */
 /** @import { Task } from '../../core/tasks/index.js' */
 
 /** The personal files of the main checkout that every task worktree links (A13). */
@@ -62,6 +66,10 @@ export const LINKED_FILES = Object.freeze(['.env.local', 'CLAUDE.local.md'])
  * when one exists, else a worktree for the task's local branch when one exists, else a branch
  * from the task's remote branch when one exists, else a new branch from the default branch. The
  * worktree lies at the path of A9. The main checkout is never reused as a task worktree.
+ *
+ * A worktree at the place of the task's worktree, `<N>-<slug>` in the worktrees directory of A9,
+ * that is in a detached state or on a branch that is not the task's, is a precondition failure
+ * (exit 2) that names its state and how to bring it back onto the task's branch.
  * @param {Git} git
  * @param {{ main: string, task: Task, branch?: string }} options `branch` is the name to prefer
  *   among several branches of the task; `task/<N>-<slug>` of the title by default.
@@ -82,6 +90,9 @@ export async function planCheckout(git, { main, task, branch: wanted }) {
       branch.slice(`task/${task.number}-`.length) || slugOf(task.title),
     )
   const local = pick(await taskBranches(git, task.number), name)
+  const stray = await strayWorktree(git, main, task.number)
+  if (stray)
+    throw await strayError(git, stray, { issue: task.number, branch: local ?? name, local })
   if (local !== undefined) return { path: pathOf(local), branch: local, how: 'reuse-branch' }
   const remote = pick(await taskBranches(git, task.number, REMOTE_PREFIX), name)
   if (remote !== undefined) return { path: pathOf(remote), branch: remote, how: 'from-remote' }
@@ -236,6 +247,68 @@ export async function taskBranches(git, issue, prefix = 'heads/') {
  */
 function pick(branches, wanted) {
   return branches.includes(wanted) ? wanted : branches[0]
+}
+
+/**
+ * A worktree at the place of a task's worktree, a directory `<N>-<slug>` in the worktrees
+ * directory of A9, that the task's worktrees leave out because it is on no branch of the task: in
+ * a detached state or switched to another branch. A worktree whose directory is gone does not
+ * count.
+ * @param {Git} git
+ * @param {string} main The main checkout.
+ * @param {number} issue
+ * @returns {Promise<Worktree | null>}
+ */
+async function strayWorktree(git, main, issue) {
+  // The worktrees directory is the parent of every task's path; the slug does not change it.
+  const dir = dirname(taskWorktreePath(main, issue, 'task'))
+  const found = (await git.worktreeList()).find(
+    (entry) =>
+      !entry.bare &&
+      !entry.prunable &&
+      resolve(dirname(entry.path)) === dir &&
+      basename(entry.path).startsWith(`${issue}-`),
+  )
+  return found ?? null
+}
+
+/**
+ * The precondition failure for a worktree of the task in a detached state or on another branch,
+ * with the command that brings it back onto the task's branch: a switch to the branch when it
+ * exists, with a merge of the detached commit when the branch lacks it, so no commit is left
+ * behind; otherwise a new branch of that name at the worktree's commit.
+ * @param {Git} git
+ * @param {Worktree} stray
+ * @param {{ issue: number, branch: string, local: string | undefined }} task `branch` is the
+ *   task's branch; `local` the task's local branch, undefined when it has none.
+ * @returns {Promise<PreconditionError>}
+ */
+async function strayError(git, stray, { issue, branch, local }) {
+  const head = stray.head ?? ''
+  const state = stray.detached
+    ? `in a detached state at ${head.slice(0, 12)}`
+    : `switched to the branch ${stray.branch}`
+  let command = local === undefined ? `git switch -c ${branch}` : `git switch ${branch}`
+  if (
+    stray.detached &&
+    local !== undefined &&
+    !(await git.isAncestor(head, `refs/heads/${local}`))
+  ) {
+    command += ` && git merge --no-edit ${head}`
+  }
+  return new PreconditionError(
+    `the worktree of #${issue} at ${stray.path} is ${state}, not on the task's branch ${branch}, so take cannot reuse it`,
+    {
+      resolve: { command, dir: stray.path },
+      details: {
+        path: stray.path,
+        state: stray.detached ? 'detached' : 'other-branch',
+        head: stray.head,
+        branch: stray.branch,
+        taskBranch: branch,
+      },
+    },
+  )
 }
 
 /**

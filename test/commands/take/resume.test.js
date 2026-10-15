@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MARKER_NAME, failureComment } from '../../../src/commands/gate/comment.js'
 import { accounts, createFakeGitHub, hackwinObject, yaml } from '../../harness/index.js'
 import {
   agentBin,
   asFork,
   expectInOrder,
+  gitRecorder,
   promptFileOf,
   take,
   task,
@@ -45,6 +48,21 @@ function counterResetPull({ number = 20, labels = [], author = BUILDER1, comment
     comments,
     files: [{ path: 'src/features/counter/reset.js', status: 'added', previousPath: null }],
   }
+}
+
+/**
+ * The body of the Gate's comment on a failed run of pull request #20 at this head, as the Gate
+ * writes it, marker first.
+ * @param {string} sha
+ * @param {{ stage: string, result: string, reason: string }} failure
+ */
+function gateFailure(sha, { stage, result, reason }) {
+  return failureComment({
+    marker: { pr: 20, sha, stage, result },
+    title: `stage ${stage}`,
+    reason,
+    next: 'fix it on the branch and run `hackwin ship`.',
+  })
 }
 
 /**
@@ -238,13 +256,18 @@ describe("AC52: take <N> on the caller's own in-progress task reopens the worktr
           labels: ['gate:failed', 'needs-owner'],
           comments: [
             {
-              body: 'Stage 7, merge test: `npm run check` failed.\n\nFix it on the branch.',
+              body: gateFailure(elsewhere, {
+                stage: 'merge-test',
+                result: 'failed',
+                reason: '`npm run check` failed.',
+              }),
               author: LEAD,
             },
             { body: 'I pushed a note onto your branch.', author: BUILDER2 },
           ],
         }),
       ],
+      origin: fixture.origin,
     })
     const agents = agentBin(fixture, 'fix')
 
@@ -275,9 +298,11 @@ describe("AC52: take <N> on the caller's own in-progress task reopens the worktr
       '## 7. Personal settings',
       "## 8. The Gate's comment",
       `The Gate handed pull request #20 (https://github.com/${fake.state.repo}/pull/20) back: it is labeled \`gate:failed\`, \`needs-owner\`.`,
-      "The Gate's comment, ",
-      '> Stage 7, merge test: `npm run check` failed.',
-      '>\n> Fix it on the branch.',
+      `The Gate's comment on the head \`${elsewhere}\` of pull request #20, `,
+      'The run failed at the stage `merge-test` with the result `failed`:',
+      '> **HackWin Gate: failed at stage merge-test.**',
+      '>\n> **Reason:** `npm run check` failed.',
+      '>\n> **Next action:** fix it on the branch and run `hackwin ship`.',
       '`hackwin ship` updates pull request #20.',
       '## 9. The state of the branch',
       `- \`task/7-counter-reset\` is at \`${elsewhere}\`.`,
@@ -289,6 +314,7 @@ describe("AC52: take <N> on the caller's own in-progress task reopens the worktr
       '- The worktree has no uncommitted changes and no untracked files.',
     ])
     expect(prompt).not.toContain('I pushed a note onto your branch.')
+    expect(prompt).not.toContain(MARKER_NAME)
 
     // The task stays in review (8.3), and no warning repeats the pull request being fixed.
     expect(fake.find(7)?.labels.sort()).toEqual(['in-review', 'role:counter'])
@@ -639,6 +665,300 @@ describe("AC32/take: on the builder's machine the next take removes the worktree
     )
     expect(existsSync(old(9, 'older-task'))).toBe(false)
     expect(existsSync(worktreeOf(fixture, 'builder1', '7-counter-reset').path)).toBe(true)
+    fixture.cleanup()
+  })
+})
+
+/**
+ * True for a recorded `git worktree add`.
+ * @param {string} call
+ */
+const isWorktreeAdd = (call) => /(^| )worktree add( |$)/.test(call)
+
+describe("1.5f/gate-comment: the fix prompt carries the Gate's comment on the head of the pull request, found by its marker", () => {
+  test("on a gate:failed pull request, a comment that the Lead wrote by hand after the Gate's does not replace it", async () => {
+    const { fixture, clone, worktree } = await takenCounterReset('gate-comment')
+    const earlier = await fixture.commit('Reset button', {
+      dir: worktree.path,
+      files: { 'src/features/counter/reset.js': 'export const reset = () => 0\n' },
+      push: true,
+    })
+    const head = await fixture.commit('Reset the todos too', {
+      dir: worktree.path,
+      files: { 'src/features/todos/reset.js': 'export const reset = () => []\n' },
+      push: true,
+    })
+    const fake = createFakeGitHub({
+      issues: [counterReset(['in-review', 'role:counter'], [BUILDER1])],
+      pulls: [
+        counterResetPull({
+          labels: ['gate:failed', 'scope-violation'],
+          comments: [
+            {
+              body: gateFailure(earlier, {
+                stage: 'merge-test',
+                result: 'failed',
+                reason: 'the run of an earlier head.',
+              }),
+              author: LEAD,
+            },
+            {
+              body: gateFailure(head, {
+                stage: 'scope',
+                result: 'scope-violation',
+                reason: '1 changed file lies outside the roles of the author (G11).',
+              }),
+              author: LEAD,
+            },
+            { body: 'I will look at this tonight.', author: LEAD },
+          ],
+        }),
+      ],
+      origin: fixture.origin,
+    })
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(result.code, result.stderr).toBe(0)
+    const prompt = readFileSync(promptFileOf(clone, 7), 'utf8')
+    expectInOrder(prompt, [
+      "## 8. The Gate's comment",
+      'it is labeled `gate:failed`, `scope-violation`.',
+      `The Gate's comment on the head \`${head}\` of pull request #20, `,
+      'The run failed at the stage `scope` with the result `scope-violation`:',
+      '> **HackWin Gate: failed at stage scope.**',
+      '> **Reason:** 1 changed file lies outside the roles of the author (G11).',
+      `> Head \`${head}\`.`,
+      '## 9. The state of the branch',
+    ])
+    expect(prompt).not.toContain('I will look at this tonight.')
+    expect(prompt).not.toContain('the run of an earlier head')
+    expect(prompt).not.toContain(MARKER_NAME)
+    fixture.cleanup()
+  })
+
+  test('a Gate comment whose marker names another head than the head of the pull request does not count', async () => {
+    const { fixture, clone, worktree } = await takenCounterReset('gate-comment-head')
+    const tested = await fixture.commit('Reset button', {
+      dir: worktree.path,
+      files: { 'src/features/counter/reset.js': 'export const reset = () => 0\n' },
+      push: true,
+    })
+    // A push after the Gate's run, before its next poll removed the label.
+    const head = await fixture.commit('Fix the reset', {
+      dir: worktree.path,
+      files: { 'src/features/counter/reset.js': 'export const reset = () => 1\n' },
+      push: true,
+    })
+    const fake = createFakeGitHub({
+      issues: [counterReset(['in-review', 'role:counter'], [BUILDER1])],
+      pulls: [
+        counterResetPull({
+          labels: ['gate:failed'],
+          comments: [
+            {
+              body: gateFailure(tested, {
+                stage: 'merge-test',
+                result: 'failed',
+                reason: '`npm run check` failed.',
+              }),
+              author: LEAD,
+            },
+          ],
+        }),
+      ],
+      origin: fixture.origin,
+    })
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(result.code, result.stderr).toBe(0)
+    const prompt = readFileSync(promptFileOf(clone, 7), 'utf8')
+    expectInOrder(prompt, [
+      "## 8. The Gate's comment",
+      `The Gate has no comment on the head \`${head}\` of pull request #20. Ask the Lead what the Gate reported before you change anything.`,
+      '## 9. The state of the branch',
+    ])
+    expect(prompt).not.toContain('npm run check')
+    fixture.cleanup()
+  })
+})
+
+describe('1.5f/release-resume: after take <N> --release, a take whose worktree holds earlier work gives the continue prompt with the state of the branch', () => {
+  /**
+   * A first take of task 7, earlier work in its worktree, and a release.
+   * @param {string} name
+   * @param {(worktree: ReturnType<typeof worktreeOf>, fixture: Fixture) => Promise<void>} work
+   */
+  async function released(name, work) {
+    const fixture = await teamFixture(name)
+    const clone = await fixture.joinedClone({ name: 'builder1', login: BUILDER1 })
+    const fake = createFakeGitHub({ issues: [counterReset(['ready'])] })
+    const first = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(first.code, first.stderr).toBe(0)
+    const worktree = worktreeOf(fixture, 'builder1', '7-counter-reset')
+    await work(worktree, fixture)
+    const release = await take(fixture, clone.path, fake, BUILDER1, ['7', '--release'])
+    expect(release.code, release.stderr).toBe(0)
+    expect(fake.find(7)?.labels.sort()).toEqual(['ready', 'role:counter'])
+    expect(fake.find(7)?.assignees).toEqual([])
+    return { fixture, clone, fake, worktree }
+  }
+
+  test('a worktree with a commit beyond origin/main', async () => {
+    /** @type {string} */
+    let work = ''
+    const { fixture, clone, fake, worktree } = await released('release-commit', async (at, f) => {
+      work = await f.commit('Reset button', {
+        dir: at.path,
+        files: { 'src/features/counter/reset.js': 'export const reset = () => 0\n' },
+      })
+    })
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(result.code, result.stderr).toBe(0)
+    const promptFile = promptFileOf(clone, 7)
+    expectInOrder(result.stdout, [
+      'selected #7 Counter reset (role counter)',
+      `claimed #7: in-progress, assigned to ${BUILDER1}`,
+      `worktree: ${worktree.path} on task/7-counter-reset, reused`,
+      'task/7-counter-reset holds earlier work, 1 commit that origin/main lacks: the agent continues it',
+      `continue prompt: ${promptFile}`,
+    ])
+    const prompt = readFileSync(promptFile, 'utf8')
+    expectInOrder(prompt, [
+      'You continue this one task in its own worktree.',
+      '## 7. Personal settings',
+      '## 8. The state of the branch',
+      `- \`task/7-counter-reset\` is at \`${work}\`.`,
+      '- Its own commits, which `origin/main` lacks, newest first:',
+      `  - \`${work.slice(0, 12)}\` Reset button`,
+      '- The worktree has no uncommitted changes and no untracked files.',
+    ])
+    fixture.cleanup()
+  })
+
+  test('a worktree with uncommitted files', async () => {
+    const { fixture, clone, fake, worktree } = await released('release-files', async (at) => {
+      writeFileSync(join(at.path, 'draft.js'), 'export const draft = 1\n')
+    })
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(result.code, result.stderr).toBe(0)
+    const promptFile = promptFileOf(clone, 7)
+    expectInOrder(result.stdout, [
+      `worktree: ${worktree.path} on task/7-counter-reset, reused`,
+      'task/7-counter-reset holds earlier work, uncommitted changes or untracked files: the agent continues it',
+      `continue prompt: ${promptFile}`,
+    ])
+    const prompt = readFileSync(promptFile, 'utf8')
+    expectInOrder(prompt, [
+      'You continue this one task in its own worktree.',
+      '## 8. The state of the branch',
+      '- It has no commit of its own yet.',
+      '- Uncommitted changes and untracked files in the worktree',
+      '?? draft.js',
+    ])
+    fixture.cleanup()
+  })
+
+  test('a worktree without earlier work gives the first prompt again', async () => {
+    const { fixture, clone, fake } = await released('release-clean', async () => {})
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(result.code, result.stderr).toBe(0)
+    expect(result.stdout).toContain(`\nprompt: ${promptFileOf(clone, 7)}`)
+    expect(result.stdout).not.toContain('earlier work')
+    const prompt = readFileSync(promptFileOf(clone, 7), 'utf8')
+    expect(prompt).toContain('You work on this one task in its own worktree.')
+    expect(prompt).not.toContain('## 8.')
+    fixture.cleanup()
+  })
+})
+
+describe('1.5f/worktree-state: a worktree of the task in a detached state or switched to another branch gets a message that names the state, and take adds no worktree', () => {
+  test('a detached worktree, on a resume', async () => {
+    const { fixture, clone, worktree } = await takenCounterReset('detached')
+    const work = await fixture.commit('Reset button', {
+      dir: worktree.path,
+      files: { 'src/features/counter/reset.js': 'export const reset = () => 0\n' },
+    })
+    await worktree.git.run(['switch', '--detach'])
+    const fake = createFakeGitHub({
+      issues: [counterReset(['in-progress', 'role:counter'], [BUILDER1])],
+    })
+    const git = gitRecorder(fixture, 'detached')
+    const before = await clone.git.worktreeList()
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'], { env: git.env })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      `hackwin take: the worktree of #7 at ${worktree.path} is in a detached state at ${work.slice(0, 12)}, not on the task's branch task/7-counter-reset, so take cannot reuse it`,
+    )
+    expect(result.stderr).toContain(
+      `to resolve: run \`git switch task/7-counter-reset\` in ${worktree.path}`,
+    )
+    expect(git.calls().length).toBeGreaterThan(0)
+    expect(git.calls().filter(isWorktreeAdd)).toEqual([])
+    expect(await clone.git.worktreeList()).toEqual(before)
+    expect(fake.find(7)?.labels.sort()).toEqual(['in-progress', 'role:counter'])
+    expect(fake.find(7)?.assignees).toEqual([BUILDER1])
+    fixture.cleanup()
+  })
+
+  test('a detached worktree with a commit that its branch lacks, on a take after a release; the command it names brings the commit onto the branch', async () => {
+    const { fixture, clone, worktree } = await takenCounterReset('detached-commit')
+    await worktree.git.run(['switch', '--detach'])
+    const work = await fixture.commit('Reset button, made while detached', {
+      dir: worktree.path,
+      files: { 'src/features/counter/reset.js': 'export const reset = () => 0\n' },
+    })
+    const fake = createFakeGitHub({ issues: [counterReset(['ready', 'role:counter'])] })
+    const git = gitRecorder(fixture, 'detached-commit')
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'], { env: git.env })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      `the worktree of #7 at ${worktree.path} is in a detached state at ${work.slice(0, 12)}, not on the task's branch task/7-counter-reset`,
+    )
+    const command = `git switch task/7-counter-reset && git merge --no-edit ${work}`
+    expect(result.stderr).toContain(`to resolve: run \`${command}\` in ${worktree.path}`)
+    expect(git.calls().filter(isWorktreeAdd)).toEqual([])
+    expect(fake.find(7)?.labels.sort()).toEqual(['ready', 'role:counter'])
+    expect(fake.find(7)?.assignees).toEqual([])
+
+    execFileSync('/bin/sh', ['-c', command], {
+      cwd: worktree.path,
+      env: fixture.env,
+      stdio: 'pipe',
+    })
+    const again = await take(fixture, clone.path, fake, BUILDER1, ['7'])
+    expect(again.code, again.stderr).toBe(0)
+    expect(again.stdout).toContain(`worktree: ${worktree.path} on task/7-counter-reset, reused`)
+    expect(again.stdout).toContain(
+      'task/7-counter-reset holds earlier work, 1 commit that origin/main lacks',
+    )
+    expect(await worktree.git.revParse('HEAD')).toBe(work)
+    fixture.cleanup()
+  })
+
+  test('a worktree switched to another branch, on a take after a release', async () => {
+    const { fixture, clone, worktree } = await takenCounterReset('other-branch')
+    await worktree.git.run(['switch', '-c', 'experiment'])
+    const fake = createFakeGitHub({ issues: [counterReset(['ready', 'role:counter'])] })
+    const git = gitRecorder(fixture, 'other-branch')
+    const before = await clone.git.worktreeList()
+
+    const result = await take(fixture, clone.path, fake, BUILDER1, ['7'], { env: git.env })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      `hackwin take: the worktree of #7 at ${worktree.path} is switched to the branch experiment, not on the task's branch task/7-counter-reset, so take cannot reuse it`,
+    )
+    expect(result.stderr).toContain(
+      `to resolve: run \`git switch task/7-counter-reset\` in ${worktree.path}`,
+    )
+    expect(git.calls().length).toBeGreaterThan(0)
+    expect(git.calls().filter(isWorktreeAdd)).toEqual([])
+    expect(await clone.git.worktreeList()).toEqual(before)
+    expect(fake.find(7)?.labels.sort()).toEqual(['ready', 'role:counter'])
+    expect(fake.find(7)?.assignees).toEqual([])
     fixture.cleanup()
   })
 })

@@ -20,6 +20,7 @@ import { HANDBACK_LABELS } from './resume.js'
 /** @import { Comment, Issue, PullRequest } from '../../core/github/index.js' */
 /** @import { LocalRecord, MainSeen } from '../../core/state/index.js' */
 /** @import { TaskBlock } from '../../core/tasks/index.js' */
+/** @import { GateMarker } from '../gate/comment.js' */
 /** @import { BranchState } from './resume.js' */
 /** @import { RefUpdate } from './worktree.js' */
 
@@ -64,10 +65,12 @@ const TASK_MARKER = '# hackwin:task'
  */
 
 /**
- * The pull request that the Gate handed back and the Gate's comment on it.
+ * The pull request that the Gate handed back and the Gate's comment on its head.
  * @typedef {object} Handback
  * @property {Pick<PullRequest, 'number' | 'url' | 'labels'>} pull
- * @property {Comment | null} comment
+ * @property {string | null} head The head SHA of the pull request.
+ * @property {Comment | null} comment The Gate's comment on that head, or null when it has none.
+ * @property {GateMarker | null} marker The marker of the comment.
  */
 
 /**
@@ -364,27 +367,33 @@ function securityPart() {
 
 /**
  * The part of a fix prompt with the pull request that the Gate handed back and the Gate's
- * comment (A12).
+ * comment on its head (A12): the stage and the result of its marker, then the comment without
+ * the marker line.
  * @param {PromptInput} input
  * @returns {string[]}
  */
 function handbackPart({ handback }) {
   if (!handback) throw new TypeError('a fix prompt needs the pull request the Gate handed back')
-  const { pull, comment } = handback
+  const { pull, head, comment, marker } = handback
   const labels = HANDBACK_LABELS.filter((label) => pull.labels.includes(label))
   const where = pull.url ? ` (${pull.url})` : ''
   const lines = [
     `The Gate handed pull request #${pull.number}${where} back: it is labeled ${labels.map((label) => `\`${label}\``).join(', ')}.`,
     '',
   ]
-  if (comment === null) {
+  const onHead = head ? `the head \`${head}\` of pull request #${pull.number}` : 'its head'
+  if (comment === null || marker === null) {
     lines.push(
-      "The pull request has no comment of the Gate's account. Ask the Lead what the Gate reported before you change anything.",
+      `The Gate has no comment on ${onHead}. Ask the Lead what the Gate reported before you change anything.`,
     )
   } else {
     const link = comment.url ? `, ${comment.url}` : ''
-    lines.push(`The Gate's comment, ${comment.createdAt}${link}:`, '')
-    lines.push(...comment.body.trim().replace(/\r\n?/g, '\n').split('\n').map(quoted))
+    lines.push(
+      `The Gate's comment on ${onHead}, ${comment.createdAt}${link}. The run failed at the stage \`${marker.stage}\` with the result \`${marker.result}\`:`,
+      '',
+    )
+    const body = comment.body.replace(/\r\n?/g, '\n').split('\n').slice(1).join('\n').trim()
+    lines.push(...body.split('\n').map(quoted))
   }
   lines.push(
     '',

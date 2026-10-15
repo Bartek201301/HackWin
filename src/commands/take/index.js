@@ -6,7 +6,8 @@
 // `take N` on the caller's own task resumes it (A12): a task in progress gets a continue prompt,
 // or the first prompt when an earlier `take` stopped before writing one, and a task in review
 // whose pull request the Gate labeled gate:failed gets a fix prompt. `take N --release` returns
-// the caller's task in progress to ready.
+// the caller's task in progress to ready; a later take that reuses its branch with earlier work
+// on it gives a continue prompt too.
 
 import { access } from 'node:fs/promises'
 import { runInstall } from '../../core/project/index.js'
@@ -32,7 +33,7 @@ import { CHECK_RULES, checkTask, chooseFromQueue } from './checks.js'
 import { claimTask, undoClaim } from './claim.js'
 import { writeTaskPrompt } from './prompt.js'
 import { releaseTask } from './release.js'
-import { branchState, gateComment, modeOf, updateLine } from './resume.js'
+import { branchState, earlierWork, gateComment, modeOf, updateLine } from './resume.js'
 import { linkLocalFiles, openCheckout, planCheckout, updateCheckout } from './worktree.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
@@ -196,8 +197,10 @@ async function takeFromQueue(scope) {
 
 /**
  * Steps 2 to 7 for a task that passed every check. Each step runs only after the earlier ones
- * succeeded. A worktree that cannot be created undoes the claim (exit 2); a failed install
- * keeps the worktree and the claim (exit 1).
+ * succeeded, except that step 5 decides where the work happens before the claim of step 4, so
+ * that a worktree of the task that `take` cannot reuse stops the run before anything changes
+ * (exit 2). A worktree that cannot be created undoes the claim (exit 2); a failed install keeps
+ * the worktree and the claim (exit 1).
  * @param {CommandContext} ctx
  * @param {CheckScope} scope
  * @param {LocalRecord | null} local
@@ -230,6 +233,9 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
     waitingPulls,
   }
 
+  // Step 5 decides where the work happens before the claim.
+  const plan = await planTaskCheckout(ctx, scope, task, mode)
+
   // Step 4. A fix leaves the task in review (8.3); a resume claims again, which completes a
   // claim left half done and changes nothing otherwise.
   if (mode.kind !== 'fix') {
@@ -242,7 +248,11 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
   const mainRef = `origin/${config.hackwin.project.default_branch}`
   const mainSha = await ctx.git.revParse(`refs/remotes/${mainRef}`)
   progress.main = { ref: mainRef, sha: mainSha }
-  const checkout = await createCheckout(ctx, scope, progress.claim ?? null, { task, mainSha, mode })
+  const checkout = await createCheckout(ctx, scope, progress.claim ?? null, {
+    task,
+    mainSha,
+    checkout: plan,
+  })
   progress.checkout = checkout
   ctx.out.line(checkoutLine(checkout, mainRef, mainSha))
 
@@ -253,6 +263,14 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
     if (line?.warning) ctx.out.warn(line.text)
     else if (line) ctx.out.line(line.text)
   }
+
+  // A take that reuses a branch with earlier work, as after `take N --release`, continues that
+  // work. It is judged before the links and the install add files to the worktree.
+  const earlier =
+    mode.kind === 'take' && checkout.how !== 'create'
+      ? await earlierWork(ctx.git.with({ cwd: checkout.path }), mainSha)
+      : null
+  if (earlier) ctx.out.line(earlierLine(checkout.branch, mainRef, earlier))
 
   progress.links = await linkLocalFiles(main, checkout.path)
   const links = linksLine(progress.links)
@@ -271,7 +289,7 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
   // Step 6.
   const issue = await scope.board.issue(task.number)
   if (issue === null) throw new Error(`#${task.number} disappeared while it was taken`)
-  const kind = await promptKind(ctx, task, mode)
+  const kind = await promptKind(ctx, task, mode, earlier !== null)
   const state =
     kind === 'first'
       ? null
@@ -285,7 +303,7 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
     mode.kind === 'fix'
       ? {
           pull: mode.pull,
-          comment: await gateComment(ctx.github, mode.pull, config.hackwin.team.lead),
+          ...(await gateComment(ctx.github, mode.pull, config.hackwin.team.lead)),
         }
       : null
   progress.prompt = await writeTaskPrompt(ctx, {
@@ -310,14 +328,16 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
 /**
  * The prompt a run composes: the first prompt for a take, and for a resume whose earlier `take`
  * stopped before step 6, so that no prompt file exists yet; otherwise a continue prompt, or a
- * fix prompt for a pull request the Gate handed back (A12).
+ * fix prompt for a pull request the Gate handed back (A12). A take that reuses a branch with
+ * earlier work on it, as after `take N --release`, gets a continue prompt.
  * @param {CommandContext} ctx
  * @param {Task} task
  * @param {TakeMode} mode
+ * @param {boolean} earlier True when a take reuses a branch with earlier work on it.
  * @returns {Promise<PromptKind>}
  */
-async function promptKind(ctx, task, mode) {
-  if (mode.kind === 'take') return 'first'
+async function promptKind(ctx, task, mode, earlier) {
+  if (mode.kind === 'take') return earlier ? 'continue' : 'first'
   if (mode.kind === 'fix') return 'fix'
   try {
     await access(promptPath(ctx.gitCommonDir, task.number))
@@ -329,24 +349,45 @@ async function promptKind(ctx, task, mode) {
 }
 
 /**
- * Step 5: the worktree of the task, created or reused. When it cannot be created, the claim of
- * step 4 is undone and the run exits 2. A fix opens the branch of its pull request.
+ * Step 5, decided before the claim of step 4: the worktree of the task, reused or to be made,
+ * without changing anything. A fix opens the branch of its pull request. A worktree of the task
+ * in a detached state or on another branch, and for a fix a worktree on another branch than the
+ * pull request, exit 2.
+ * @param {CommandContext} ctx
+ * @param {CheckScope} scope
+ * @param {Task} task
+ * @param {TakeMode} mode
+ * @returns {Promise<TaskCheckout>}
+ */
+async function planTaskCheckout(ctx, scope, task, mode) {
+  const pull = mode.kind === 'fix' ? mode.pull : null
+  const checkout = await planCheckout(ctx.git, { main: scope.main, task, branch: pull?.headRef })
+  if (pull === null || checkout.branch === pull.headRef) return checkout
+  throw new PreconditionError(
+    `the worktree of #${task.number} at ${checkout.path} is on ${checkout.branch}, but its pull request #${pull.number} comes from ${pull.headRef}`,
+    {
+      resolve: {
+        command: `git worktree remove ${quoteShellArg(checkout.path)}`,
+        dir: scope.main,
+      },
+      details: { path: checkout.path, branch: checkout.branch, pullBranch: pull.headRef },
+    },
+  )
+}
+
+/**
+ * Step 5: the worktree of the task, created or reused as planned. When it cannot be created, the
+ * claim of step 4 is undone and the run exits 2.
  * @param {CommandContext} ctx
  * @param {CheckScope} scope
  * @param {Claim | null} claim Null for a fix, which claims nothing.
- * @param {{ task: Task, mainSha: string, mode: TakeMode }} options
+ * @param {{ task: Task, mainSha: string, checkout: TaskCheckout }} options
  * @returns {Promise<TaskCheckout>}
  */
-async function createCheckout(ctx, scope, claim, { task, mainSha, mode }) {
-  const pull = mode.kind === 'fix' ? mode.pull : null
-  /** @type {TaskCheckout | null} */
-  let checkout = null
+async function createCheckout(ctx, scope, claim, { task, mainSha, checkout }) {
   try {
-    checkout = await planCheckout(ctx.git, { main: scope.main, task, branch: pull?.headRef })
-    if (pull === null || checkout.branch === pull.headRef) {
-      await openCheckout(ctx.git, checkout, mainSha)
-      return checkout
-    }
+    await openCheckout(ctx.git, checkout, mainSha)
+    return checkout
   } catch (error) {
     let undone = 'the labels did not change'
     if (claim) {
@@ -357,29 +398,15 @@ async function createCheckout(ctx, scope, claim, { task, mainSha, mode }) {
         undone = `the claim could not be undone (${undoError.message}): remove in-progress and your assignment on #${task.number} by hand`
       }
     }
-    const where = checkout ? ` at ${checkout.path}` : ''
     throw new PreconditionError(
-      `the worktree of #${task.number} cannot be created${where}: ${error.message}; ${undone}`,
+      `the worktree of #${task.number} cannot be created at ${checkout.path}: ${error.message}; ${undone}`,
       {
         resolve: { command: `hackwin take ${task.number}`, dir: scope.main },
-        details: { path: checkout?.path ?? null, branch: checkout?.branch ?? null },
+        details: { path: checkout.path, branch: checkout.branch },
         cause: error,
       },
     )
   }
-  // Only a fix whose task already has a worktree on another branch gets here.
-  const other = /** @type {TaskCheckout} */ (checkout)
-  const handedBack = /** @type {PullRequest} */ (pull)
-  throw new PreconditionError(
-    `the worktree of #${task.number} at ${other.path} is on ${other.branch}, but its pull request #${handedBack.number} comes from ${handedBack.headRef}`,
-    {
-      resolve: {
-        command: `git worktree remove ${quoteShellArg(other.path)}`,
-        dir: scope.main,
-      },
-      details: { path: other.path, branch: other.branch, pullBranch: handedBack.headRef },
-    },
-  )
 }
 
 /**
@@ -547,6 +574,22 @@ function checkoutLine(checkout, mainRef, mainSha) {
   }
   const what = checkout.how === 'reuse-worktree' ? 'reused' : 'added for the existing branch'
   return `worktree: ${checkout.path} on ${checkout.branch}, ${what}`
+}
+
+/**
+ * The line that says why a take continues earlier work.
+ * @param {string} branch
+ * @param {string} mainRef
+ * @param {{ commits: number, uncommitted: boolean }} earlier
+ * @returns {string}
+ */
+function earlierLine(branch, mainRef, { commits, uncommitted }) {
+  const parts = []
+  if (commits > 0) {
+    parts.push(`${commits} ${commits === 1 ? 'commit' : 'commits'} that ${mainRef} lacks`)
+  }
+  if (uncommitted) parts.push('uncommitted changes or untracked files')
+  return `${branch} holds earlier work, ${parts.join(' and ')}: the agent continues it`
 }
 
 /**
