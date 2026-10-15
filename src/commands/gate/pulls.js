@@ -19,7 +19,7 @@
 
 import { loadConfig, rolesOf } from '../../core/config/index.js'
 import { RemoteError } from '../../core/runtime/index.js'
-import { scanDiff } from '../../core/secrets/index.js'
+import { scanAddedLines, scanDiff } from '../../core/secrets/index.js'
 import { parseTaskLink } from '../../core/tasks/index.js'
 import { raiseAttention } from './attention.js'
 import { failureComment } from './comment.js'
@@ -135,6 +135,31 @@ export function scanHead(gate, config, { base, head }) {
     { base, head, threeDot: true },
     { extraPatterns: config.hackwin.gate.secret_patterns },
   )
+}
+
+/**
+ * Lines of a log, or of gh's output, with every line that matches a secret pattern (A41) replaced
+ * by a note that names the pattern, never the text, so that no comment, digest line or attention
+ * text carries a secret from a log. The commands of a pull request write these logs.
+ * @param {string[]} lines
+ * @param {Config} config The configuration on main, for `gate.secret_patterns`.
+ * @returns {string[]}
+ */
+export function withoutSecrets(lines, config) {
+  const findings = scanAddedLines(
+    lines.map((text, index) => ({ path: 'log', line: index + 1, text })),
+    { extraPatterns: config.hackwin.gate.secret_patterns },
+  )
+  /** @type {Map<number, string[]>} */
+  const hidden = new Map()
+  for (const { line, pattern } of findings) {
+    if (line !== null) hidden.set(line, [...(hidden.get(line) ?? []), pattern])
+  }
+  return lines.map((text, index) => {
+    const patterns = hidden.get(index + 1)
+    if (patterns === undefined) return text
+    return `[the Gate hides this line: it matches the secret pattern ${patterns.join(', ')}]`
+  })
 }
 
 /**

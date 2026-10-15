@@ -1,8 +1,9 @@
 // Stage 8, CI (9.2; G14; docs/verification.md rows 5, 14 and 16). The Gate sets
 // `gate:waiting-ci` and waits until the required checks succeed on the exact head SHA. A required
 // check is one that the protection read names, or, when it names none, as in soft protection, the
-// check `hackwin` of the CI workflow. The Gate reads the check runs of the head SHA: the newest
-// run of each required check's name, from the app the check is pinned to. A green required check
+// check `hackwin` of the CI workflow from the GitHub Actions app. The Gate reads the check runs of
+// the head SHA: the newest run of each required check's name, from the app the check is pinned
+// to. A check on another commit, an older head included, never counts. A green required check
 // never stands in for the Gate's own stages; they ran before this one.
 //
 // A failed required check reruns the failed jobs of its workflow run with
@@ -14,7 +15,7 @@
 // (5.6). After `gate.ci_timeout_minutes` without success the run fails with `ci-timeout`.
 
 import { join } from 'node:path'
-import { REQUIRED_CHECK } from '../../core/protection/index.js'
+import { ACTIONS_APP_ID, REQUIRED_CHECK } from '../../core/protection/index.js'
 import { RemoteError } from '../../core/runtime/index.js'
 import { namedFlakyTests } from './flaky.js'
 import {
@@ -61,13 +62,14 @@ const PASSED = Object.freeze(['success', 'neutral', 'skipped'])
  */
 
 /**
- * The required checks of a protection read; the check `hackwin` when it names none.
+ * The required checks of a protection read; when it names none, the check `hackwin` from the
+ * GitHub Actions app, which runs the CI workflow (docs/verification.md row 5).
  * @param {Protection} protection
  * @returns {RequiredCheck[]}
  */
 export function requiredChecks(protection) {
   const named = protection.rules.requiredChecks
-  return named.length > 0 ? named : [{ context: REQUIRED_CHECK, integrationId: null }]
+  return named.length > 0 ? named : [{ context: REQUIRED_CHECK, integrationId: ACTIONS_APP_ID }]
 }
 
 /**

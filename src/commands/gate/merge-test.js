@@ -1,11 +1,15 @@
 // Stage 7, the merge test (9.2; G13, G14; A11, A44). The Gate merges the head into the main that
-// stage 6 checked, in its scratch worktree (scratch.js), installs from the cache when the lockfile
-// hash matches, and runs `commands.check` and the task's acceptance tests with `commands.test`.
+// stage 6 checked, in its scratch worktree (scratch.js), and installs. When the merge has main's
+// install key, the install is a copy of main's install from the cache, which the Gate makes on
+// main first when the cache lacks it; any other merge installs on its own. Then it runs
+// `commands.check` and the task's acceptance tests with `commands.test`, in the environment of
+// `projectEnv`, without the Lead's credentials.
 // Each command stops after `gate.step_timeout_minutes`, and the run then fails with the reason
 // `step-timeout`. A failed command fails the run with the command and the last lines of its log in
-// the comment; the full log stays in the Gate's log directory. A command whose log names a known
-// flaky test runs again, up to `gate.ci_rerun_limit` times; when it fails again the result is
-// `flaky` and the pull request is not blamed.
+// the comment, with every line that matches a secret pattern hidden; the full log stays in the
+// Gate's log directory. A command whose log names a known flaky test runs again, up to
+// `gate.ci_rerun_limit` times; when it fails again the result is `flaky` and the pull request is
+// not blamed.
 //
 // Two pull requests that pass alone and fail together are caught here, because the merge test
 // always merges with the newest main (semantic conflicts, 9.2). A new head SHA or `quit` ends the
@@ -16,10 +20,27 @@ import { runAcceptanceTests, runCheck } from '../../core/project/index.js'
 import { parseTaskBlock } from '../../core/tasks/index.js'
 import { inlineCode } from './comment.js'
 import { namedFlakyTests } from './flaky.js'
-import { IN_MAIN_CHECKOUT, STOP, capped, count, listed, retrying, takeCommand } from './pulls.js'
-import { closeScratch, installInScratch, openScratch, projectEnv } from './scratch.js'
+import {
+  IN_MAIN_CHECKOUT,
+  STOP,
+  capped,
+  count,
+  listed,
+  retrying,
+  takeCommand,
+  withoutSecrets,
+} from './pulls.js'
+import {
+  closeScratch,
+  installInScratch,
+  installKey,
+  isCached,
+  openScratch,
+  projectEnv,
+} from './scratch.js'
 import { readText } from './state.js'
 
+/** @import { Config } from '../../core/config/index.js' */
 /** @import { ProjectRun } from '../../core/project/index.js' */
 /** @import { CommentLog } from './comment.js' */
 /** @import { Failure } from './pulls.js' */
@@ -27,6 +48,15 @@ import { readText } from './state.js'
 
 /** How long a log line in a comment may be. */
 const MAX_LINE = 300
+
+/**
+ * How long a command of the merge test or the smoke test may run: `gate.step_timeout_minutes`.
+ * @param {Config} config
+ * @returns {number} Milliseconds.
+ */
+export function stepTimeoutMs(config) {
+  return config.hackwin.gate.step_timeout_minutes * 60_000
+}
 
 /**
  * What a step of the merge test runs: the command's result, the acceptance tests that do not
@@ -45,8 +75,10 @@ export async function mergeTestStage(run) {
   if (tests === STOP) return STOP
   if (!Array.isArray(tests)) return tests
   run.record.tested_main_sha = main
-  const timeoutMs = config.hackwin.gate.step_timeout_minutes * 60_000
-  const env = projectEnv(gate.ctx.env)
+  const timeoutMs = run.tools.stepTimeoutMs(config)
+  const env = await projectEnv(gate)
+  const key = await mainInstall(run, { timeoutMs, env })
+  if (gate.stopping || run.superseded()) return STOP
   const scratch = await openScratch(gate, main)
   try {
     const merge = await scratch.git.merge(sha, {
@@ -65,7 +97,14 @@ export async function mergeTestStage(run) {
     }
 
     const install = await step(run, 'install', async (logFile) => {
-      const installed = await installInScratch(gate, scratch, { config, timeoutMs, logFile, env })
+      const installed = await installInScratch(gate, scratch, {
+        config,
+        key,
+        store: false,
+        timeoutMs,
+        logFile,
+        env,
+      })
       if (installed.cached) gate.line(`#${pr} stage 7, merge test: the install came from the cache`)
       if (installed.notice) gate.line(`#${pr} stage 7, merge test: ${installed.notice}`)
       return installed.run
@@ -91,6 +130,45 @@ export async function mergeTestStage(run) {
   } finally {
     await closeScratch(gate)
   }
+}
+
+/**
+ * The key of main's install when the merge of the head has the same key, after making sure that
+ * the cache holds main's install: the Gate installs on main alone for it when it does not. Null
+ * when the merge installs on its own: its lockfiles or manifests differ from main's, main has no
+ * lockfile, or main's install failed.
+ * @param {PullRun} run
+ * @param {{ timeoutMs: number, env: Record<string, string> }} options
+ * @returns {Promise<string | null>}
+ */
+async function mainInstall(run, { timeoutMs, env }) {
+  const { gate, pr, sha, main, config } = run
+  const key = await installKey(gate.git, main, config)
+  if (key === null) return null
+  const merged = await gate.git.mergeTree(main, sha)
+  if (!merged.clean || (await installKey(gate.git, merged.tree, config)) !== key) return null
+  if (await isCached(gate, key)) return key
+  const scratch = await openScratch(gate, main)
+  try {
+    const installed = await installInScratch(gate, scratch, {
+      config,
+      key,
+      store: true,
+      timeoutMs,
+      logFile: join(gate.files.root, `logs/main/${main.slice(0, 12)}-install.log`),
+      env,
+    })
+    if (!installed.ok) {
+      gate.line(
+        `#${pr} stage 7, merge test: the install on main ${main} failed, so the merge installs on its own`,
+      )
+    }
+  } finally {
+    await closeScratch(gate)
+  }
+  if (!(await isCached(gate, key))) return null
+  gate.line(`#${pr} stage 7, merge test: installed main ${main} for the install cache`)
+  return key
 }
 
 /**
@@ -169,13 +247,13 @@ function commandFailure(run, { name, outcome, file, named, attempts }) {
   ]
   /** @type {CommentLog} */
   const log = {
-    command: outcome.command,
+    command: withoutSecrets([outcome.command], run.config)[0],
     outcome: outcome.timedOut
       ? `stopped after ${minutes} min`
       : outcome.code === null
         ? 'ended by a signal'
         : `exit ${outcome.code}`,
-    tail: outcome.tail.map((line) =>
+    tail: withoutSecrets(outcome.tail, run.config).map((line) =>
       line.length > MAX_LINE ? `${line.slice(0, MAX_LINE)}…` : line,
     ),
     file: `.git/hackwin/gate/${file}`,

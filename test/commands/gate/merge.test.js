@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseGateMarker } from '../../../src/commands/gate/comment.js'
 import { parseDigestLine } from '../../../src/commands/gate/digest.js'
+import { deletableBranch } from '../../../src/commands/gate/merge.js'
 import { quoteShellArg } from '../../../src/core/runtime/index.js'
 import { ONE_APPROVAL } from '../../core/protection/rulesets.js'
-import { rawResult } from '../../harness/index.js'
+import { httpError, rawResult } from '../../harness/index.js'
 import { BUILDER1, BUILDER2, LEAD, createScene, task } from './scene.js'
 
 /** @typedef {import('./scene.js').Scene} Scene */
@@ -670,6 +671,145 @@ describe('1.6d/smoke: the smoke test after a merge', () => {
           resolved_at: expect.any(String),
         }),
       ])
+    },
+    SLOW,
+  )
+})
+
+/**
+ * Merge as GitHub does for `gh pr merge`, through the REST call that the fake answers the same
+ * way, for a handler of `pr merge` that does something first.
+ * @param {Scene} s
+ * @param {string[]} args The arguments of `gh pr merge`.
+ */
+async function mergeAsGitHub(s, args) {
+  const sha = args[args.indexOf('--match-head-commit') + 1]
+  await s.fake.as(LEAD)(
+    ['api', '--method', 'PUT', `repos/{owner}/{repo}/pulls/${args[2]}/merge`, '--input', '-'],
+    { input: JSON.stringify({ sha, merge_method: 'merge' }) },
+  )
+  return rawResult({ code: 0, stdout: '', stderr: '' })
+}
+
+describe('1.6d/after-merge: what the Gate checks around the merge', () => {
+  test('the Gate deletes only a task branch of this repository, never a default branch', () => {
+    const where = { repository: 'acme/app', defaultBranches: ['main', 'trunk'] }
+    const pull = (/** @type {string} */ headRef, headRepo = 'Acme/App') => ({ headRef, headRepo })
+    expect(deletableBranch(pull('task/12-counter-work'), where)).toBe('task/12-counter-work')
+    expect(deletableBranch(pull('main'), where)).toBeNull()
+    expect(deletableBranch(pull('trunk'), where)).toBeNull()
+    expect(deletableBranch(pull('feature/counter'), where)).toBeNull()
+    expect(deletableBranch(pull('task/12-counter-work', 'fork/app'), where)).toBeNull()
+    expect(deletableBranch({ headRef: 'task/12-counter-work', headRepo: null }, where)).toBeNull()
+  })
+
+  test(
+    'a merge onto another main than the tested one raises an attention item',
+    async () => {
+      const s = await scene({ issues: [task(190, 'counter')] })
+      const pull = await shipped(s, {
+        issue: 190,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/u.js': 'export const u = 1\n' },
+      })
+      /** @type {string | null} */
+      let moved = null
+      // Main moves after stage 9, just before GitHub merges.
+      const remove = s.fake.on('pr merge', async ({ args }) => {
+        remove()
+        moved = await s.push('main', { files: { 'docs/late.md': '# Late\n' } })
+        return mergeAsGitHub(s, args)
+      })
+      await s.start()
+      await s.ended(pull.pr, 'merged')
+      await s.until(() => s.state().attention.length > 0, 'the attention item')
+      await s.quit()
+      const tested = s.state().prs[String(pull.pr)].tested_main_sha
+      const merge = /** @type {any} */ (s.fake.find(pull.pr)).pull.mergeCommitSha
+      expect(tested).not.toBe(moved)
+      expect(s.out).toContain(
+        `ATTENTION repeated-failure #${pull.pr}: #${pull.pr} was merged onto main ${String(moved).slice(0, 12)}, not onto ${tested.slice(0, 12)}, which the Gate tested: main moved between stage 9 and the merge, and GitHub cannot pin the base of a merge; the merge commit ${merge.slice(0, 12)} is untested, so check main`,
+      )
+      expect(s.merges()).toEqual([{ pr: pull.pr, sha: pull.head, admin: true, code: 0 }])
+    },
+    SLOW,
+  )
+
+  test(
+    'a fetch of main that fails after the merge raises an attention item, since the smoke test did not run',
+    async () => {
+      const s = await scene({
+        issues: [task(192, 'counter')],
+        configure: (hackwin) => {
+          hackwin.commands.smoke = 'node -e 0'
+        },
+      })
+      const pull = await shipped(s, {
+        issue: 192,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/v.js': 'export const v = 1\n' },
+      })
+      // After the merge, the Lead's clone can no longer reach the origin.
+      const remove = s.fake.on('pr merge', async ({ args }) => {
+        remove()
+        const answer = await mergeAsGitHub(s, args)
+        await s.fixture.git.run(['remote', 'set-url', 'origin', join(s.fixture.origin, 'gone')])
+        return answer
+      })
+      await s.start()
+      await s.ended(pull.pr, 'merged')
+      await s.until(() => s.state().attention.length > 0, 'the attention item')
+      await s.quit()
+      expect(s.out).toContain(
+        `ATTENTION repeated-failure #${pull.pr}: main was not fetched after the merge of #${pull.pr} (`,
+      )
+      expect(s.out).toContain(
+        'so the Gate did not check that the merge commit has the tested main as its first parent and did not run the smoke test; fetch main and check it',
+      )
+      expect(s.state().last_smoke).toEqual({ main_sha: null, result: null })
+    },
+    SLOW,
+  )
+
+  test(
+    'a protection read that fails before the merge is made again, and the Gate never merges on the read of its start',
+    async () => {
+      const s = await scene({ issues: [task(194, 'counter')] })
+      await s.start()
+      // After the start, the Lead's account can bypass another rule, and reads fail for a while.
+      const restriction = /** @type {any} */ (
+        s.fake.state.rulesets.find((ruleset) => ruleset.name === 'hackwin-update-restriction')
+      )
+      restriction.rules.push(ONE_APPROVAL)
+      let failed = 0
+      const remove = s.fake.on('GET repos/{owner}/{repo}/rules/branches/:branch*', () => {
+        failed += 1
+        throw httpError(502, 'Server Error')
+      })
+      const pull = await shipped(s, {
+        issue: 194,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/w.js': 'export const w = 1\n' },
+      })
+      await s.poll()
+      await s.until(
+        () => s.out.includes(`#${pull.pr} stage 10, merge: failed, the Gate tries again in 5 s`),
+        'the failed read',
+      )
+      expect(failed).toBe(1)
+      expect(s.merges()).toEqual([])
+      remove()
+      await s.advanceUntil(() => s.digest().length > 0, 'the end of the run')
+      await s.ended(pull.pr, 'failed')
+      await s.quit()
+      expect(s.merges()).toEqual([])
+      expect(parseDigestLine(s.digest()[0])).toMatchObject({
+        stage: 'merge',
+        note: 'merge-refused: rules the Lead can bypass',
+      })
     },
     SLOW,
   )

@@ -10,19 +10,23 @@
 // that the Lead's account cannot bypass, so before each such merge the Gate reads the protection
 // again and merges only while `bypassable` is empty. A head that moved sends the pull request to
 // the back of the queue with its new SHA; any other refusal fails the run with `merge-refused`.
-// Then the Gate deletes the remote branch.
+// Then the Gate deletes the remote branch: only a task branch of this repository, never a default
+// branch.
 //
 // Stage 11 sets `gate:merged`, closes the task issue, sets the dependents whose dependencies are
 // all closed from `blocked` to `ready` (I12), closes the pull request's attention items that close
-// with it (9.6), makes sure the scratch worktree is gone, writes the digest line and runs
+// with it (9.6), makes sure the scratch worktree is gone and writes the digest line. Then it
+// fetches the new main and raises a repeated failure attention item when the merge commit's first
+// parent is not the main that stage 7 tested, since GitHub merges onto the main it has, and runs
 // `commands.smoke` on the new main when it is set. A failed smoke test raises a repeated failure
-// attention item (A42); the fix arrives as a separate small pull request (G19). A run that stops
-// after the merge, at `quit` or a crash, takes up again at stage 10 without merging a second time.
+// attention item (A42); the fix arrives as a separate small pull request (G19). So does a fetch of
+// main that fails, which leaves both unchecked. A run that stops after the merge, at `quit` or a
+// crash, takes up again at stage 10 without merging a second time.
 
 import { join } from 'node:path'
 import { readProtection } from '../../core/protection/index.js'
 import { RemoteError, execShell } from '../../core/runtime/index.js'
-import { setTaskStatus, toTask } from '../../core/tasks/index.js'
+import { parseBranch, setTaskStatus, toTask } from '../../core/tasks/index.js'
 import { CLOSED_WITH_THE_PULL, closeAttention, raiseAttention } from './attention.js'
 import { inlineCode } from './comment.js'
 import {
@@ -39,10 +43,10 @@ import {
   retrying,
   setGateLabels,
   taskOf,
-  thisRepository,
+  withoutSecrets,
   writeDigest,
 } from './pulls.js'
-import { closeScratch, installInScratch, openScratch, projectEnv } from './scratch.js'
+import { closeScratch, installInScratch, installKey, openScratch, projectEnv } from './scratch.js'
 
 /** @import { PullRequest } from '../../core/github/index.js' */
 /** @import { Failure } from './pulls.js' */
@@ -140,17 +144,37 @@ export async function mergeStage(run) {
 }
 
 /**
+ * The branch of a merged pull request that the Gate may delete, or null: only a task branch of
+ * this repository, and never a default branch, whatever the pull request names.
+ * @param {Pick<PullRequest, 'headRef' | 'headRepo'>} pull
+ * @param {{ repository: string, defaultBranches: string[] }} where `owner/name` of this
+ *   repository; the default branch of hackwin.yml and the one GitHub names.
+ * @returns {string | null}
+ */
+export function deletableBranch(pull, { repository, defaultBranches }) {
+  if (pull.headRepo?.toLowerCase() !== repository.toLowerCase()) return null
+  if (defaultBranches.includes(pull.headRef)) return null
+  if (parseBranch(pull.headRef).kind !== 'task') return null
+  return pull.headRef
+}
+
+/**
  * Delete the remote branch of a merged pull request (G22, A35). A branch that is gone already
- * counts as deleted; a branch of another repository is not the Gate's to delete.
+ * counts as deleted. Only a task branch of this repository is deleted, never a default branch.
  * @param {PullRun} run
  * @param {PullRequest} pull
  * @returns {Promise<typeof STOP | void>}
  */
 async function deleteBranch(run, pull) {
   const { gate, pr } = run
-  const ref = pull.headRef.split('/').map(encodeURIComponent).join('/')
   const deleted = await retrying(run, 'stage 10, merge', async () => {
-    if (pull.headRepo?.toLowerCase() !== (await thisRepository(gate, run.tools))) return false
+    const repository = await gate.ctx.github.repository()
+    const branch = deletableBranch(pull, {
+      repository: repository.nameWithOwner,
+      defaultBranches: [gate.config.hackwin.project.default_branch, repository.defaultBranch],
+    })
+    if (branch === null) return null
+    const ref = branch.split('/').map(encodeURIComponent).join('/')
     try {
       await gate.ctx.github.api(`repos/{owner}/{repo}/git/refs/heads/${ref}`, { method: 'DELETE' })
     } catch (error) {
@@ -158,10 +182,14 @@ async function deleteBranch(run, pull) {
         throw error
       }
     }
-    return true
+    return branch
   })
   if (deleted === STOP) return STOP
-  if (deleted) gate.line(`#${pr} the remote branch ${pull.headRef} is deleted`)
+  gate.line(
+    deleted === null
+      ? `#${pr} the branch ${pull.headRef} stays: the Gate deletes only a task branch of this repository, never a default branch`
+      : `#${pr} the remote branch ${deleted} is deleted`,
+  )
 }
 
 /**
@@ -189,7 +217,7 @@ async function requeue(run, pull) {
  */
 function refusal(run, refused, admin) {
   const tail = /** @type {string[] | undefined} */ (refused?.details?.tail)
-  const said = refused === null ? [] : (tail ?? [refused.message])
+  const said = withoutSecrets(refused === null ? [] : (tail ?? [refused.message]), run.config)
   return {
     result: 'failed',
     labels: [],
@@ -264,7 +292,7 @@ export async function afterMergeStage(run) {
     ].join('; '),
   })
   await gate.save()
-  await smoke(run, merge)
+  await checkMain(run, merge)
 }
 
 /**
@@ -302,30 +330,61 @@ async function closeTask(run, task) {
 }
 
 /**
- * `commands.smoke` on the new main (G16), when it is set. A failure raises a repeated failure
- * attention item (A42). A pass closes the items of earlier failed smoke tests: the open repeated
- * failure items of merged pull requests, whose other items closed with their merge.
+ * After the digest line: fetch the new main; raise a repeated failure attention item when the
+ * merge commit's first parent is not the main that stage 7 tested, as when main moved between
+ * stage 9 and the merge, because GitHub merges onto the main it has and a merge cannot be pinned
+ * to a base; then run the smoke test. A fetch that fails raises an attention item as well.
  * @param {PullRun} run
  * @param {string | null} merge The merge commit.
  * @returns {Promise<void>}
  */
-async function smoke(run, merge) {
+async function checkMain(run, merge) {
   const { gate, pr, config } = run
   const command = config.hackwin.commands.smoke
-  if (typeof command !== 'string' || command.trim() === '') return
-  /** @type {string | null} */
-  let main = null
+  const smokes = typeof command === 'string' && command.trim() !== ''
+  /** @type {string} */
+  let main
   try {
-    const fetched = await fetchMain(gate)
-    main = merge !== null && (await gate.git.tryRevParse(`${merge}^{commit}`)) ? merge : fetched
+    main = await fetchMain(gate)
   } catch (error) {
-    gate.line(
-      `#${pr} smoke test: main was not fetched, so the smoke test did not run: ${messageOf(error)}`,
-    )
+    const [why] = withoutSecrets([messageOf(error)], config)
+    await raiseAttention(gate, run.tools.notifier, {
+      type: 'repeated-failure',
+      pr,
+      todo: `main was not fetched after the merge of #${pr} (${why}), so the Gate did not check that the merge commit has the tested main as its first parent${smokes ? ' and did not run the smoke test' : ''}; fetch main and check it`,
+    })
+    await gate.save()
     return
   }
-  const timeoutMs = config.hackwin.gate.step_timeout_minutes * 60_000
-  const env = projectEnv(gate.ctx.env)
+  const local = merge === null ? null : await gate.git.tryRevParse(`${merge}^{commit}`)
+  if (merge !== null && local !== null && run.main !== '') {
+    const parent = await gate.git.tryRevParse(`${merge}^1`)
+    if (parent !== null && parent !== run.main) {
+      await raiseAttention(gate, run.tools.notifier, {
+        type: 'repeated-failure',
+        pr,
+        todo: `#${pr} was merged onto main ${parent.slice(0, 12)}, not onto ${run.main.slice(0, 12)}, which the Gate tested: main moved between stage 9 and the merge, and GitHub cannot pin the base of a merge; the merge commit ${merge.slice(0, 12)} is untested, so check main${smokes ? ' (the smoke test runs on it)' : ''}`,
+      })
+      await gate.save()
+    }
+  }
+  if (smokes) await smoke(run, local ?? main, command)
+}
+
+/**
+ * `commands.smoke` on the new main (G16). A failure raises a repeated failure attention item
+ * (A42). A pass closes the items of earlier failed smoke tests: the open repeated failure items of
+ * merged pull requests, whose other items closed with their merge.
+ * @param {PullRun} run
+ * @param {string} main The new main: the merge commit.
+ * @param {string} command `commands.smoke`.
+ * @returns {Promise<void>}
+ */
+async function smoke(run, main, command) {
+  const { gate, pr, config } = run
+  const timeoutMs = run.tools.stepTimeoutMs(config)
+  const env = await projectEnv(gate)
+  const key = await installKey(gate.git, main, config)
   const logs = `logs/pr-${pr}/${main.slice(0, 12)}`
   const scratch = await openScratch(gate, main)
   /** @type {{ ok: boolean, what: string, tail: string[] }} */
@@ -333,6 +392,8 @@ async function smoke(run, merge) {
   try {
     const installed = await installInScratch(gate, scratch, {
       config,
+      key,
+      store: true,
       timeoutMs,
       logFile: join(gate.files.root, `${logs}-smoke-install.log`),
       env,
@@ -347,9 +408,8 @@ async function smoke(run, merge) {
         logFile: join(gate.files.root, `${logs}-smoke.log`),
       })
       const ok = result.code === 0 && !result.timedOut
-      const how = result.timedOut
-        ? `it ran longer than ${timeoutMs / 60_000} min`
-        : `exit ${result.code}`
+      const minutes = config.hackwin.gate.step_timeout_minutes
+      const how = result.timedOut ? `it ran longer than ${minutes} min` : `exit ${result.code}`
       outcome = { ok, what: how, tail: result.tail }
     }
   } finally {
@@ -368,9 +428,8 @@ async function smoke(run, merge) {
       })
     }
   } else {
-    gate.line(
-      `#${pr} smoke test failed on main ${main}: ${outcome.what}; ${outcome.tail.slice(-1)[0] ?? ''}`,
-    )
+    const [last = ''] = withoutSecrets(outcome.tail.slice(-1), config)
+    gate.line(`#${pr} smoke test failed on main ${main}: ${outcome.what}; ${last}`)
     await raiseAttention(gate, run.tools.notifier, {
       type: 'repeated-failure',
       pr,

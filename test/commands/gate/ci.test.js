@@ -138,7 +138,13 @@ describe('1.6d/ci: CI failures that blame the pull request', () => {
       s.check(pull.head, { conclusion: 'failure', workflowRun: 7004 })
       const actions = s.actions({
         rerun: (id) => s.check(pull.head, { conclusion: 'failure', workflowRun: id }),
-        log: () => 'test\tRun tests\t  FAIL  test/counter.test.js > counts\n',
+        // The known flaky test passed; another test failed.
+        log: () =>
+          [
+            'test\tRun tests\t  ✓ test/clock/tick.test.js (2 tests)',
+            'test\tRun tests\t  FAIL  test/counter.test.js > counts',
+            '',
+          ].join('\n'),
       })
       await s.start()
       await s.until(() => actions.reruns.length === 1, 'the rerun')
@@ -173,6 +179,47 @@ describe('1.6d/ci: CI failures that blame the pull request', () => {
       expect(s.comments(pull.pr)[0].body).toContain(
         `If the failure has nothing to do with the pull request, the Lead types \`retry ${pull.pr}\` in the Gate terminal.`,
       )
+    },
+    SLOW,
+  )
+})
+
+describe('1.6d/ci-checks: which check runs count', () => {
+  test(
+    'without required checks only `hackwin` of GitHub Actions on the exact head counts: not one of another app, not one on an older head',
+    async () => {
+      const s = await scene({ issues: [task(220, 'counter'), task(222, 'todos')], ciTimeout: 1 })
+      // Soft protection: GitHub names no required check.
+      s.fake.state.rulesets = []
+      s.actions()
+      const other = await counterPull(s, 220)
+      s.check(other.head, { appId: 4242 })
+      const branch = 'task/222-todos-work'
+      const older = await s.push(branch, {
+        files: { 'src/features/todos/o.js': 'export const o = 1\n' },
+      })
+      s.check(older)
+      const moved = await s.openPull({ branch, author: BUILDER1, task: 222 })
+      const head = await s.push(branch, {
+        files: { 'src/features/todos/o.js': 'export const o = 2\n' },
+      })
+      await s.start()
+      expect(s.out).toContain('protection: soft')
+      await s.advanceUntil(() => s.digest().length === 2, 'both runs')
+      await s.ended(other.pr, 'failed')
+      await s.ended(moved, 'failed')
+      await s.quit()
+      for (const [pr, sha] of [
+        [other.pr, other.head],
+        [moved, head],
+      ]) {
+        const [comment] = s.comments(Number(pr))
+        expect(parseGateMarker(comment.body)).toMatchObject({ sha, stage: 'ci', result: 'failed' })
+        expect(comment.body).toContain(
+          '(`ci-timeout`). Still waiting for:\n\n- `hackwin`: no run yet',
+        )
+      }
+      expect(s.merges()).toEqual([])
     },
     SLOW,
   )

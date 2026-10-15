@@ -12,10 +12,12 @@
 // does not merge a second time.
 
 import { admitHead, intake } from './intake.js'
+import { stepTimeoutMs as stepTimeoutOf } from './merge-test.js'
 import { createNotifier } from './notify.js'
 import { duration, endFailed, leaveQueue, writeDigest } from './pulls.js'
 import { REPEAT, STAGES, STOP, stageNamed, stageTitle } from './stages.js'
 
+/** @import { Config } from '../../core/config/index.js' */
 /** @import { PullRequest } from '../../core/github/index.js' */
 /** @import { Gate, Pipeline } from './gate.js' */
 /** @import { Notifier } from './notify.js' */
@@ -38,14 +40,21 @@ import { REPEAT, STAGES, STOP, stageNamed, stageTitle } from './stages.js'
  *   intake does, for a run that found it: the head moved before the merge (stage 10).
  * @property {() => Promise<void>} nextIntake Settles when the next intake has ended, so that a
  *   run that waits sees at once when intake took its pull request away.
+ * @property {(config: Config) => number} stepTimeoutMs How long a command of the merge test or
+ *   the smoke test may run, in milliseconds.
  */
 
 /**
  * The pipeline of stages 1 to 11.
- * @param {{ notifier?: Notifier }} [options] The notifier; the one of this machine by default.
+ * @param {{ notifier?: Notifier, stepTimeoutMs?: (config: Config) => number }} [options] The
+ *   notifier, the one of this machine by default; the step timeout, `gate.step_timeout_minutes`
+ *   by default.
  * @returns {Pipeline}
  */
-export function createPipeline({ notifier = createNotifier() } = {}) {
+export function createPipeline({
+  notifier = createNotifier(),
+  stepTimeoutMs = stepTimeoutOf,
+} = {}) {
   /** @type {Array<() => void>} */
   let waiting = []
   /** @type {Tools} */
@@ -57,6 +66,7 @@ export function createPipeline({ notifier = createNotifier() } = {}) {
     repository: null,
     admit: (gate, pull) => admitHead(gate, tools, pull),
     nextIntake: () => new Promise((resolve) => waiting.push(resolve)),
+    stepTimeoutMs,
   }
   return {
     intake: async (gate) => {

@@ -91,12 +91,17 @@ export function task(number, role, paths = [`src/features/${role}/**`], options 
  *   from 100 on.
  * @param {Record<string, string>} [options.files] More files of the first commit on main.
  * @param {number} [options.patience] How long `until` waits, in milliseconds of real time.
+ * @param {number} [options.stepTimeoutMs] How long a command of the merge test or the smoke test
+ *   may run, in place of `gate.step_timeout_minutes`.
+ * @param {Record<string, string>} [options.env] More variables of the Gate's environment.
  */
 export async function createScene({
   configure,
   issues = [],
   files: mainFiles = {},
   patience = 15_000,
+  stepTimeoutMs,
+  env,
 } = {}) {
   const config = teamConfig(3)
   Object.assign(config.hackwin.commands, QUICK_COMMANDS)
@@ -211,6 +216,7 @@ export async function createScene({
         fake,
         login: LEAD,
         clock: manualClock(),
+        env: { ...fixture.env, ...env },
         options: {
           pipeline: observed(
             createPipeline({
@@ -218,6 +224,7 @@ export async function createScene({
                 notifications.push(notification)
                 return notifyAnswer
               },
+              ...(stepTimeoutMs === undefined ? {} : { stepTimeoutMs: () => stepTimeoutMs }),
             }),
           ),
           keepAwake: noKeepAwake,
@@ -326,12 +333,14 @@ export async function createScene({
     /**
      * A finished check run `hackwin` of GitHub Actions on a commit.
      * @param {string} sha
-     * @param {{ conclusion?: string, workflowRun?: number }} [options] `success` by default; the
-     *   id of its workflow run, its own id by default.
+     * @param {{ conclusion?: string, workflowRun?: number, appId?: number }} [options] `success`
+     *   by default; the id of its workflow run, its own id by default; the app that reports it,
+     *   GitHub Actions by default, which only `actions()` answers with.
      */
-    check(sha, { conclusion = 'success', workflowRun } = {}) {
+    check(sha, { conclusion = 'success', workflowRun, appId } = {}) {
       const run = /** @type {any} */ (fake.addCheckRun(sha, { name: 'hackwin', conclusion }))
       if (workflowRun !== undefined) run.workflowRun = workflowRun
+      if (appId !== undefined) run.appId = appId
       return run
     },
 
@@ -357,7 +366,10 @@ export async function createScene({
               head_sha: params.ref,
               status: run.status,
               conclusion: run.conclusion,
-              app: { id: ACTIONS_APP_ID, slug: 'github-actions' },
+              app:
+                run.appId === undefined
+                  ? { id: ACTIONS_APP_ID, slug: 'github-actions' }
+                  : { id: run.appId, slug: `app-${run.appId}` },
               details_url: url,
               html_url: url,
             }

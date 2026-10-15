@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseGateMarker } from '../../../src/commands/gate/comment.js'
 import { parseDigestLine } from '../../../src/commands/gate/digest.js'
 import { namedFlakyTests } from '../../../src/commands/gate/flaky.js'
+import { stepTimeoutMs } from '../../../src/commands/gate/merge-test.js'
 import { quoteShellArg } from '../../../src/core/runtime/index.js'
 import { BUILDER1, LEAD, createScene, task } from './scene.js'
 
@@ -83,7 +84,7 @@ const CHECK_INSTALL_SCRIPT = [
 
 describe('1.6d/merge-test: the merge test of stage 7', () => {
   test(
-    'the install comes from the cache while the lockfile hash is the same, and runs again when it changes',
+    "a merge with main's lockfiles and manifests gets a copy of main's install from the cache; any other merge installs on its own",
     async () => {
       const installs = join(ownDir(), 'installs.log')
       const s = await scene({
@@ -91,6 +92,7 @@ describe('1.6d/merge-test: the merge test of stage 7', () => {
           task(300, 'counter'),
           task(302, 'todos'),
           task(304, 'shared', ['package-lock.json']),
+          task(306, 'todos'),
         ],
         files: {
           'package.json': '{ "name": "fixture", "private": true }\n',
@@ -105,6 +107,7 @@ describe('1.6d/merge-test: the merge test of stage 7', () => {
       })
       const count = () =>
         existsSync(installs) ? readFileSync(installs, 'utf8').split('\n').length - 1 : 0
+      const start = (await s.fixture.git.revParse('HEAD')).trim()
       const first = await shipped(s, {
         issue: 300,
         role: 'counter',
@@ -120,9 +123,17 @@ describe('1.6d/merge-test: the merge test of stage 7', () => {
       await s.start()
       await s.ended(first.pr, 'merged')
       await s.ended(second.pr, 'merged')
+      // One install, on main alone; both merge tests got a copy of it.
       expect(count()).toBe(1)
-      expect(s.out).toContain(`#${second.pr} stage 7, merge test: the install came from the cache`)
+      expect(s.out).toContain(
+        `#${first.pr} stage 7, merge test: installed main ${start} for the install cache`,
+      )
+      for (const pr of [first.pr, second.pr]) {
+        expect(s.out).toContain(`#${pr} stage 7, merge test: the install came from the cache`)
+      }
+      expect(readdirSync(s.files.cache)).toHaveLength(1)
 
+      // A merge with another lockfile installs on its own, and its install is not kept.
       const lock = await shipped(s, {
         issue: 304,
         role: 'shared',
@@ -131,11 +142,24 @@ describe('1.6d/merge-test: the merge test of stage 7', () => {
       })
       await s.poll()
       await s.ended(lock.pr, 'merged')
-      await s.quit()
       expect(count()).toBe(2)
       expect(s.out).not.toContain(
         `#${lock.pr} stage 7, merge test: the install came from the cache`,
       )
+      expect(readdirSync(s.files.cache)).toHaveLength(1)
+
+      // Main has the new lockfile now: the next merge test makes main's install for the cache.
+      const fourth = await shipped(s, {
+        issue: 306,
+        role: 'todos',
+        author: BUILDER1,
+        files: { 'src/features/todos/j.js': 'export const j = 3\n' },
+      })
+      await s.poll()
+      await s.ended(fourth.pr, 'merged')
+      await s.quit()
+      expect(count()).toBe(3)
+      expect(s.out).toContain(`#${fourth.pr} stage 7, merge test: the install came from the cache`)
       const cached = readdirSync(s.files.cache)
       expect(cached).toHaveLength(2)
       for (const key of cached) {
@@ -147,6 +171,184 @@ describe('1.6d/merge-test: the merge test of stage 7', () => {
       expect(existsSync(join(s.files.worktrees, 'scratch'))).toBe(false)
       const worktrees = await s.fixture.git.worktreeList()
       expect(worktrees.map((worktree) => worktree.path)).toEqual([worktrees[0].path])
+    },
+    SLOW,
+  )
+
+  test(
+    'no run starts from files that the commands of a pull request changed, after a failed run or a merged one',
+    async () => {
+      const installs = join(ownDir(), 'installs.log')
+      const s = await scene({
+        issues: [task(330, 'counter'), task(332, 'counter'), task(334, 'todos')],
+        files: {
+          'package.json': '{ "name": "fixture", "private": true }\n',
+          'package-lock.json': '{ "lockfileVersion": 3, "version": 1 }\n',
+          'install.mjs': INSTALL_SCRIPT,
+          'check-poison.mjs': [
+            "import { existsSync, writeFileSync } from 'node:fs'",
+            "if (existsSync('node_modules/poison.txt')) {",
+            "  console.error('node_modules holds a file that the commands of a pull request wrote')",
+            '  process.exit(1)',
+            '}',
+            "if (existsSync('src/features/counter/poison.js')) {",
+            "  writeFileSync('node_modules/poison.txt', 'written by the check of a pull request')",
+            '}',
+            "if (existsSync('src/features/counter/fail.js')) process.exit(1)",
+            '',
+          ].join('\n'),
+        },
+        configure: (hackwin) => {
+          hackwin.commands.install = `node install.mjs ${quoteShellArg(installs)}`
+          hackwin.commands.check = 'node check-poison.mjs'
+        },
+      })
+      const failing = await shipped(s, {
+        issue: 330,
+        role: 'counter',
+        author: BUILDER1,
+        files: {
+          'src/features/counter/poison.js': 'export const poison = 1\n',
+          'src/features/counter/fail.js': 'export const fail = 1\n',
+        },
+      })
+      const merging = await shipped(s, {
+        issue: 332,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/poison.js': 'export const poison = 2\n' },
+      })
+      const later = await shipped(s, {
+        issue: 334,
+        role: 'todos',
+        author: BUILDER1,
+        files: { 'src/features/todos/k.js': 'export const k = 1\n' },
+      })
+      await s.start()
+      await s.ended(failing.pr, 'failed')
+      await s.ended(merging.pr, 'merged')
+      await s.ended(later.pr, 'merged')
+      await s.quit()
+      const [key] = readdirSync(s.files.cache)
+      expect(existsSync(join(s.files.cache, key, 'files', 'node_modules', 'poison.txt'))).toBe(
+        false,
+      )
+      expect(s.comments(later.pr)).toEqual([])
+    },
+    SLOW,
+  )
+
+  test(
+    'the comment hides every log line that matches a secret pattern, built-in or of the team',
+    async () => {
+      const token = ['ghp', 'a1B2c3D4'.repeat(5)].join('_')
+      const teamSecret = ['hwtest', 'q7w3e9r1t5y2u8i4o6p0a1s3'].join('_')
+      // The secrets are built while the check runs, so that neither is in its command line.
+      const script = [
+        "console.log('before the secrets')",
+        "console.log('token ' + ['ghp', 'a1B2c3D4'.repeat(5)].join('_'))",
+        "console.log('team ' + ['hwtest', 'q7w3e9r1t5y2u8i4o6p0a1s3'].join('_'))",
+        "console.log('after the secrets')",
+        'process.exit(1)',
+      ].join('; ')
+      const s = await scene({
+        issues: [task(340, 'counter')],
+        configure: (hackwin) => {
+          hackwin.commands.check = `node -e ${quoteShellArg(script)}`
+          hackwin.gate.secret_patterns = ['hwtest_[a-z0-9]{24}']
+        },
+      })
+      const pull = await shipped(s, {
+        issue: 340,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/t.js': 'export const t = 1\n' },
+      })
+      await s.start()
+      await s.ended(pull.pr, 'failed')
+      await s.quit()
+      const [comment] = s.comments(pull.pr)
+      expect(comment.body).not.toContain(token)
+      expect(comment.body).not.toContain(teamSecret)
+      expect(comment.body).toContain(
+        [
+          'before the secrets',
+          '[the Gate hides this line: it matches the secret pattern github-token]',
+          '[the Gate hides this line: it matches the secret pattern gate.secret_patterns[0]]',
+          'after the secrets',
+        ].join('\n'),
+      )
+      for (const text of [...s.digest(), JSON.stringify(s.state().attention), s.out]) {
+        expect(text).not.toContain(token)
+        expect(text).not.toContain(teamSecret)
+      }
+    },
+    SLOW,
+  )
+
+  test(
+    "the project's commands run without the Lead's tokens, SSH agent, gh login or git credential helper",
+    async () => {
+      const out = join(ownDir(), 'env.json')
+      const s = await scene({
+        issues: [task(350, 'counter')],
+        env: {
+          GH_TOKEN: 'gh-token-of-the-lead',
+          NPM_TOKEN: 'npm-token-of-the-lead',
+          SSH_AUTH_SOCK: '/tmp/agent-of-the-lead.sock',
+          LC_ALL: 'C',
+        },
+        files: {
+          'check-env.mjs': [
+            "import { execFileSync } from 'node:child_process'",
+            "import { writeFileSync } from 'node:fs'",
+            'const git = (args) => {',
+            "  try { return execFileSync('git', args, { encoding: 'utf8' }).trim() } catch { return '' }",
+            '}',
+            'writeFileSync(process.argv[2], JSON.stringify({',
+            '  env: process.env,',
+            "  helpers: git(['config', '--get-all', 'credential.helper']),",
+            "  name: git(['config', 'user.name']),",
+            '}))',
+            '',
+          ].join('\n'),
+        },
+        configure: (hackwin) => {
+          hackwin.commands.check = `node check-env.mjs ${quoteShellArg(out)}`
+        },
+      })
+      // The Lead's own git configuration has a credential helper.
+      appendFileSync(
+        /** @type {string} */ (s.fixture.env.GIT_CONFIG_GLOBAL),
+        '[credential]\n\thelper = store\n',
+      )
+      const pull = await shipped(s, {
+        issue: 350,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/e.js': 'export const e = 1\n' },
+      })
+      await s.start()
+      await s.ended(pull.pr, 'merged')
+      await s.quit()
+      const seen = JSON.parse(readFileSync(out, 'utf8'))
+      const home = join(s.files.root, 'home')
+      for (const name of ['GH_TOKEN', 'NPM_TOKEN', 'SSH_AUTH_SOCK', 'GH_REPO']) {
+        expect(seen.env[name]).toBeUndefined()
+      }
+      expect(seen.env).toMatchObject({
+        HOME: home,
+        GH_CONFIG_DIR: join(home, '.config', 'gh'),
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: join(home, '.gitconfig'),
+        GIT_SSH_COMMAND: 'false',
+        GIT_TERMINAL_PROMPT: '0',
+        LC_ALL: 'C',
+        PATH: s.fixture.env.PATH,
+      })
+      expect(readdirSync(join(home, '.config', 'gh'))).toEqual([])
+      expect(seen.helpers).toBe('')
+      expect(seen.name).toBe('HackWin Gate')
     },
     SLOW,
   )
@@ -242,46 +444,57 @@ describe('1.6d/merge-test: the merge test of stage 7', () => {
 })
 
 describe('1.6d/step-timeout: a command of the merge test that runs too long', () => {
-  // `gate.step_timeout_minutes` takes whole minutes, so this test waits one minute for the
-  // timeout. The command only sleeps meanwhile.
-  test('is stopped after gate.step_timeout_minutes and fails the run with step-timeout', async () => {
-    const s = await scene({
-      issues: [task(320, 'counter')],
-      patience: 150_000,
-      configure: (hackwin) => {
-        hackwin.gate.step_timeout_minutes = 1
-        hackwin.commands.check = `node -e ${quoteShellArg("console.log('waiting'); setTimeout(() => {}, 600000)")}`
-      },
-    })
-    const pull = await shipped(s, {
-      issue: 320,
-      role: 'counter',
-      author: BUILDER1,
-      files: { 'src/features/counter/s.js': 'export const s = 1\n' },
-    })
-    await s.start()
-    await s.ended(pull.pr, 'failed')
-    await s.quit()
-    const [comment] = s.comments(pull.pr)
-    expect(comment.body).toContain(
-      'the check ran longer than `gate.step_timeout_minutes`, 1 min, on the merge of the head with main',
-    )
-    expect(comment.body).toContain('(`step-timeout`)')
-    expect(comment.body).toContain(', stopped after 1 min. The last line of its log:')
-    expect(comment.body).toContain('\nwaiting\n')
-    expect(parseDigestLine(s.digest()[0])).toMatchObject({
-      stage: 'merge-test',
-      note: 'step-timeout: check',
-    })
-  }, 240_000)
+  test(
+    'is stopped after the step timeout and fails the run with step-timeout',
+    async () => {
+      // The pipeline's step timeout of one second stands in for `gate.step_timeout_minutes`.
+      const s = await scene({
+        issues: [task(320, 'counter')],
+        stepTimeoutMs: 1000,
+        configure: (hackwin) => {
+          hackwin.commands.check = `node -e ${quoteShellArg("console.log('waiting'); setTimeout(() => {}, 600000)")}`
+        },
+      })
+      const pull = await shipped(s, {
+        issue: 320,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/s.js': 'export const s = 1\n' },
+      })
+      await s.start()
+      await s.ended(pull.pr, 'failed')
+      await s.quit()
+      const [comment] = s.comments(pull.pr)
+      expect(comment.body).toContain(
+        'the check ran longer than `gate.step_timeout_minutes`, 20 min, on the merge of the head with main',
+      )
+      expect(comment.body).toContain('(`step-timeout`)')
+      expect(comment.body).toContain(', stopped after 20 min. The last line of its log:')
+      expect(comment.body).toContain('\nwaiting\n')
+      expect(parseDigestLine(s.digest()[0])).toMatchObject({
+        stage: 'merge-test',
+        note: 'step-timeout: check',
+      })
+    },
+    SLOW,
+  )
+
+  test('gate.step_timeout_minutes is the step timeout in minutes', () => {
+    const config = (/** @type {number} */ minutes) =>
+      /** @type {any} */ ({ hackwin: { gate: { step_timeout_minutes: minutes } } })
+    expect(stepTimeoutMs(config(1))).toBe(60_000)
+    expect(stepTimeoutMs(config(20))).toBe(1_200_000)
+  })
 })
 
 describe('1.6d/flaky: the known flaky tests a log names', () => {
-  test('an entry counts as written, or as a glob that matches a path of the log', () => {
+  test('an entry counts only in a failure line, as written or as a glob that matches a path', () => {
     const log = [
       ' FAIL  ./test/clock/tick.test.js:12:5 > ticks once a second',
-      '  ✓ counter > counts (3 ms)',
-      'Error in "slow network (retry)"',
+      '  ✓ test/clock/tock.test.js > tocks (3 ms)',
+      '  × counter > counts 12ms',
+      'not ok 3 - slow network (retry)',
+      '  ✓ test/todos/list.test.js',
     ].join('\n')
     expect(
       namedFlakyTests(log, [
@@ -293,5 +506,13 @@ describe('1.6d/flaky: the known flaky tests a log names', () => {
         '',
       ]),
     ).toEqual(['test/clock/**', 'counter > counts', 'slow network (retry)'])
+  })
+
+  test('a passing line of a known flaky test does not make another failure flaky', () => {
+    const log = [
+      '  ✓ test/clock/tick.test.js (2 tests)',
+      ' FAIL  test/counter.test.js > counts',
+    ].join('\n')
+    expect(namedFlakyTests(log, ['test/clock/**', 'test/clock/tick.test.js'])).toEqual([])
   })
 })
