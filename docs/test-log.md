@@ -17,6 +17,27 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Shared follow-up 4: an issue is a task only when a team member wrote it, and safe task block errors (PR #77, issue #74)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/74-shared-follow-up-4`, created by the integrator from `2a9d7e1`; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `7fad4d9`, on `2a9d7e1`. PR #73 was merged at 06:46 UTC, a few minutes after the session's first fetch and push, and the run after merging it (`79f1107`) failed `1.6f/terminal` in a lane C file. That test pinned the old wording of a task block error.
+  - The session stopped and reported to `lead-55`. Six minutes later a scope change on #74 allowed one line of `test/commands/status/review.test.js`, an exception to the ownership rule of `AGENTS.md` decided by the Lead and named in the PR. The same scope change added the bidi format characters to the escaped ones. `440843e` did both; PR #77 opened at 06:56:02 UTC.
+  - `lead-55` sent `merge #77` with the head SHA by SendMessage. Its review:
+    - `writtenByTeam` accepts `team.lead` or a member, compared without case, and gives false for a missing author. `toTask` returns no task without reading an outsider's body.
+    - `checkTaskLink` fails with `invalid-task-block` and `{ author, member: false }`.
+    - `parseTaskBlock` escapes C0, DEL, C1, U+2028, U+2029 and the bidi format characters.
+    - It read the cross-role diff: only the expected line changed.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 7 files inside issue #74's paths, the change in `review.test.js` one line (+1/-1); no secret pattern; no conflict with `6b6ba40`. Step 6, with the PR merged into `6b6ba40`, beside 11 vitest processes of other sessions (load average 9.78 at the start, 31.27 at the end): `npm test` passed 808 of 808, and `npm run test:ac` passed 1.3b/task-author (4), 1.3b/task-block-errors (16) and 1.6f/terminal (2). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge: worktrees for #75 and #76 at `61a2233`, and two new issues: #78 (milestones in the fake GitHub, integrator) and #79 (1.6g: `status` through `writtenByTeam`, and the harness milestones, lane C, after #78).
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - A new reason code for an outsider's issue fails the type check in two lane files (6 errors, measured), so the code stays `invalid-task-block` with the author in its details.
+  - A cross-role test: #73 merged while #74 ran and pinned the old error wording in a lane C file. The ownership rule allowed no fix inside #74 until the Lead's exception.
+  - The integrator's issue text of #74 was incomplete. It named `internal ci` as the only direct caller of `parseTaskBlock`, but the Gate's stage 7 is another (`src/commands/gate/merge-test.js:185`), and the integrator's own search had shown it. The search had not covered `ship` and `join`, which also read through `toTask`. Scope changes on #24, #75 and #76 added them. The issue also said PR #73 filters outsiders' issues: the head the session first read (`f9ac273`) had no such filter, which came with the review commit `229ed9a`.
+  - The session's `npm test` took 178 s (load average 14.3, 11 vitest processes of other sessions), 147 s, and 114 s (load average 1.7).
+- Measured: PR open 5 min 56 s (06:56:02 to 07:01:58 UTC); 3 commits (one a merge of `origin/main`), 1 PR run (105 s), 0 conflicts; local merge test `npm test` 173.73 s; the run on main after the merge 104 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/77; head `440843e`; merge commit `61a2233`; runs `38695442116` (PR) and `38696069349` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.6f, status (PR #73, issue #25)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/25-status`, created by the integrator from `15d3b88` after the merge of #69; `lead-55` opened the session. The integrator's planning session for the merge.
