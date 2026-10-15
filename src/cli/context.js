@@ -4,6 +4,8 @@
 //
 // It receives a CommandContext, returns a CommandResult (or nothing), or throws a typed error
 // from src/core/runtime. The runner turns the result or the error into output and an exit code.
+// A user command may also export `unreachable(ctx, error)`, which the runner calls when GitHub is
+// unreachable before `run` (CommandUnreachable below).
 
 import { readFileSync } from 'node:fs'
 import { createGit } from '../core/git/index.js'
@@ -15,6 +17,7 @@ import { detectCallerKind } from '../core/runtime/caller.js'
 /** @import { GhExecutor, GitHub } from '../core/github/index.js' */
 /** @import { CallerKind } from '../core/runtime/caller.js' */
 /** @import { Clock } from '../core/runtime/clock.js' */
+/** @import { RemoteError } from '../core/runtime/errors.js' */
 /** @import { Output } from '../core/runtime/output.js' */
 
 /**
@@ -48,6 +51,22 @@ import { detectCallerKind } from '../core/runtime/caller.js'
  */
 
 /** @typedef {(ctx: CommandContext) => Promise<CommandResult | void>} CommandRun */
+
+/**
+ * What a command prints when GitHub is unreachable.
+ * @typedef {object} UnreachableResult
+ * @property {string[]} [lines] Printed one per line before the error; with --json the `lines` of
+ *   the error's JSON document.
+ * @property {unknown} [data] With --json the `data` of the error's JSON document.
+ */
+
+/**
+ * The optional second export of a user command's module. When preparing the context fails with
+ * a RemoteError (the fetch of origin, or `gh api user`), the runner calls it instead of `run`,
+ * with the context it built, which has no config and no identity, prints what it returns before
+ * the error and exits 3. `status` uses it for the local heartbeat (7.6).
+ * @typedef {(ctx: CommandContext, error: RemoteError) => Promise<UnreachableResult | void>} CommandUnreachable
+ */
 
 /** The root of the hackwin package. */
 export const PACKAGE_ROOT = new URL('../../', import.meta.url)

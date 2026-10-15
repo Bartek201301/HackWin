@@ -132,6 +132,27 @@ It returns a result or throws a typed error (section 3.4). It never calls `proce
 | `lines` | string[] | The short output (CM6), printed one per line without `--json` |
 | `data` | any | The full machine readable result, printed with `--json` |
 
+**When GitHub is unreachable** (#71). A user command's module may also export a second function, `CommandUnreachable` in `src/cli/context.js`:
+
+```js
+/** @import { CommandContext, UnreachableResult } from '../../cli/context.js' */
+/** @import { RemoteError } from '../../core/runtime/errors.js' */
+
+/**
+ * @param {CommandContext} ctx Without `config` and `identity`.
+ * @param {RemoteError} error The error of the preparation.
+ * @returns {Promise<UnreachableResult | void>}
+ */
+export async function unreachable(ctx, error) {}
+```
+
+- The runner calls it only when preparing the context (section 3.6, step 4) throws a `RemoteError`: the fetch of `origin`, or `gh api user` for the identity. It then loads the module although the preparation failed and calls `unreachable`; `run` is not called.
+- `ctx` is the context the runner built, without `config` and `identity`, also when the configuration was loaded before `gh api user` failed. The function reads only local state.
+- It returns `{ lines, data }`, both optional, or nothing. Without `--json` the runner prints the lines on stdout, then the error on stderr as for any error. With `--json` the one document is the error's, with the lines and data added (section 3.3). The exit code is 3, the `RemoteError`'s.
+- An error that the module or the function throws is reported in place of the `RemoteError`, as an error of `run` is.
+- The error alone is printed, as for any error, when the module does not export `unreachable`, when it does not exist yet (the `RemoteError`, not `not built yet`), for a plumbing command (which the runner does not prepare, section 3.6), and for a `RemoteError` that `run` throws after the preparation succeeded.
+- `status` exports it to print the local heartbeat on the Lead's laptop while GitHub is unreachable (7.6, #25).
+
 ### 3.3 Output
 
 - Short by default (CM6): the runner prints `result.lines` on stdout. With `--json` stdout carries exactly one JSON document:
@@ -141,7 +162,11 @@ It returns a result or throws a typed error (section 3.4). It never calls `proce
   { "command": "take", "ok": false, "exitCode": 1, "error": { "kind": "blocked", "message": "...", "rule": "...", "objects": ["..."], "resolve": { "command": "...", "dir": "..." } }, "warnings": [] }
   ```
 
-  `command` is null when the command line itself is wrong. The fields of `error` are those of section 3.4.
+  `command` is null when the command line itself is wrong. The fields of `error` are those of section 3.4. After an `unreachable` function (section 3.2) the error's document also has `lines` (empty when it returned none) and `data` (null when it returned none), before `error`:
+
+  ```json
+  { "command": "status", "ok": false, "exitCode": 3, "lines": ["..."], "data": {}, "error": { "kind": "remote", "message": "...", "details": { "status": null, "tail": ["..."] } }, "warnings": [] }
+  ```
 - `ctx.out.line(text)` prints a progress or report line while the command runs: on stdout, or on stderr with `--json`. `ctx.out.write(text)` prints raw text on the same stream, for a question. `ctx.out.warn(text)` prints `warning: <text>` on stderr and adds the text to `warnings`.
 - The runner prints an error on stderr as `hackwin <command>: <message>`, followed by indented lines: for a block the rule, one line per object and `to resolve: ...`; for a configuration error the key; for a remote error the last lines of gh's or git's output; and `to resolve: ...` whenever the error has one. An unexpected error prints `internal error: <message>`; with `HACKWIN_DEBUG=1` also its stack.
 - CM4: every message that tells someone to run something names the directory. `runIn(command, dir)` returns ``run `<command>` in <dir>`` and refuses an empty directory. An error's `resolve` is either `{ command, dir }` or a plain instruction that names no command, such as "ask the Lead to add you to `hackwin.yml`". `dir` is an absolute path, or "any directory" when the place does not matter.
@@ -183,6 +208,8 @@ Any other value of `HACKWIN_CALLER` is ignored. With `--json`, `take` also print
 2. `--version` prints the version; `--help` prints the help. Both exit 0.
 3. Build the context: the top-level directory (outside a git checkout: exit 2), the git common directory, and the GitHub repository from the URL of `origin` (`owner/name`, passed to gh as `GH_REPO`; none for a local remote).
 4. Prepare the context (`prepareContext` in `src/cli/main.js`, filled by task 1.3b): fetch and read `hackwin.yml` and `owners.yml` from `origin/main` (CM9, A17) and validate them (exit 2 naming the key), and the version check (CM12), both through `loadCheckedConfig` of `src/core/config` (section 4.4); the caller's identity (5.4); the fast-forward of the main checkout (CM10). The fetch prunes, so a branch deleted on GitHub leaves no remote-tracking ref for the command to act on, such as the base of a new task branch in `take`. `setup` on a repository without `hackwin.yml` on `origin/main` skips this step; its check for `hackwin.yml` fetches with pruning as well.
+
+   When this step throws a `RemoteError`, the runner loads the command's module all the same and, when it exports `unreachable(ctx, error)`, calls it with the context without `config` and `identity`, prints its lines before the error and exits 3 (section 3.2).
 
    The runner prepares the six user commands only. `internal hook` and `internal ci` get no prepared config, identity, version check or fast-forward, because every hook except `SessionStart` must stay offline (10.4) and in CI the caller is GitHub's token, not a member. Each internal command loads what it needs through `src/core/config` itself: a hook from the local `origin/main` without a fetch, with the member's login recorded locally by `join` (section 5.1); `internal ci` from the base branch and the proposed copy as 10.2 step 1 says, with the pull request's author. 1.4a (#8) decided how a hook applies CM12 without the network: against `cli_version` on the local `origin/main`. `loadCheckedConfig(git, { fetch: false, ... })` of section 4.4 does exactly that, so the hooks and the runner can share one loader.
 5. Load the command's module, run it, print the result or the error, and return the exit code.
@@ -532,7 +559,7 @@ The reader (section 4.11) computes the state from the rules in force, not from t
 
 `prompts/<issue>.md` belongs to lane B (`take`); everything under `gate/` belongs to lane C (6.4). `src/core/state` only names these paths.
 
-`logs/` (`statePaths(dir).logs`) holds the logs of the project commands that a command runs, one directory per command. `ship` writes the logs of its steps 7 and 8 to `logs/ship/<issue>/check.log` and `logs/ship/<issue>/acceptance.log` (`shipLogPath(dir, issue, step)`), replaced on each run; they belong to lane B. The git common directory belongs to the member, so these logs are in no directory that other users of the machine share. Until #57 (1.5f) adopts the path, `ship` writes them to `$TMPDIR/hackwin-ship/<12 hex digits of the SHA-256 of the git common directory>-<issue>/` (PR #43).
+`logs/` (`statePaths(dir).logs`) holds the logs of the project commands that a command runs, one directory per command. `ship` writes the logs of its steps 7 and 8 to `logs/ship/<issue>/check.log` and `logs/ship/<issue>/acceptance.log` (`shipLogPath(dir, issue, step)`), replaced on each run; they belong to lane B. The git common directory belongs to the member, so these logs are in no directory that other users of the machine share. `ship` writes them there since #57 (PR #68), no longer under `$TMPDIR/hackwin-ship/`.
 
 ### 5.7 Gate comment marker
 
@@ -542,7 +569,20 @@ The Gate, the Lead and the Lead's builder sessions all write on GitHub as the Le
 <!-- hackwin:gate-comment pr=<N> sha=<full head SHA> stage=<stage> result=<result> -->
 ```
 
-- `pr`: the pull request's number. `sha`: the full head SHA of the run, 40 lower-case hex digits, or 64 in a SHA-256 repository. `stage`: the stage where the run ended, as `STAGES` of `src/commands/gate/stages.js` names stages 1 to 6: `fetch`, `task-link`, `scope`, `secrets`, `gated-paths`, `conflicts`; a secret found by the scan at intake also has `secrets`. `result`: the digest result of 9.6 that the run ended with; today `scope-violation`, `needs-owner` or `failed`. A stage and a result are lower-case words joined by single hyphens.
+- `pr`: the pull request's number. `sha`: the full head SHA of the run, 40 lower-case hex digits, or 64 in a SHA-256 repository. `stage`: the stage where the run failed, by its name in `STAGES` of `src/commands/gate/stages.js`. `result`: the digest result of 9.6 that the run ended with. A stage and a result are lower-case words joined by single hyphens.
+- The Gate writes a comment only when a run fails (`endFailed` in `src/commands/gate/pulls.js`), so a marker carries one of these stages and results today, since #23 (PR #69):
+
+  | `stage` | Stage | `result` |
+  | --- | --- | --- |
+  | `task-link` | 2 | `failed` |
+  | `scope` | 3 | `scope-violation` |
+  | `secrets` | 4, and the scan at intake | `failed` |
+  | `conflicts` | 6 | `needs-owner` |
+  | `merge-test` | 7 | `failed`; `flaky` when a known flaky test still fails after its reruns; `needs-owner` when the merge conflicts although stage 6 found no conflict |
+  | `ci` | 8 | `failed`, also after `gate.ci_timeout_minutes`; `flaky` when a known flaky test fails after the last rerun |
+  | `merge` | 10 | `failed` |
+
+  The other stages of `STAGES` end no run with a failure, so no marker names them: `fetch` (1) and `freshness` (9) try their fetch again until it succeeds or the run stops; `after-merge` (11) tries its GitHub calls again the same way and reports every other problem as an attention item; `gated-paths` (5) raises attention items and the run goes on. The digest's other results, `merged` and `requeued`, come with no comment. `parseGateMarker` accepts any stage and result of the form above, so a reader keeps working when the Gate adds one.
 - GitHub does not render an HTML comment, and the API returns the body as written.
 - Only the exact marker counts: at the very start of the body, with no space, tab, byte order mark or other character before it; the four keys once each, in this order, with single spaces; nothing else up to the end of its line (`\n`, `\r\n` or the end of the body). A reply that quotes a Gate comment, or a marker in a code block, is no Gate comment.
 
@@ -558,7 +598,7 @@ The Gate, the Lead and the Lead's builder sessions all write on GitHub as the Le
 The module's `failureComment` builds the whole body of a failed run's comment, marker first; only the Gate uses it.
 
 - **Whose marker.** A marker is the Gate's only when the comment's author is `team.lead`. A marker that the Lead types by hand under that account cannot be told apart from the Gate's (A5). A caller that acts on a Gate comment therefore also compares `marker.sha` with the head SHA it acts on.
-- **Who reads it.** `take` (#57, lane B) reads the Gate's comment of a pull request with `latestGateComment` and uses it only when `marker.sha` is the pull request's current head SHA (scope change on #57); until #57 is merged, `gateComment` in `src/commands/take/resume.js` takes the newest comment by `team.lead`. The Gate's restart (#24, lane C) recognizes its own comments the same way, so that no comment is repeated (AC22): by the marker in comments by `team.lead` (`latestGateComment`, or `parseGateMarker` with the same author check), never by the author alone or by a marker in another account's comment, and it compares `marker.sha` with the head SHA where it acts on one.
+- **Who reads it.** `take` (#57, lane B) reads the Gate's comment of a pull request with `latestGateComment`, in `gateComment` of `src/commands/take/resume.js` (PR #68), and uses it only when `marker.sha` is the pull request's current head SHA (scope change on #57). Otherwise its fix prompt quotes no Gate comment and tells the session to ask the Lead what the Gate reported. The Gate's restart (#24, lane C) recognizes its own comments the same way, so that no comment is repeated (AC22): by the marker in comments by `team.lead` (`latestGateComment`, or `parseGateMarker` with the same author check), never by the author alone or by a marker in another account's comment, and it compares `marker.sha` with the head SHA where it acts on one.
 
 ## 6. Decisions of plan section 9
 
