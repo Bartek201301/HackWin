@@ -1,0 +1,27 @@
+# The project's own check, on every pull request and on every push to main.
+# It runs only the project's check. Until the team replaces the placeholder
+# step below, it passes without checking anything.
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # PLACEHOLDER: replace this step with the project's install and check
+      # commands. At HackYeah 2026 this job ran a clean install, the full
+      # project check, and a check that no generated file was left uncommitted:
+      #   - run: npm ci
+      #   - run: npm run check
+      #   - run: git diff --exit-code
+      - name: Project check (placeholder)
+        run: echo "Placeholder check passed. Replace this step with the project's install and check commands."
