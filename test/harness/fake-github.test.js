@@ -381,6 +381,125 @@ describe('1.3d/fake-github: the fake GitHub behind the executor seam', () => {
     ])
   })
 
+  test('milestones: an issue carries its milestone as GitHub returns it on an issue, or null', async () => {
+    const fake = createFakeGitHub({
+      clock: createFakeClock('2026-10-12T10:00:00Z'),
+      milestones: [
+        { number: 1, title: 'Wave 1', due_on: '2026-10-25T10:00:00Z' },
+        { number: 2, title: 'Wave 2', state: 'closed', open_issues: 11, closed_issues: 2 },
+      ],
+      issues: [
+        { number: 10, title: 'First task', milestone: 1 },
+        { number: 11, title: 'Done task', state: 'closed', milestone: 1 },
+        { number: 12, title: 'Without a wave' },
+        { number: 14, title: 'Old task', milestone: 2 },
+      ],
+      pulls: [
+        { number: 13, title: 'First task', head: 'task/10-first', headSha: SHA_A, milestone: 1 },
+      ],
+    })
+    const github = clientOf(fake)
+    /** @param {string} path */
+    const get = (path) => github.api(`repos/{owner}/{repo}/${path}`)
+
+    // The open and closed counts take the pull request too, as GitHub's do.
+    const wave1 = {
+      id: fake.state.milestones[0].id,
+      number: 1,
+      title: 'Wave 1',
+      description: null,
+      state: 'open',
+      open_issues: 2,
+      closed_issues: 1,
+      creator: { login: accounts.lead.login, type: 'User' },
+      html_url: 'https://github.com/hackwin-test/app/milestone/1',
+      created_at: '2026-10-12T10:00:00Z',
+      updated_at: '2026-10-12T10:00:00Z',
+      closed_at: null,
+      due_on: '2026-10-25T10:00:00Z',
+    }
+    expect((await get('issues/10')).milestone).toEqual(wave1)
+    expect((await get('issues/12')).milestone).toBeNull()
+    expect((await get('pulls/13')).milestone).toEqual(wave1)
+    // Counts a milestone gives are returned as given.
+    expect((await get('issues/14')).milestone).toMatchObject({
+      number: 2,
+      state: 'closed',
+      open_issues: 11,
+      closed_issues: 2,
+      closed_at: '2026-10-12T10:00:00Z',
+    })
+
+    const list = await github.api('repos/{owner}/{repo}/issues', { query: { state: 'all' } })
+    expect(
+      list.map((/** @type {any} */ issue) => [issue.number, issue.milestone?.number ?? null]),
+    ).toEqual([
+      [14, 2],
+      [13, 1],
+      [12, null],
+      [11, 1],
+      [10, 1],
+    ])
+    expect(list.find((/** @type {any} */ issue) => issue.number === 10).milestone).toEqual(wave1)
+    expect(list.find((/** @type {any} */ issue) => issue.number === 12)).toHaveProperty(
+      'milestone',
+      null,
+    )
+    /** @param {string} milestone */
+    const numbersOf = async (milestone) =>
+      (await github.api('repos/{owner}/{repo}/issues', { query: { state: 'all', milestone } })).map(
+        (/** @type {any} */ issue) => issue.number,
+      )
+    expect(await numbersOf('1')).toEqual([13, 11, 10])
+    expect(await numbersOf('none')).toEqual([12])
+    expect(await numbersOf('*')).toEqual([14, 13, 11, 10])
+
+    // An issue created or edited with a milestone; one the repository lacks is refused.
+    const created = await github.api('repos/{owner}/{repo}/issues', {
+      method: 'POST',
+      body: { title: 'Second task', milestone: 1 },
+    })
+    expect(created.milestone).toMatchObject({ number: 1, open_issues: 3 })
+    expect((await get(`issues/${created.number}`)).milestone).toMatchObject({ number: 1 })
+    expect((await github.createIssue({ title: 'Plain' })).number).toBe(16)
+    expect((await get('issues/16')).milestone).toBeNull()
+    await expect(
+      github.api('repos/{owner}/{repo}/issues', {
+        method: 'POST',
+        body: { title: 'Lost', milestone: 9 },
+      }),
+    ).rejects.toMatchObject({ status: 422 })
+    const moved = await github.api('repos/{owner}/{repo}/issues/12', {
+      method: 'PATCH',
+      body: { milestone: 1 },
+    })
+    expect(moved.milestone).toMatchObject({ number: 1, open_issues: 4 })
+    const cleared = await github.api('repos/{owner}/{repo}/issues/12', {
+      method: 'PATCH',
+      body: { milestone: null },
+    })
+    expect(cleared.milestone).toBeNull()
+    await expect(
+      github.api('repos/{owner}/{repo}/issues/12', { method: 'PATCH', body: { milestone: 9 } }),
+    ).rejects.toMatchObject({ status: 422 })
+
+    // A test adds one later and sets it on an issue directly.
+    const wave3 = fake.addMilestone({ title: 'Wave 3', description: 'Polish' })
+    expect(wave3).toMatchObject({ number: 3, state: 'open', description: 'Polish' })
+    const issue12 = /** @type {NonNullable<ReturnType<typeof fake.find>>} */ (fake.find(12))
+    issue12.milestone = wave3.number
+    expect((await get('issues/12')).milestone).toMatchObject({
+      number: 3,
+      title: 'Wave 3',
+      description: 'Polish',
+      open_issues: 1,
+      closed_issues: 0,
+    })
+    expect(() =>
+      createFakeGitHub({ issues: [{ number: 1, title: 'Task', milestone: 1 }] }),
+    ).toThrow(/no milestone 1/)
+  })
+
   test('a lane registers handlers for its own calls, and an unknown call fails by name', async () => {
     const fake = createFakeGitHub()
     const github = clientOf(fake)
