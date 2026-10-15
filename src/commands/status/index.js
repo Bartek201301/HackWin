@@ -9,6 +9,7 @@ import { writeLastStatus } from '../../core/state/index.js'
 import { parseStatusBody } from '../gate/status-issue.js'
 import { localHeartbeatLine, statusLines } from './format.js'
 import { readClone, readGitHub, readLocalHeartbeat } from './read.js'
+import { cleanStrings } from './text.js'
 import { buildStatus } from './view.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
@@ -39,10 +40,10 @@ export async function run(ctx) {
 
 /**
  * What `status` prints when GitHub is unreachable (7.6, failure behavior): on the Lead's laptop
- * the Gate's local heartbeat, before the error exits 3. `run` calls it when a GitHub read fails;
- * the runner is to call it when preparing the context fails with a RemoteError, before this
- * module's `run` (the wiring is pending, #25). So it uses only `gitCommonDir` and `clock` of the
- * context: no network, no configuration and no identity.
+ * the Gate's local heartbeat, before the error exits 3. The runner calls it when preparing the
+ * context fails with a RemoteError, the fetch of origin or `gh api user`, instead of `run`
+ * (contracts 3.2, #72); `run` calls it when one of its own GitHub reads fails. So it uses only
+ * `gitCommonDir` and `clock` of the context: no network, no configuration and no identity.
  * @param {Pick<CommandContext, 'gitCommonDir' | 'clock'>} ctx
  * @param {unknown} error The RemoteError; the lines are the same for any.
  * @returns {Promise<CommandResult>}
@@ -52,7 +53,7 @@ export async function unreachable(ctx, error) {
   const heartbeat = await readLocalHeartbeat(ctx.gitCommonDir)
   return {
     lines: heartbeat === null ? [] : [localHeartbeatLine(heartbeat, ctx.clock.now())],
-    data: { local_heartbeat: heartbeat },
+    data: { local_heartbeat: cleanStrings(heartbeat) },
   }
 }
 

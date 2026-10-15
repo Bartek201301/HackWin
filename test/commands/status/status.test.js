@@ -387,6 +387,10 @@ describe('AC44: status from GitHub alone', () => {
     })
     expect(result.code).toBe(3)
     expect(result.err).toContain('hackwin status: GitHub call failed')
+    // The runner calls `unreachable` of status: the Lead's laptop still shows the local heartbeat.
+    expect(result.lines).toEqual([
+      "the Gate's local heartbeat on this laptop: 2026-10-24T11:59:50.000Z, 10s ago; GitHub last answered the Gate at 2026-10-24T11:59:50.000Z, 10s ago",
+    ])
   })
 })
 
@@ -493,7 +497,7 @@ describe('1.6f/header: the first line and the header', () => {
       "protection: unknown until the Gate's first start",
       'event: ends in 25h00m, at 2026-10-25T15:00:00+02:00',
     ])
-    expect(result.lines).toContain('gate digest: no run has finished yet')
+    expect(result.lines).toContain("gate digest: none before the Gate's first start")
   })
 
   test('a heartbeat older than the stale threshold without a stop time starts with a warning', async () => {

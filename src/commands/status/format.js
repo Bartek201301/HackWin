@@ -4,9 +4,14 @@
 // The first line is the Gate's liveness: a warning when its heartbeat is stale without a stop
 // time, the stop notice after `quit`, or that the Gate has not been started (7.6, failure
 // behavior).
+//
+// The data is cleaned of control characters already (view.js); every line passes cleanText once
+// more, so that no text, also from hackwin.yml or the local heartbeat, reaches the terminal with
+// one. A title is cut after the cleaning, by characters, so no cut falls inside an escape.
 
 import { formatDigestLine, hoursAndMinutes } from '../gate/digest.js'
 import { duration } from '../gate/pulls.js'
+import { cleanText } from './text.js'
 
 /** @import { DigestEntry } from '../gate/digest.js' */
 /** @import { Heartbeat } from '../gate/state.js' */
@@ -30,6 +35,7 @@ const STAGE_WORDS = Object.freeze({
   'waiting-ci': 'waiting for CI',
   merged: 'merged',
   'not-seen': 'not seen by the Gate yet',
+  outsider: 'not from a member of the team, so the Gate does not test it',
   draft: 'draft, ignored by the Gate',
 })
 
@@ -49,8 +55,8 @@ export function statusLines(data) {
     ),
     ...section('waiting for merge', data.waiting.map(waitingLine)),
     ...section('blocked', data.blocked.map(blockedLine)),
-    ...digestLines(data.digest),
-  ]
+    ...digestLines(data.digest, data.gate.state),
+  ].map(cleanText)
 }
 
 /**
@@ -72,7 +78,7 @@ export function localHeartbeatLine(heartbeat, now) {
       `GitHub last answered the Gate at ${heartbeat.last_github_ok_at}, ${ago(heartbeat.last_github_ok_at, now)}`,
     )
   }
-  return parts.join('; ')
+  return cleanText(parts.join('; '))
 }
 
 /**
@@ -93,10 +99,15 @@ function headerLines(data, now) {
       `warning: the status issue's heartbeat is ${duration(now.getTime() - Date.parse(published))} old, so teammates see the Gate as stale; GitHub last answered the Gate at ${gate.local?.last_github_ok_at ?? 'no time yet'}`,
     )
   }
+  if (issue?.state === 'closed') {
+    lines.push(
+      `warning: the status issue #${issue.number} is closed; a running Gate keeps editing it, but the next start of the Gate creates a new status issue; to keep this one, reopen #${issue.number}`,
+    )
+  }
   if (gate.local !== null && (gate.state === 'not-started' || gate.state === 'unreadable')) {
     lines.push(localHeartbeatLine(gate.local, now))
   }
-  lines.push(protectionLine(protection))
+  lines.push(protectionLine(protection, gate.state))
   lines.push(
     event.seconds_left > 0
       ? `event: ends in ${duration(event.seconds_left * 1000)}, at ${event.end}`
@@ -127,7 +138,7 @@ function livenessLine(gate, now) {
     case 'not-started':
       return 'the Gate has not been started: no status issue exists yet; merges wait until the Lead runs `hackwin gate`'
     case 'unreadable':
-      return 'warning: the status issue holds no readable `# hackwin:gate-status` block, so the state of the Gate is unknown; the Gate writes the block again at its next edit'
+      return 'warning: the status issue holds no readable `# hackwin:gate-status` block, so the state of the Gate is unknown; a running Gate writes the block again at its next edit'
     case 'stopped':
       return `the Lead stopped the Gate at ${gate.stopped_at}, ${ago(/** @type {string} */ (gate.stopped_at), now)}; merges wait until the Lead starts it again`
     case 'stale':
@@ -139,10 +150,13 @@ function livenessLine(gate, now) {
 
 /**
  * @param {StatusData['protection']} protection
+ * @param {GateLiveness['state']} gate
  * @returns {string}
  */
-function protectionLine({ state, update_restricted }) {
-  if (state === null) return "protection: unknown until the Gate's first start"
+function protectionLine({ state, update_restricted }, gate) {
+  if (gate === 'not-started') return "protection: unknown until the Gate's first start"
+  if (gate === 'unreadable') return 'protection: unknown, the status issue holds no readable block'
+  if (state === null) return 'protection: unknown, the status issue does not name it'
   const blocked = update_restricted
     ? "; the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included: that is expected, the Gate merges with --admin after its own stages pass"
     : ''
@@ -243,12 +257,21 @@ function blockedLine(entry) {
  * The Gate digest: the lines since the member's previous call, at most DIGEST_SHOWN, then the
  * earlier lines of pull requests that still need action.
  * @param {StatusData['digest']} digest
+ * @param {GateLiveness['state']} gate
  * @returns {string[]}
  */
-function digestLines({ since, lines, needs_action }) {
+function digestLines({ since, lines, needs_action }, gate) {
+  if (gate === 'not-started') return ["gate digest: none before the Gate's first start"]
+  if (gate === 'unreadable') {
+    return ['gate digest: unknown, the status issue holds no readable block']
+  }
   const heading = since === null ? 'gate digest' : `gate digest since your last status (${since})`
   if (lines.length === 0 && needs_action.length === 0) {
-    return [since === null ? `${heading}: no run has finished yet` : `${heading}: nothing new`]
+    return [
+      since === null
+        ? `${heading}: the status issue shows no finished run`
+        : `${heading}: nothing new`,
+    ]
   }
   const shown = lines.slice(0, DIGEST_SHOWN).map(digestLine)
   if (lines.length > shown.length) {
@@ -286,8 +309,13 @@ function by(author) {
   return author ? ` (${author})` : ''
 }
 
-/** @param {string} text */
+/**
+ * A title on one line, at most TITLE_LENGTH characters, cut by code points.
+ * @param {string} text Cleaned already.
+ */
 function title(text) {
-  const line = text.replace(/\s+/g, ' ').trim()
-  return line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH - 3)}...` : line
+  const chars = Array.from(cleanText(text).replace(/\s+/g, ' ').trim())
+  return chars.length > TITLE_LENGTH
+    ? `${chars.slice(0, TITLE_LENGTH - 3).join('')}...`
+    : chars.join('')
 }

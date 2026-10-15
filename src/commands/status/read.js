@@ -10,11 +10,15 @@
 // The milestone of the current wave is the milestone of the current wave's first task: the
 // typed issues of src/core/github carry no milestone, so `status` reads that one issue as GitHub
 // returns it.
+//
+// Without an open status issue, `status` looks for a closed one. A running Gate keeps editing the
+// issue it found at its start, also after someone closed it; only its next start, which looks for
+// an open one, creates a new issue. So a closed status issue still tells whether the Gate runs.
 
 import { nullWhenNotFound } from '../../core/github/index.js'
 import { readLastStatus } from '../../core/state/index.js'
 import { gateFiles, readHeartbeat } from '../gate/state.js'
-import { findStatusIssue } from '../gate/status-issue.js'
+import { STATUS_LABEL, findStatusIssue } from '../gate/status-issue.js'
 import { currentWave, missingDependencies, openTasks } from './view.js'
 
 /** @import { Config } from '../../core/config/index.js' */
@@ -40,12 +44,13 @@ import { currentWave, missingDependencies, openTasks } from './view.js'
 export async function readGitHub(github, { config, now }) {
   const start = Date.parse(config.hackwin.project.event.start)
   const since = new Date(Math.min(start, now.getTime())).toISOString()
-  const [openIssues, closedIssues, pulls, statusIssue] = await Promise.all([
+  const [openIssues, closedIssues, pulls, openStatusIssue] = await Promise.all([
     github.listIssues({ state: 'open' }),
     github.listIssues({ state: 'closed', since }),
     github.listPullRequests({ state: 'open' }),
     findStatusIssue(github),
   ])
+  const statusIssue = openStatusIssue ?? (await closedStatusIssue(github))
   /** @type {Map<number, Issue>} */
   const issues = new Map()
   for (const issue of [...closedIssues, ...openIssues]) issues.set(issue.number, issue)
@@ -58,6 +63,17 @@ export async function readGitHub(github, { config, now }) {
   ])
   for (const issue of dependencies) if (issue !== null) issues.set(issue.number, issue)
   return { openIssues, issues, pulls, statusIssue, milestone }
+}
+
+/**
+ * The closed issue with the label `gate-status` that was edited last, or null.
+ * @param {GitHub} github
+ * @returns {Promise<Issue | null>}
+ */
+async function closedStatusIssue(github) {
+  const closed = await github.listIssues({ state: 'closed', labels: [STATUS_LABEL] })
+  const edited = (/** @type {Issue} */ issue) => Date.parse(issue.updatedAt) || 0
+  return [...closed].sort((a, b) => edited(b) - edited(a) || b.number - a.number)[0] ?? null
 }
 
 /**

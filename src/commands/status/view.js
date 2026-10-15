@@ -2,10 +2,16 @@
 // sections. The same GitHub state gives the same attention items, "who does what", "waiting for
 // merge" and "blocked" on every machine (AC44); only the header and the digest depend on the
 // clone: the local heartbeat on the Lead's laptop and the member's previous call.
+//
+// Only an issue written by a member of the team in hackwin.yml counts as a task (the Lead's review
+// of #73): on a public repository any account can open an issue with a task block, and `status`
+// would list it among the next tasks of the members. Every string of the result is cleaned of
+// control characters (text.js).
 
 import { holderOf } from '../../core/config/index.js'
 import { WAITING_LABELS, dependenciesOf, queueOf, toTask } from '../../core/tasks/index.js'
 import { UNDER_WAY } from '../gate/pulls.js'
+import { cleanStrings } from './text.js'
 
 /** @import { Config, Identity } from '../../core/config/index.js' */
 /** @import { Issue, PullRequest } from '../../core/github/index.js' */
@@ -83,7 +89,8 @@ const WORKING = Object.freeze(['in-progress', 'in-review'])
  * @property {string} title
  * @property {string | null} author
  * @property {string} stage `queued`, `testing`, `waiting-ci` or `merged` from the Gate label;
- *   `not-seen` without one; `draft` for a draft, which the Gate ignores (G7).
+ *   `not-seen` without one; `draft` for a draft, which the Gate ignores (G7); `outsider` for a
+ *   pull request whose author is not a member, which the Gate does not test (#64).
  * @property {number | null} position Its place in the Gate's queue, from 1, as the status issue
  *   shows it.
  * @property {string} url
@@ -119,7 +126,8 @@ const WORKING = Object.freeze(['in-progress', 'in-review'])
  * @property {{ state: string | null, update_restricted: boolean }} protection As the Gate
  *   published it; null before its first start.
  * @property {{ end: string, seconds_left: number }} event
- * @property {{ number: number, url: string } | null} status_issue
+ * @property {{ number: number, url: string, state: 'open' | 'closed' } | null} status_issue The
+ *   open status issue, or else the closed one that was edited last.
  * @property {{ number: number, open_tasks: number, milestone: Milestone | null } | null} wave
  * @property {AttentionEntry[]} attention
  * @property {MemberEntry[]} who
@@ -129,16 +137,29 @@ const WORKING = Object.freeze(['in-progress', 'in-review'])
  */
 
 /**
- * The open task issues, valid or not, by number.
+ * The open task issues that members of the team wrote, valid or not, by number.
  * @param {Issue[]} openIssues
  * @param {Config} config
  * @returns {Task[]}
  */
 export function openTasks(openIssues, config) {
   return openIssues
+    .filter((issue) => isMember(config, issue.author))
     .map((issue) => toTask(issue, config))
     .filter((task) => task !== null)
     .sort((a, b) => a.number - b.number)
+}
+
+/**
+ * True when the login is a member of the team in hackwin.yml, compared without case.
+ * @param {Config} config
+ * @param {string | null} login
+ * @returns {boolean}
+ */
+function isMember(config, login) {
+  if (login === null) return false
+  const wanted = login.toLowerCase()
+  return config.hackwin.team.members.some((member) => member.github.toLowerCase() === wanted)
 }
 
 /**
@@ -215,7 +236,8 @@ export function gateLiveness({ statusIssue, gateStatus, local, now, staleSeconds
 }
 
 /**
- * Build what `status` shows from what it read.
+ * Build what `status` shows from what it read. Every string of the result is cleaned of control
+ * characters, so the lines and `--json` show the same text.
  * @param {StatusInput & { gateStatus: GateStatus | null }} input
  * @returns {StatusData}
  */
@@ -232,7 +254,7 @@ export function buildStatus(input) {
   const failed = pulls.filter((pull) => pull.labels.includes('gate:failed'))
   const wave = currentWave(tasks)
 
-  return {
+  return cleanStrings({
     login: identity.login,
     at: now.toISOString(),
     gate: gateLiveness({
@@ -251,17 +273,19 @@ export function buildStatus(input) {
       seconds_left: Math.floor((Date.parse(hackwin.project.event.end) - now.getTime()) / 1000),
     },
     status_issue:
-      statusIssue === null ? null : { number: statusIssue.number, url: statusIssue.url },
+      statusIssue === null
+        ? null
+        : { number: statusIssue.number, url: statusIssue.url, state: statusIssue.state },
     wave:
       wave === null
         ? null
         : { number: wave.number, open_tasks: wave.tasks.length, milestone: input.milestone },
     attention: attentionOf({ identity, gateStatus, openIssues, pulls, latest }),
     who: whoDoesWhat({ config, tasks, issues, now }),
-    waiting: waitingFor(pulls, gateStatus?.queue ?? []),
+    waiting: waitingFor(pulls, gateStatus?.queue ?? [], (login) => isMember(config, login)),
     blocked: blockedOf({ tasks, issues, failed, latest }),
     digest: digestOf(digest, input.lastStatusAt, new Set(failed.map((pull) => pull.number))),
-  }
+  })
 }
 
 /**
@@ -316,8 +340,9 @@ function attentionOf({ identity, gateStatus, openIssues, pulls, latest }) {
 
 /**
  * Who does what: per member of hackwin.yml, in its order, the tasks in progress or in review and
- * the next ready tasks. A task in progress belongs to its assignees in the team, or else to the
- * holder of its role.
+ * the next ready tasks: the member's queue without the tasks that wait for a dependency or for
+ * the Lead (`needs-lead`), which `take` refuses (7.7, check 2). A task in progress belongs to its
+ * assignees in the team, or else to the holder of its role.
  * @param {{ config: Config, tasks: Task[], issues: Map<number, Issue>, now: Date }} input
  * @returns {MemberEntry[]}
  */
@@ -342,6 +367,7 @@ function whoDoesWhat({ config, tasks, issues, now }) {
     roles: [...member.roles],
     working: (working.get(member.github) ?? []).map((task) => taskItem(task, now, issues)),
     next: queueOf(tasks, member.roles)
+      .filter((task) => !task.labels.includes('needs-lead'))
       .filter((task) => dependenciesOf(task, issues).takeable)
       .map((task) => taskItem(task, now, issues)),
   }))
@@ -351,44 +377,46 @@ function whoDoesWhat({ config, tasks, issues, now }) {
  * Waiting for merge: the Gate's queue in its order, as the status issue shows it, each pull
  * request with its Gate stage from its labels [D4]; then the other open pull requests into the
  * default branch that did not fail: those the Gate queued since its last edit, those it has not
- * seen and the drafts it ignores (G7).
+ * seen, those of authors outside the team, which it does not test (#64), and the drafts it
+ * ignores (G7).
  * @param {PullRequest[]} pulls Open, into the default branch, by number.
  * @param {number[]} queue
+ * @param {(login: string | null) => boolean} member
  * @returns {WaitingEntry[]}
  */
-function waitingFor(pulls, queue) {
+function waitingFor(pulls, queue, member) {
   const waiting = pulls.filter((pull) => !pull.labels.includes('gate:failed'))
   const byNumber = new Map(waiting.map((pull) => [pull.number, pull]))
   const queued = queue.filter((pr) => byNumber.has(pr))
-  const rank = (/** @type {PullRequest} */ pull) => {
-    if (pull.draft) return 3
-    return stageOf(pull) === 'not-seen' ? 2 : 1
+  /** @param {PullRequest} pull */
+  const stage = (pull) => {
+    if (pull.draft) return 'draft'
+    if (!member(pull.author)) return 'outsider'
+    return stageOf(pull)
   }
+  const RANK = ['not-seen', 'outsider', 'draft']
+  /** @param {PullRequest} pull */
+  const rank = (pull) => RANK.indexOf(stage(pull)) + 1
   const others = waiting
     .filter((pull) => !queued.includes(pull.number))
     .sort((a, b) => rank(a) - rank(b) || a.number - b.number)
-  return [
-    ...queued.map((pr, index) =>
-      waitingEntry(/** @type {PullRequest} */ (byNumber.get(pr)), index + 1),
-    ),
-    ...others.map((pull) => waitingEntry(pull, null)),
-  ]
-}
-
-/**
- * @param {PullRequest} pull
- * @param {number | null} position
- * @returns {WaitingEntry}
- */
-function waitingEntry(pull, position) {
-  return {
+  /**
+   * @param {PullRequest} pull
+   * @param {number | null} position
+   * @returns {WaitingEntry}
+   */
+  const entry = (pull, position) => ({
     pr: pull.number,
     title: pull.title,
     author: pull.author,
-    stage: pull.draft ? 'draft' : stageOf(pull),
+    stage: stage(pull),
     position,
     url: pull.url,
-  }
+  })
+  return [
+    ...queued.map((pr, index) => entry(/** @type {PullRequest} */ (byNumber.get(pr)), index + 1)),
+    ...others.map((pull) => entry(pull, null)),
+  ]
 }
 
 /**
