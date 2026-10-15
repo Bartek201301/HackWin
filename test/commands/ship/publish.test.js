@@ -42,10 +42,7 @@ function lastLine(stdout) {
  * @param {Scene} s
  */
 function clearLogs(s) {
-  rmSync(join(/** @type {string} */ (s.env.TMPDIR), 'hackwin-ship'), {
-    recursive: true,
-    force: true,
-  })
+  rmSync(join(statePaths(s.commonDir).logs, 'ship'), { recursive: true, force: true })
 }
 
 /**
@@ -53,7 +50,7 @@ function clearLogs(s) {
  * @param {Scene} s
  */
 function checksRan(s) {
-  return existsSync(join(/** @type {string} */ (s.env.TMPDIR), 'hackwin-ship'))
+  return existsSync(join(statePaths(s.commonDir).logs, 'ship'))
 }
 
 /**
