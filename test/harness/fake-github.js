@@ -111,7 +111,28 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  * @property {string} createdAt
  * @property {string} updatedAt
  * @property {string | null} closedAt
+ * @property {number | null} milestone The number of its milestone in `state.milestones`, or null.
  * @property {FakePull | null} pull
+ */
+
+/**
+ * A milestone of the repository, in GitHub's field names. An issue or pull request carries one
+ * by its number, and its JSON gives the milestone as GitHub returns it on an issue: with
+ * `html_url` and `creator`, and with `open_issues` and `closed_issues` as given, or else counted
+ * over the issues and pull requests of the state that carry it, as GitHub counts them.
+ * @typedef {object} FakeMilestone
+ * @property {number} id
+ * @property {number} number
+ * @property {string} title
+ * @property {'open' | 'closed'} state
+ * @property {string | null} description
+ * @property {string | null} due_on
+ * @property {number} [open_issues]
+ * @property {number} [closed_issues]
+ * @property {string} creator The creator's login.
+ * @property {string} created_at
+ * @property {string} updated_at
+ * @property {string | null} closed_at
  */
 
 /**
@@ -154,6 +175,7 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  *   `write`, `triage` or `read`.
  * @property {Array<{ id: number, login: string, permission: string, inviter: string }>} invitations
  * @property {Array<{ name: string, color: string, description: string }>} labels
+ * @property {FakeMilestone[]} milestones
  * @property {FakeItem[]} items Issues and pull requests, by number.
  * @property {Record<string, string>} branches Branch to SHA; with `origin`, a branch missing
  *   here is read from the origin.
@@ -167,6 +189,7 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  * @property {number} nextNumber
  * @property {number} nextId
  * @property {number} nextRulesetId
+ * @property {number} nextMilestoneNumber
  */
 
 /**
@@ -206,7 +229,8 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  *     repo: 'acme/app', login: 'lead',
  *     collaborators: { lead: 'admin', 'test-bot-builder': 'write' },
  *     labels: ['ready', { name: 'in-review', color: '1d76db' }],
- *     issues: [{ number: 12, title: 'Task', body, labels: ['ready'] }],
+ *     milestones: [{ number: 1, title: 'Wave 1', due_on: '2026-10-25T10:00:00Z' }],
+ *     issues: [{ number: 12, title: 'Task', body, labels: ['ready'], milestone: 1 }],
  *     pulls: [{ number: 13, title, head: 'task/12-task', headSha, body, draft: false }],
  *     branches: { main: sha }, checks: { [sha]: [{ name: 'hackwin', conclusion: 'success' }] },
  *     requiredChecks: ['hackwin'], rulesets: [ruleset], rulesetsOffered: true,
@@ -219,6 +243,9 @@ export function rawResult({ code = 0, stdout = '', stderr = '' }) {
  * @param {'public' | 'private'} [initial.visibility]
  * @param {Record<string, string>} [initial.collaborators]
  * @param {Array<string | { name: string, color?: string, description?: string }>} [initial.labels]
+ * @param {Array<Partial<FakeMilestone> & { title: string }>} [initial.milestones] Milestone
+ *   bodies; `number` is given when missing. An issue or pull request names one with `milestone`,
+ *   its number.
  * @param {Array<Partial<FakeItem> & { title: string }>} [initial.issues]
  * @param {Array<Partial<FakeItem> & Partial<FakePull> & { title: string, head: string }>} [initial.pulls]
  *   `headRepo` is the fake's repository unless given; a pull request from a fork gives the
@@ -255,6 +282,7 @@ export function createFakeGitHub(initial = {}) {
     },
     invitations: [],
     labels: [],
+    milestones: [],
     items: [],
     branches: { ...initial.branches },
     checks: {},
@@ -265,6 +293,7 @@ export function createFakeGitHub(initial = {}) {
     nextNumber: 1,
     nextId: 1,
     nextRulesetId: 1,
+    nextMilestoneNumber: 1,
   }
 
   const nextId = () => state.nextId++
@@ -275,6 +304,7 @@ export function createFakeGitHub(initial = {}) {
   for (const label of initial.labels ?? []) {
     ensureLabel(typeof label === 'string' ? { name: label } : label)
   }
+  for (const milestone of initial.milestones ?? []) addMilestone(milestone)
   const numbered = [...(initial.issues ?? []), ...(initial.pulls ?? [])]
   state.nextNumber = Math.max(
     initial.nextNumber ?? 1,
@@ -329,11 +359,13 @@ export function createFakeGitHub(initial = {}) {
       createdAt: input.createdAt ?? time,
       updatedAt: input.updatedAt ?? input.createdAt ?? time,
       closedAt: input.closedAt ?? (state_ === 'closed' ? time : null),
+      milestone: input.milestone ?? null,
       pull,
     }
     if (state.items.some((other) => other.number === item.number)) {
       throw new Error(`fake GitHub: #${item.number} exists twice in the initial state`)
     }
+    if (item.milestone !== null) findMilestone(item.milestone)
     for (const name of item.labels) ensureLabel({ name })
     state.items.push(item)
     return item
@@ -351,6 +383,50 @@ export function createFakeGitHub(initial = {}) {
   /** @param {string} name */
   function findLabel(name) {
     return state.labels.find((label) => label.name.toLowerCase() === name.toLowerCase())
+  }
+
+  /**
+   * Add a milestone as `POST .../milestones` creates it: open, without a description or a due
+   * date unless the body names them, with the next free number unless it names one.
+   * @param {Partial<FakeMilestone> & { title: string }} body
+   * @returns {FakeMilestone}
+   */
+  function addMilestone(body) {
+    const time = now()
+    const number = body.number ?? state.nextMilestoneNumber
+    if (state.milestones.some((other) => other.number === number)) {
+      throw new Error(`fake GitHub: milestone ${number} exists twice`)
+    }
+    state.nextMilestoneNumber = Math.max(state.nextMilestoneNumber, number + 1)
+    const milestoneState = body.state ?? 'open'
+    /** @type {FakeMilestone} */
+    const milestone = {
+      id: body.id ?? nextId(),
+      number,
+      title: body.title,
+      state: milestoneState,
+      description: body.description ?? null,
+      due_on: body.due_on ?? null,
+      open_issues: body.open_issues,
+      closed_issues: body.closed_issues,
+      creator: body.creator ?? state.login,
+      created_at: body.created_at ?? time,
+      updated_at: body.updated_at ?? body.created_at ?? time,
+      closed_at: body.closed_at ?? (milestoneState === 'closed' ? time : null),
+    }
+    state.milestones.push(milestone)
+    return milestone
+  }
+
+  /**
+   * The milestone with this number. An item of the state that names a missing one is a mistake
+   * of the test, so it throws a plain error, not an HTTP one.
+   * @param {number} number
+   */
+  function findMilestone(number) {
+    const found = state.milestones.find((milestone) => milestone.number === number)
+    if (!found) throw new Error(`fake GitHub: there is no milestone ${number} in the state`)
+    return found
   }
 
   /**
@@ -514,6 +590,32 @@ export function createFakeGitHub(initial = {}) {
     return { name: label.name, color: label.color, description: label.description, default: false }
   }
 
+  /** @param {FakeMilestone} milestone */
+  function milestoneJson(milestone) {
+    const carriers = state.items.filter((entry) => entry.milestone === milestone.number)
+    const count = (/** @type {'open' | 'closed'} */ wanted) =>
+      carriers.filter((entry) => entry.state === wanted).length
+    return {
+      id: milestone.id,
+      number: milestone.number,
+      title: milestone.title,
+      description: milestone.description,
+      state: milestone.state,
+      open_issues: milestone.open_issues ?? count('open'),
+      closed_issues: milestone.closed_issues ?? count('closed'),
+      creator: user(milestone.creator),
+      html_url: `https://github.com/${state.repo}/milestone/${milestone.number}`,
+      created_at: milestone.created_at,
+      updated_at: milestone.updated_at,
+      closed_at: milestone.closed_at,
+      due_on: milestone.due_on,
+    }
+  }
+
+  /** @param {FakeItem} entry */
+  const itemMilestoneJson = (entry) =>
+    entry.milestone === null ? null : milestoneJson(findMilestone(entry.milestone))
+
   /** @param {FakeItem} entry */
   function issueJson(entry) {
     return {
@@ -527,6 +629,7 @@ export function createFakeGitHub(initial = {}) {
       assignee: entry.assignees[0] ? user(entry.assignees[0]) : null,
       assignees: entry.assignees.map(user),
       user: user(entry.author),
+      milestone: itemMilestoneJson(entry),
       comments: entry.comments.length,
       html_url: htmlUrl(entry),
       created_at: entry.createdAt,
@@ -566,6 +669,7 @@ export function createFakeGitHub(initial = {}) {
       labels: entry.labels.map(labelJson),
       assignees: entry.assignees.map(user),
       user: user(entry.author),
+      milestone: itemMilestoneJson(entry),
       html_url: htmlUrl(entry),
       created_at: entry.createdAt,
       updated_at: entry.updatedAt,
@@ -789,11 +893,18 @@ export function createFakeGitHub(initial = {}) {
         if (query.assignee === '*') return entry.assignees.length > 0
         return entry.assignees.includes(query.assignee)
       })
+      .filter((entry) => {
+        if (query.milestone === undefined) return true
+        if (query.milestone === 'none') return entry.milestone === null
+        if (query.milestone === '*') return entry.milestone !== null
+        return entry.milestone === Number(query.milestone)
+      })
     return page(list, query).map(issueJson)
   })
 
   on(`POST ${REPO}/issues`, ({ body, login }) => {
     if (!body?.title) throw httpError(422, 'Validation Failed')
+    const milestone = milestoneOfBody(body.milestone)
     const entry = addItem(
       {
         title: body.title,
@@ -803,11 +914,27 @@ export function createFakeGitHub(initial = {}) {
           (/** @type {string} */ name) => state.collaborators[name],
         ),
         author: login,
+        milestone,
       },
       null,
     )
     return issueJson(entry)
   })
+
+  /**
+   * The milestone number of a request body, which GitHub takes as a number or its text; null for
+   * none, and HTTP 422 for one that the repository does not have.
+   * @param {unknown} value
+   * @returns {number | null}
+   */
+  function milestoneOfBody(value) {
+    if (value === undefined || value === null) return null
+    const number = Number(value)
+    if (!state.milestones.some((milestone) => milestone.number === number)) {
+      throw httpError(422, 'Validation Failed')
+    }
+    return number
+  }
 
   on(`GET ${REPO}/issues/:number`, ({ params }) => issueJson(item(params.number)))
 
@@ -822,6 +949,7 @@ export function createFakeGitHub(initial = {}) {
    * @param {Record<string, any>} changes
    */
   function applyIssueChanges(entry, changes) {
+    if (changes.milestone !== undefined) entry.milestone = milestoneOfBody(changes.milestone)
     if (changes.title !== undefined) entry.title = changes.title
     if (changes.body !== undefined) entry.body = changes.body ?? ''
     if (changes.labels !== undefined) {
@@ -1466,6 +1594,11 @@ export function createFakeGitHub(initial = {}) {
      * @param {Partial<FakeRuleset> & { name: string }} body
      */
     addRuleset,
+    /**
+     * Add a milestone, as `POST .../milestones` does; `number` is given when missing.
+     * @param {Partial<FakeMilestone> & { title: string }} body
+     */
+    addMilestone,
   }
 }
 

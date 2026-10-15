@@ -41,6 +41,7 @@ export {
 /** @typedef {import('./fake-github.js').FakeGitHub} FakeGitHub */
 /** @typedef {import('./fake-github.js').FakeRequest} FakeRequest */
 /** @typedef {import('./fake-github.js').FakeRuleset} FakeRuleset */
+/** @typedef {import('./fake-github.js').FakeMilestone} FakeMilestone */
 /** @typedef {import('./fixture-repo.js').FixtureRepoContext} FixtureRepoContext */
 /** @typedef {import('./reset.js').FixtureRepoState} FixtureRepoState */
 /** @typedef {import('./team.js').TeamConfig} TeamConfig */
