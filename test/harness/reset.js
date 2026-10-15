@@ -5,12 +5,25 @@
 // read back, and a reset that did not hold fails. On a repository where GitHub refuses protection
 // (no GitHub Pro), an HTTP 403 on the rule set endpoints is accepted.
 //
+// A deletion that GitHub answers with 404 counts as done: the rule set, branch or label is gone.
+// A gh call that fails without an HTTP status (a network error, a cut response) or with a 5xx is
+// made again, up to RESET_ATTEMPTS times in all.
+//
 // It never assumes an issue or pull request number: it lists what is open.
 
+import { setTimeout as sleep } from 'node:timers/promises'
+import { createGitHub, ghFailure } from '../../src/core/github/index.js'
 import { RemoteError } from '../../src/core/runtime/errors.js'
+import { REFUSED } from './guard.js'
 
-/** @import { GitHub } from '../../src/core/github/index.js' */
+/** @import { GhExecutor, GhResult, GitHub } from '../../src/core/github/index.js' */
 /** @import { FixtureRepoInfo } from './fixture-repos.js' */
+
+/** How often the reset makes a gh call that fails without an HTTP status or with a 5xx. */
+export const RESET_ATTEMPTS = 4
+
+/** The wait before the second attempt of such a call; it doubles before each further one. */
+export const RETRY_DELAY_MS = 1000
 
 const STATE_QUERY = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -24,6 +37,8 @@ const DELETE_RULE = `mutation($id: ID!) {
 }`
 
 /**
+ * What a reset did. A rule set, branch or label that was already gone when the reset deleted it
+ * is listed as deleted and named in `accepted`.
  * @typedef {object} ResetReport
  * @property {string} repo
  * @property {Array<{ id: number, name: string }>} deletedRulesets
@@ -34,7 +49,8 @@ const DELETE_RULE = `mutation($id: ID!) {
  * @property {string[]} deletedBranches
  * @property {string[]} deletedLabels
  * @property {{ before: string | null, after: string }} main
- * @property {string[]} accepted The refusals the reset accepted, such as HTTP 403 on rule sets.
+ * @property {string[]} accepted The refusals the reset accepted, such as HTTP 403 on rule sets
+ *   or HTTP 404 on deleting a label that is already gone.
  */
 
 /**
@@ -54,12 +70,23 @@ const DELETE_RULE = `mutation($id: ID!) {
 
 /**
  * Reset a fixture repository, as its owner.
- * @param {GitHub} github The Lead's client for the repository.
+ * @param {GitHub} lead The Lead's client for the repository.
  * @param {FixtureRepoInfo} info
- * @param {{ log?: (line: string) => void }} [options]
+ * @param {{ log?: (line: string) => void, attempts?: number, retryDelayMs?: number }} [options]
+ *   `attempts`: how often a call that fails without an HTTP status or with a 5xx is made;
+ *   `retryDelayMs`: the wait before its second attempt, doubled before each further one.
  * @returns {Promise<ResetReport>}
  */
-export async function resetFixtureRepo(github, info, { log = () => {} } = {}) {
+export async function resetFixtureRepo(
+  lead,
+  info,
+  { log = () => {}, attempts = RESET_ATTEMPTS, retryDelayMs = RETRY_DELAY_MS } = {},
+) {
+  const github = retrying(lead, {
+    attempts,
+    delayMs: retryDelayMs,
+    log: (line) => log(`reset ${info.repo}: ${line}`),
+  })
   const [owner, name] = info.repo.split('/')
   /** @type {ResetReport} */
   const report = {
@@ -74,6 +101,11 @@ export async function resetFixtureRepo(github, info, { log = () => {} } = {}) {
     main: { before: null, after: info.resetSha },
     accepted: [],
   }
+  /** @param {string} what */
+  const accept = (what) => {
+    report.accepted.push(what)
+    log(`reset ${info.repo}: ${what}, accepted`)
+  }
 
   // Rule sets.
   const rulesets = await listRulesets(github, info)
@@ -83,7 +115,10 @@ export async function resetFixtureRepo(github, info, { log = () => {} } = {}) {
   }
   for (const ruleset of rulesets ?? []) {
     if (ruleset.source_type && ruleset.source_type !== 'Repository') continue
-    await github.api(`repos/{owner}/{repo}/rulesets/${ruleset.id}`, { method: 'DELETE' })
+    const gone = await deletion(() =>
+      github.api(`repos/{owner}/{repo}/rulesets/${ruleset.id}`, { method: 'DELETE' }),
+    )
+    if (gone !== null) accept(`rule set ${ruleset.name}: HTTP ${gone}, already gone`)
     report.deletedRulesets.push({ id: ruleset.id, name: ruleset.name })
   }
 
@@ -111,15 +146,23 @@ export async function resetFixtureRepo(github, info, { log = () => {} } = {}) {
   // Branches: main stays alone, so that no run leaves a branch for the next one.
   for (const branch of await github.apiPages('repos/{owner}/{repo}/branches')) {
     if (branch.name === 'main') continue
-    await github.api(`repos/{owner}/{repo}/git/refs/heads/${refPath(branch.name)}`, {
-      method: 'DELETE',
-    })
+    const gone = await deletion(
+      () =>
+        github.api(`repos/{owner}/{repo}/git/refs/heads/${refPath(branch.name)}`, {
+          method: 'DELETE',
+        }),
+      // How the fake GitHub answers the deletion of a branch that does not exist.
+      (error) => error.status === 422 && /Reference does not exist/.test(error.message),
+    )
+    if (gone !== null) accept(`branch ${branch.name}: HTTP ${gone}, already gone`)
     report.deletedBranches.push(branch.name)
   }
 
   // Labels.
   for (const label of await github.listLabels()) {
-    await github.deleteLabel(label.name)
+    // deleteLabel answers false for GitHub's 404.
+    const removed = await github.deleteLabel(label.name)
+    if (!removed) accept(`label ${label.name}: HTTP 404, already gone`)
     report.deletedLabels.push(label.name)
   }
 
@@ -234,6 +277,63 @@ async function listRulesets(github, info) {
     if (info.protectionRefused && error instanceof RemoteError && error.status === 403) return null
     throw error
   }
+}
+
+/**
+ * Run a deletion. GitHub's "not found" (HTTP 404), or an answer that `alsoGone` reads as gone,
+ * means that the object is already gone, which counts as done.
+ * @param {() => Promise<unknown>} remove
+ * @param {(error: RemoteError) => boolean} [alsoGone]
+ * @returns {Promise<number | null>} The HTTP status of an object already gone; null when the
+ *   deletion removed it.
+ */
+async function deletion(remove, alsoGone = () => false) {
+  try {
+    await remove()
+    return null
+  } catch (error) {
+    if (error instanceof RemoteError && (error.status === 404 || alsoGone(error))) {
+      return error.status ?? null
+    }
+    throw error
+  }
+}
+
+/**
+ * The client with an executor that makes a gh call again when it fails without an HTTP status
+ * (a network error, a timeout, a cut response) or with a 5xx: up to `attempts` times in all,
+ * after a wait of `delayMs` that doubles before each further attempt. A refusal of the guard, a
+ * missing gh login and every other HTTP status are not repeated.
+ * @param {GitHub} client
+ * @param {{ attempts: number, delayMs: number, log: (line: string) => void }} options
+ * @returns {GitHub}
+ */
+function retrying(client, { attempts, delayMs, log }) {
+  /** @type {GhExecutor} */
+  const executor = async (args, call) => {
+    for (let attempt = 1; ; attempt += 1) {
+      const result = await client.executor(args, call)
+      const failure = result.code === 0 ? null : transientFailure(args, result)
+      if (failure === null || attempt >= attempts) return result
+      const wait = delayMs * 2 ** (attempt - 1)
+      log(`${failure}; attempt ${attempt + 1} of ${attempts} in ${wait} ms`)
+      await sleep(wait)
+    }
+  }
+  return createGitHub({ executor, repo: client.repo, cwd: client.cwd })
+}
+
+/**
+ * The message of a failed gh call that is worth making again, or null.
+ * @param {string[]} args
+ * @param {GhResult} result
+ * @returns {string | null}
+ */
+function transientFailure(args, result) {
+  if (result.stderr.startsWith(REFUSED)) return null
+  const error = ghFailure(args, result)
+  if (!(error instanceof RemoteError)) return null
+  return error.status === undefined || error.status >= 500 ? error.message : null
 }
 
 /**
