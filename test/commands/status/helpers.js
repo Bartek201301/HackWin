@@ -7,7 +7,7 @@ import {
   STATUS_TITLE,
   formatStatusBody,
 } from '../../../src/commands/gate/status-issue.js'
-import { httpError, yaml } from '../../harness/index.js'
+import { yaml } from '../../harness/index.js'
 
 /** @typedef {import('../../../src/commands/gate/status-issue.js').GateStatus} GateStatus */
 /** @typedef {import('../../../src/core/github/index.js').GhExecutor} GhExecutor */
@@ -44,10 +44,11 @@ export function taskBody({ role, wave = 1, paths, dependsOn = [], deadline }) {
 /**
  * A task issue for the fake GitHub's initial state.
  * @param {number} number
- * @param {{ role: string, title?: string, status?: string | null, assignees?: string[], wave?: number | null, dependsOn?: number[], deadline?: string | null, state?: 'open' | 'closed', labels?: string[] }} task
+ * @param {{ role: string, title?: string, status?: string | null, assignees?: string[], wave?: number | null, dependsOn?: number[], deadline?: string | null, state?: 'open' | 'closed', labels?: string[], milestone?: number | null }} task
+ *   `milestone` is the number of a milestone of the fake's state.
  */
 export function taskIssue(number, task) {
-  const { status = 'ready', assignees = [], state = 'open', labels = [] } = task
+  const { status = 'ready', assignees = [], state = 'open', labels = [], milestone = null } = task
   return {
     number,
     title: task.title ?? `Task ${number}`,
@@ -55,6 +56,7 @@ export function taskIssue(number, task) {
     state,
     assignees,
     labels: [...(status === null ? [] : [status]), `role:${task.role}`, ...labels],
+    milestone,
   }
 }
 
@@ -128,34 +130,4 @@ export function sharedSections(lines) {
   const start = lines.findIndex((line) => line.startsWith('attention'))
   const end = lines.findIndex((line) => line.startsWith('gate digest'))
   return lines.slice(start, end)
-}
-
-/**
- * Answer `GET .../issues/<N>` with the milestone of each issue named in `milestones`, as GitHub
- * returns it on an issue; the fake GitHub's own answer carries no milestone.
- * @param {import('../../harness/index.js').FakeGitHub} fake
- * @param {Record<number, object>} milestones
- */
-export function serveMilestones(fake, milestones) {
-  fake.on('GET repos/{owner}/{repo}/issues/:number', ({ params, state }) => {
-    const item = state.items.find((entry) => entry.number === Number(params.number))
-    if (!item) throw httpError(404, 'Not Found')
-    const user = (/** @type {string} */ login) => ({ login, type: 'User' })
-    return {
-      number: item.number,
-      title: item.title,
-      body: item.body,
-      state: item.state,
-      state_reason: item.stateReason,
-      labels: item.labels.map((name) => ({ name })),
-      assignees: item.assignees.map(user),
-      user: user(item.author),
-      html_url: `https://github.com/${state.repo}/issues/${item.number}`,
-      created_at: item.createdAt,
-      updated_at: item.updatedAt,
-      closed_at: item.closedAt,
-      milestone: milestones[item.number] ?? null,
-      ...(item.pull ? { pull_request: {} } : {}),
-    }
-  })
 }

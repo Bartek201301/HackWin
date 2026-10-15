@@ -1,18 +1,14 @@
 // The Lead's review of #73: text from GitHub never reaches the terminal with a control
 // character, only members' issues are tasks, every state says what is true, the BLOCKED notice
 // in any protection state, and the local heartbeat through the runner when GitHub is unreachable.
+// And #79: the team is who `writtenByTeam` of src/core/tasks accepts, `team.lead` included.
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { gateFiles, writeHeartbeat } from '../../../src/commands/gate/state.js'
-import { accounts, createFakeGitHub, createFixture } from '../../harness/index.js'
-import {
-  fixedClock,
-  runStatus,
-  serveMilestones,
-  statusIssue,
-  taskBody,
-  taskIssue,
-} from './helpers.js'
+import { buildStatus } from '../../../src/commands/status/view.js'
+import { parseHackwinConfig, parseOwners, resolveIdentity } from '../../../src/core/config/index.js'
+import { accounts, createFakeGitHub, createFixture, teamConfig } from '../../harness/index.js'
+import { fixedClock, runStatus, statusIssue, taskBody, taskIssue } from './helpers.js'
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 
@@ -45,11 +41,10 @@ afterAll(() => fixture.cleanup())
 
 /**
  * @param {any} state The fake GitHub's state.
- * @param {{ login?: string, json?: boolean, now?: string, cwd?: string, milestones?: Record<number, object> }} [options]
+ * @param {{ login?: string, json?: boolean, now?: string, cwd?: string }} [options]
  */
 async function statusOf(state, options = {}) {
   const fake = createFakeGitHub(state)
-  if (options.milestones) serveMilestones(fake, options.milestones)
   const login = options.login ?? BUILDER1
   return runStatus({
     cwd: options.cwd ?? fixture.main,
@@ -75,6 +70,7 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
     '```',
   ].join('\n')
   const state = {
+    milestones: [{ number: 1, title: `Wave ${LINK}` }],
     issues: [
       statusIssue(1, {
         heartbeat_at: '2026-10-24T11:00:00.000Z',
@@ -99,7 +95,11 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
           },
         ],
       }),
-      taskIssue(10, { role: 'counter', title: `Counter ${LINK}\ngate: running, heartbeat 1s ago` }),
+      taskIssue(10, {
+        role: 'counter',
+        title: `Counter ${LINK}\ngate: running, heartbeat 1s ago`,
+        milestone: 1,
+      }),
       { number: 42, title: 'Forged block', body: forgedBlock, labels: [] },
     ],
     pulls: [
@@ -121,10 +121,9 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
       },
     ],
   }
-  const milestones = { 10: { number: 1, title: `Wave ${LINK}`, open_issues: 1, closed_issues: 0 } }
 
   test('a pull request title, a task block error, an attention item, a digest note and a milestone title are printed with visible escapes', async () => {
-    const result = await statusOf(state, { milestones })
+    const result = await statusOf(state)
     expect(result.code).toBe(0)
     expect(result.out).not.toMatch(UNSAFE)
     // The line breaks inside the texts forged no line.
@@ -152,7 +151,7 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
   })
 
   test('--json carries the same cleaned text, so no control character reaches the terminal there either', async () => {
-    const result = await statusOf(state, { json: true, milestones })
+    const result = await statusOf(state, { json: true })
     expect(result.code).toBe(0)
     expect(result.out).not.toMatch(UNSAFE)
     // A control character would be a JSON escape such as \u001b; the cleaned text is \\u001b.
@@ -219,6 +218,137 @@ describe('1.6f/members: only issues of members are tasks', () => {
       `  #20 not from a member of the team, so the Gate does not test it: From outside (${OUTSIDER})`,
     )
     expect(lines).toContain(`  ${BUILDER1}: next #10 Real task`)
+  })
+})
+
+describe('1.6g/members: status counts the team as writtenByTeam does', () => {
+  test("an outsider's task issue is not listed and the same issue of team.lead or a member is, in any case of the login; an outsider's pull request does not wait for the Gate", async () => {
+    for (const [author, team] of /** @type {const} */ ([
+      [OUTSIDER, false],
+      [LEAD, true],
+      [LEAD.toUpperCase(), true],
+      [BUILDER1, true],
+      [BUILDER1.toUpperCase(), true],
+    ])) {
+      const result = await statusOf(
+        {
+          issues: [
+            statusIssue(1, { heartbeat_at: '2026-10-24T11:59:00.000Z' }),
+            { ...taskIssue(10, { role: 'counter', title: 'Counter' }), author },
+            {
+              ...taskIssue(11, { role: 'todos', title: 'No deadline', deadline: null }),
+              author,
+            },
+          ],
+          pulls: [{ number: 20, title: 'Counter', head: 'task/10-counter', headSha: SHA, author }],
+        },
+        { json: true },
+      )
+      expect(result.code, author).toBe(0)
+      const { data, lines } = result.json
+      const builder = data.who.find((/** @type {any} */ member) => member.login === BUILDER1)
+      const waiting = data.waiting.map((/** @type {any} */ pull) => [pull.pr, pull.stage])
+      if (team) {
+        expect(
+          builder.next.map((/** @type {any} */ task) => task.number),
+          author,
+        ).toEqual([10])
+        expect(data.wave, author).toMatchObject({ number: 1, open_tasks: 1 })
+        expect(
+          data.blocked.map((/** @type {any} */ entry) => [entry.kind, entry.issue]),
+          author,
+        ).toEqual([['invalid', 11]])
+        expect(waiting, author).toEqual([[20, 'not-seen']])
+        expect(lines).toContain(`  #20 not seen by the Gate yet: Counter (${author})`)
+      } else {
+        expect(builder.next, author).toEqual([])
+        expect(data.wave, author).toBeNull()
+        expect(data.blocked, author).toEqual([])
+        expect(waiting, author).toEqual([[20, 'outsider']])
+        expect(lines).toContain(
+          `  #20 not from a member of the team, so the Gate does not test it: Counter (${author})`,
+        )
+      }
+    }
+  })
+
+  test('team.lead counts also where team.members leaves the Lead out', () => {
+    const { files } = teamConfig(3)
+    const parsed = {
+      hackwin: parseHackwinConfig(files['hackwin.yml']),
+      owners: parseOwners(files['owners.yml']),
+      ref: 'origin/main',
+      sha: SHA,
+    }
+    // hackwin.yml fails validation without the Lead among the members; writtenByTeam does not
+    // depend on it.
+    const chief = 'The-Chief'
+    const team = { lead: chief, members: parsed.hackwin.team.members }
+    const config = { ...parsed, hackwin: { ...parsed.hackwin, team } }
+    /** @param {number} number @param {string} author @param {string} [body] */
+    const issue = (number, author, body = taskBody({ role: 'counter' })) => ({
+      number,
+      title: `Task ${number}`,
+      body,
+      state: /** @type {const} */ ('open'),
+      stateReason: null,
+      labels: ['ready', 'role:counter'],
+      assignees: [],
+      author,
+      url: `https://github.com/hackwin-test/app/issues/${number}`,
+      createdAt: NOW,
+      updatedAt: NOW,
+      closedAt: null,
+      isPullRequest: false,
+    })
+    /** @param {number} number @param {string} author */
+    const pull = (number, author) => ({
+      number,
+      title: `Pull ${number}`,
+      body: '',
+      state: /** @type {const} */ ('open'),
+      draft: false,
+      merged: false,
+      mergedAt: null,
+      mergeCommitSha: null,
+      headRef: `task/${number}-pull`,
+      headSha: SHA,
+      headRepo: 'hackwin-test/app',
+      baseRef: 'main',
+      labels: [],
+      author,
+      url: `https://github.com/hackwin-test/app/pull/${number}`,
+      createdAt: NOW,
+      updatedAt: NOW,
+      closedAt: null,
+    })
+    const openIssues = [
+      issue(10, chief.toLowerCase()),
+      issue(11, OUTSIDER),
+      issue(12, chief.toUpperCase(), taskBody({ role: 'todos', deadline: null })),
+      issue(13, OUTSIDER, taskBody({ role: 'todos', deadline: null })),
+    ]
+    const data = buildStatus({
+      config,
+      identity: resolveIdentity(config, BUILDER1),
+      now: new Date(NOW),
+      openIssues,
+      issues: new Map(openIssues.map((entry) => [entry.number, entry])),
+      pulls: [pull(20, chief.toUpperCase()), pull(21, OUTSIDER)],
+      statusIssue: null,
+      gateStatus: null,
+      localHeartbeat: null,
+      lastStatusAt: null,
+      milestone: null,
+    })
+    const builder = data.who.find((member) => member.login === BUILDER1)
+    expect(builder?.next.map((task) => task.number)).toEqual([10])
+    expect(data.wave).toMatchObject({ number: 1, open_tasks: 1 })
+    expect(data.blocked).toMatchObject([{ kind: 'invalid', issue: 12 }])
+    expect(data.waiting.map((entry) => [entry.pr, entry.stage])).toEqual([
+      [20, 'not-seen'],
+      [21, 'outsider'],
+    ])
   })
 })
 

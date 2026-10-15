@@ -7,14 +7,7 @@ import { unreachable } from '../../../src/commands/status/index.js'
 import { RemoteError } from '../../../src/core/runtime/index.js'
 import { readLastStatus } from '../../../src/core/state/index.js'
 import { accounts, createFakeGitHub, createFixture, httpError } from '../../harness/index.js'
-import {
-  fixedClock,
-  runStatus,
-  serveMilestones,
-  sharedSections,
-  statusIssue,
-  taskIssue,
-} from './helpers.js'
+import { fixedClock, runStatus, sharedSections, statusIssue, taskIssue } from './helpers.js'
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 
@@ -36,10 +29,12 @@ afterAll(() => fixture.cleanup())
 /**
  * One GitHub state with an item in every section: tasks in progress and in review, two of them
  * overdue, a task that waits for a dependency, an invalid block, a cut task, the Gate's queue, a
- * pull request the Gate has not seen, a draft, a failed pull request and an attention item.
+ * pull request the Gate has not seen, a draft, a failed pull request and an attention item. The
+ * tasks of wave 1 carry its milestone: 2 of its 13 issues are closed.
  */
 function teamGitHub() {
-  const fake = createFakeGitHub({
+  return createFakeGitHub({
+    milestones: [{ number: 1, title: 'Wave 1', due_on: '2026-10-25T10:00:00Z' }],
     issues: [
       statusIssue(1, {
         heartbeat_at: '2026-10-24T11:59:00.000Z',
@@ -75,18 +70,19 @@ function teamGitHub() {
       }),
       // Closed during the event, and before it: both count as done.
       {
-        ...taskIssue(4, { role: 'counter', status: null }),
+        ...taskIssue(4, { role: 'counter', status: null, milestone: 1 }),
         state: 'closed',
         updatedAt: '2026-10-20T08:00:00Z',
       },
       {
-        ...taskIssue(5, { role: 'counter', status: null }),
+        ...taskIssue(5, { role: 'counter', status: null, milestone: 1 }),
         state: 'closed',
         updatedAt: '2026-10-24T08:00:00Z',
       },
       taskIssue(10, {
         role: 'counter',
         title: 'Counter button',
+        milestone: 1,
         status: 'in-review',
         assignees: [BUILDER1],
         deadline: '2026-10-24T13:00:00+02:00',
@@ -94,6 +90,7 @@ function teamGitHub() {
       taskIssue(11, {
         role: 'todos',
         title: 'Todo list',
+        milestone: 1,
         status: 'in-review',
         assignees: [BUILDER1],
         deadline: '2026-10-24T20:00:00+02:00',
@@ -101,27 +98,41 @@ function teamGitHub() {
       taskIssue(12, {
         role: 'greeting',
         title: 'Greeting',
+        milestone: 1,
         status: 'in-review',
         assignees: [BUILDER2],
       }),
       taskIssue(13, {
         role: 'counter',
         title: 'Counter reset',
+        milestone: 1,
         status: 'in-progress',
         assignees: [BUILDER1],
         deadline: '2026-10-24T12:00:00+02:00',
       }),
-      taskIssue(14, { role: 'todos', title: 'Todo filter', dependsOn: [10] }),
-      taskIssue(15, { role: 'counter', title: 'Counter step', dependsOn: [4, 5] }),
-      taskIssue(16, { role: 'shared', title: 'Shared layout', status: 'in-progress' }),
-      taskIssue(17, { role: 'todos', title: 'No deadline', status: null, deadline: null }),
-      taskIssue(18, { role: 'greeting', title: 'Dropped', labels: ['cut'] }),
+      taskIssue(14, { role: 'todos', title: 'Todo filter', dependsOn: [10], milestone: 1 }),
+      taskIssue(15, { role: 'counter', title: 'Counter step', dependsOn: [4, 5], milestone: 1 }),
+      taskIssue(16, {
+        role: 'shared',
+        title: 'Shared layout',
+        status: 'in-progress',
+        milestone: 1,
+      }),
+      taskIssue(17, {
+        role: 'todos',
+        title: 'No deadline',
+        status: null,
+        deadline: null,
+        milestone: 1,
+      }),
+      taskIssue(18, { role: 'greeting', title: 'Dropped', labels: ['cut'], milestone: 1 }),
       taskIssue(19, {
         role: 'shared',
         title: 'Shared styles',
+        milestone: 1,
         deadline: '2026-10-24T11:30:00+02:00',
       }),
-      taskIssue(25, { role: 'greeting', title: 'Greeting style', status: 'blocked' }),
+      taskIssue(25, { role: 'greeting', title: 'Greeting style', status: 'blocked', milestone: 1 }),
       taskIssue(31, { role: 'todos', title: 'Todo export', wave: 2 }),
       { number: 30, title: 'Question for the Lead', body: 'Which colour?', labels: ['needs-lead'] },
     ],
@@ -175,18 +186,6 @@ function teamGitHub() {
       },
     ],
   })
-  serveMilestones(fake, {
-    10: {
-      number: 1,
-      title: 'Wave 1',
-      state: 'open',
-      open_issues: 11,
-      closed_issues: 2,
-      due_on: '2026-10-25T10:00:00Z',
-      html_url: 'https://github.com/hackwin-test/app/milestone/1',
-    },
-  })
-  return fake
 }
 
 /** The sections of the JSON that the same GitHub state makes the same on every machine. */
@@ -321,7 +320,19 @@ describe('AC44: status from GitHub alone', () => {
         url: 'https://github.com/hackwin-test/app/pull/22',
       },
     ])
-    expect(data.wave).toMatchObject({ number: 1, open_tasks: 9, milestone: { title: 'Wave 1' } })
+    expect(data.wave).toEqual({
+      number: 1,
+      open_tasks: 9,
+      milestone: {
+        number: 1,
+        title: 'Wave 1',
+        state: 'open',
+        open_issues: 11,
+        closed_issues: 2,
+        due_on: '2026-10-25T10:00:00Z',
+        url: 'https://github.com/hackwin-test/app/milestone/1',
+      },
+    })
     expect(data.gate).toMatchObject({ state: 'running', source: 'local', age_seconds: 10 })
     expect(jsonClone.json.data.gate).toMatchObject({
       state: 'running',
