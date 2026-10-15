@@ -502,10 +502,14 @@ describe('1.3b/task-author: an issue is a task only when a member of the team wr
   })
 })
 
-/** A control character (C0, DEL, C1) or a Unicode line or paragraph separator. */
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+/**
+ * A control character (C0, DEL, C1), a Unicode line or paragraph separator, or a bidirectional
+ * format character.
+ */
+const UNSAFE =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
 
-describe('1.3b/task-block-errors: no control character or line break in the errors of a task block', () => {
+describe('1.3b/task-block-errors: no control character, line break or bidi format character in the errors of a task block', () => {
   /** @param {string} text The block after its marker line. */
   const errorsOf = (text) => {
     const parsed = /** @type {any} */ (
@@ -517,8 +521,10 @@ describe('1.3b/task-block-errors: no control character or line break in the erro
   }
 
   // A YAML escape in double quotes, and how an error writes the character it decodes to: the
-  // escape character (clear the screen, reset the terminal), a carriage return, a line feed, both, the C1 control sequence introducer,
-  // DEL, the next line of C1, and the line and paragraph separators.
+  // escape character (clear the screen, reset the terminal), a carriage return, a line feed,
+  // both, the C1 control sequence introducer, DEL, the next line of C1, the line and paragraph
+  // separators, and bidirectional format characters (the right-to-left override, the Arabic
+  // letter mark, the right-to-left mark and the left-to-right isolate).
   const values = [
     ['\\e[2J', '\\u001b[2J'],
     ['\\ec', '\\u001bc'],
@@ -530,6 +536,10 @@ describe('1.3b/task-block-errors: no control character or line break in the erro
     ['\\N', '\\u0085'],
     ['\\L', '\\u2028'],
     ['\\P', '\\u2029'],
+    ['\\u202E', '\\u202e'],
+    ['\\u061C', '\\u061c'],
+    ['\\u200F', '\\u200f'],
+    ['\\u2066', '\\u2066'],
   ]
 
   for (const [yaml, shown] of values) {
@@ -604,23 +614,27 @@ describe('1.3b/task-block-errors: no control character or line break in the erro
     ])
   })
 
-  test('raw control characters in the body, and in the message of the YAML parser', () => {
+  test('raw characters in the body, and in the message of the YAML parser', () => {
     // The parser's message for an invalid escape quotes the character after the backslash.
     for (const [char, shown] of [
       ['\u001b', '\\u001b'],
       ['\u009b', '\\u009b'],
       ['\u007f', '\\u007f'],
       ['\u2028', '\\u2028'],
+      ['\u202e', '\\u202e'],
     ]) {
       expect(errorsOf(`kind: "a\\${char}b"`)).toEqual([
         `the task block is not valid YAML: Invalid escape sequence \\${shown}`,
       ])
     }
-    const errors = errorsOf('k\u001b[31m: 1\nkind: "a\u009bb"\nrole: "\u2028"')
-    expect(errors.slice(0, 3)).toEqual([
+    const errors = errorsOf(
+      'k\u001b[31m: 1\nkind: "a\u009bb"\nrole: "\u2028"\nwave: "1\u202egnp.exe"',
+    )
+    expect(errors.slice(0, 4)).toEqual([
       '"k\\u001b[31m" is not a key of the task block',
       'kind "a\\u009bb" is not one of task, proposal, integration, contract-change, foundation',
       'role "\\u2028" is not a role of owners.yml',
+      'wave must be a whole number, not "1\\u202egnp.exe"',
     ])
   })
 })

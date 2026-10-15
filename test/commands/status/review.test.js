@@ -137,7 +137,7 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
       `  ATTENTION secret\\u001b[31m #40: rotate ${visible} warning: forged line`,
     )
     expect(result.lines).toContain(
-      `  #42 has an invalid task block: x gate: running is not a key of the task block; role ${visible} is not a role of owners.yml: Forged block`,
+      `  #42 has an invalid task block: "x\\ngate: running" is not a key of the task block; role "${visible}" is not a role of owners.yml: Forged block`,
     )
     const pull = result.lines.find((line) => line.startsWith('  pull request #40'))
     expect(pull).toContain(`check failed \\u001b[2J${visible}: Fix \\u001b]8;;https://evil.example`)

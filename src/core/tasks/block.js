@@ -2,7 +2,8 @@
 // `# hackwin:task`. An issue without it is not a task. Three rules make a block invalid: a path
 // that does not lie in exactly one role or on the `open` list, empty acceptance tests outside the
 // kind `foundation`, and a missing deadline. Any account can write a block, and `take` prints its
-// errors, so no error carries a control character or a line break of the body.
+// errors, so no error carries a control character, a line break or a bidirectional format
+// character of the body.
 
 import { parseDocument } from 'yaml'
 import { isIsoTimeWithOffset } from '../config/fields.js'
@@ -26,8 +27,13 @@ export const TASK_KINDS = Object.freeze([
   'foundation',
 ])
 
-/** A control character (C0, DEL and C1), or the line or paragraph separator of Unicode. */
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+/**
+ * A control character (C0, DEL and C1), the line or paragraph separator of Unicode, or a
+ * bidirectional format character, which reorders what a line shows: the characters that `status`
+ * escapes too (cleanText in src/commands/status/text.js).
+ */
+const UNSAFE =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
 const UNSAFE_ALL = new RegExp(UNSAFE.source, 'g')
 
 const BLOCK_KEYS = Object.freeze([
@@ -166,8 +172,8 @@ export function parseTaskBlock(body, config) {
 }
 
 /**
- * A value of the block as an error shows it: a string without a control character or line break
- * as it is, anything else quoted. Not exported by index.js.
+ * A value of the block as an error shows it: a string without a character of UNSAFE as it is,
+ * anything else quoted. Not exported by index.js.
  * @param {unknown} value
  * @returns {string}
  */
@@ -176,8 +182,8 @@ export function shown(value) {
 }
 
 /**
- * A value quoted as JSON, with every control character and line break escaped, also those that
- * JSON leaves as they are (DEL, C1, U+2028 and U+2029).
+ * A value quoted as JSON, with every character of UNSAFE escaped, also those that JSON leaves as
+ * they are (DEL, C1, U+2028, U+2029 and the bidirectional format characters).
  * @param {unknown} value
  * @returns {string}
  */
@@ -186,7 +192,7 @@ function quoted(value) {
 }
 
 /**
- * Text with every control character and line break written as a `\uXXXX` escape.
+ * Text with every character of UNSAFE written as a `\uXXXX` escape.
  * @param {string} text
  * @returns {string}
  */
