@@ -7,6 +7,7 @@ import {
   gateDir,
   isGreen,
   isJoinComplete,
+  joinLogPath,
   latestMainSeen,
   parseJson,
   promptPath,
@@ -88,6 +89,11 @@ describe('1.3c/state: the records under <git-common-dir>/hackwin/', () => {
     )
     expect(() => shipLogPath(dir, 0, 'check')).toThrow(TypeError)
     expect(() => shipLogPath(dir, 12, '../check')).toThrow(TypeError)
+  })
+
+  test('the install log of join lies under the git common directory', () => {
+    expect(joinLogPath('/repo/.git')).toBe('/repo/.git/hackwin/logs/join/install.log')
+    expect(joinLogPath('/repo/.git/worktrees/../')).toBe('/repo/.git/hackwin/logs/join/install.log')
   })
 
   test('local.yml round-trips, and join is complete only with the record and the same login', async () => {

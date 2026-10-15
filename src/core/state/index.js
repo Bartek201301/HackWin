@@ -331,6 +331,16 @@ export function shipLogPath(dir, issue, step) {
   return join(statePaths(dir).logs, 'ship', String(issue), `${step}.log`)
 }
 
+/**
+ * The log of `commands.install`, which `join` runs in its step 4: `logs/join/install.log`. Lane A
+ * (`join`) writes it and replaces it on each run.
+ * @param {string} dir The git common directory.
+ * @returns {string}
+ */
+export function joinLogPath(dir) {
+  return join(statePaths(dir).logs, 'join', 'install.log')
+}
+
 // File helpers, also for the lanes' own files under the git common directory.
 
 /**
