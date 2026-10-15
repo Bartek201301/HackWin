@@ -17,6 +17,39 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Step 1.6c, gate: intake and stages 1 to 6 (PR #64, issue #22)
+
+- Setup: one builder session of lane C (Claude Code) in the worktree `task/22-gate-intake-stages`, created by the integrator from `556f6b0` after the merge of #56. The session stopped once at the usage limit and went on after the reset. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `48c374d`, on `556f6b0`, then merges of `origin/main` and a switch to the `createMatcher` export of #59 (`372fd8e`); PR #64 opened at 00:11:08 UTC, and CI passed.
+  - The Lead's review asked for an exact marker parser, for outsiders' pull requests to be left alone, and for every head to be scanned. `d394dca` did this, and a merge of `origin/main` at `2013b56` followed (`1894e88`).
+  - `lead-55` sent `merge #64` for `1894e88`. Steps 1 to 5 and 7 passed. Step 6, with the PR merged into `2013b56`, failed:
+    - `npm test` failed in 2 of 3 full runs, at load averages of 2 to 11 at the start and, according to `lead-55`, up to 26 on 10 cores, with three vitest processes of #11's worktree beside step 6.
+    - The failing test was 1.6c/intake in `test/commands/gate/admission.test.js`: "timed out waiting for the next poll" (`until()` in `test/commands/gate/scene.js`, 15 s). The second run, `npx vitest run`, passed 647 of 647.
+    - The integrator stopped without merging and reported to `lead-55`, which agreed.
+  - The cause, found by the session: `scene.poll()` moved the test clock while a poll was still under way, and the Gate leaves out a poll that comes due during another, so the awaited poll never started. A 500 ms pause at the end of each intake reproduced the failure without load. `8a56f59` (test files only) makes `poll()` wait for the poll under way first; with the same pause, the 22 tests that use the scene passed.
+  - `lead-55` sent `merge #64` again for `8a56f59`. Its review of `1894e88` stood:
+    - Nothing merges or pushes, every write is pinned to the SHA it checked, and `osascript` gets title and message as arguments.
+    - It probed the parser at that head: the exact marker parses; an indented, BOM, quoted, trailing-text or second-line marker returns null; 100,000 repeats of "a=a " take 0.06 ms.
+    - `latestGateComment` returns the Lead's comment, never a stranger's.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 20 files inside issue #22's paths, 6 of them changed since `1894e88`, all test files; no secret pattern; no conflict with `2013b56`. Step 6, with the PR merged into `2013b56` and no other vitest process running: `npm test` passed 647 of 647, and `npm run test:ac` passed AC25 (1), AC26 (1), AC42 (1), AC79 (3), AC80/gate (1), 1.6c/marker (4), 1.6c/outsiders (2) and 1.6c/intake (5). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge:
+    - a new integrator task, #66 (contracts: the Gate comment marker, and `enforceVersion` in 4.4);
+    - scope changes on #23 (`tested_main_sha` set again in stage 7; stages 7 to 11 use the pull request's SHA, never `refs/hackwin/pr/<PR>`) and #57 (`take` uses `latestGateComment` and only a marker with the current head SHA);
+    - worktrees for #23, #57 and #66 at `58fde88`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The Lead's decision, recorded for the PRD (the human may overrule it): a fork's or a non-member's pull request is neither fetched nor scanned, and gets only a scope violation attention item that names it.
+  - For the PRD revision:
+    - choice 1 (only pull requests into the default branch join the queue, and every head is scanned) departs from G7's wording;
+    - choice 2: no second notification while a secret item is open;
+    - choice 5: G7 and the table of 9.6 differ on the retry of a failed pull request;
+    - the fetch by SHA was observed only for a commit reachable from main.
+  - The session stopped once at the usage limit, with the review fixes in a local commit that was never pushed; it continued from there after the reset. According to `lead-55`, a later turn ended with "API Error: Your computer went to sleep mid-response".
+  - The load average was 16 to 27 on 10 cores during the session's runs; the Gate tests took 2 to 3 times longer than at the start.
+  - zsh did not split an unquoted `$FILES` into words, and read `"$B:refs/..."` as the `:r` modifier of `$B`; a few minutes lost.
+- Measured: PR open 4 h 30 min 8 s (00:11:08 to 04:41:16 UTC), including the Lead's review, one round of fixes, the failed step 6 and the test fix; 7 commits (three merges of `origin/main`), 3 PR runs (81 s, 84 s and 82 s), 0 conflicts. Local merge test: `npm test` 93.7 s, 113.5 s (`npx vitest run`) and 139.8 s on `1894e88`, two of them failed; 92.83 s on `8a56f59`, passed. The run on main after the merge: 91 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/64; heads `1894e88` (step 6 failed) and `8a56f59` (merged); merge commit `58fde88`; runs `38658558649`, `38681045960` and `38682417821` (PR) and `38682770438` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.4h, lane A follow-up: the CI token by environment, join's merged field, the hooks' config loader (PR #62, issue #61)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/61-lane-a-follow-up`, created by the integrator from `653bb8c` after the merge of #58; `lead-55` opened the session. The integrator's planning session for the merge.
