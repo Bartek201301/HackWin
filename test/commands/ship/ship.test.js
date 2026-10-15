@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { readCheckRecord, statePaths } from '../../../src/core/state/index.js'
+import { readCheckRecord, shipLogPath, statePaths } from '../../../src/core/state/index.js'
 import { accounts, httpError } from '../../harness/index.js'
 import {
   BRANCH,
@@ -60,8 +60,8 @@ describe('AC15: ship exits 1 and leaves the remote branch unchanged', () => {
     expect(result.stderr).toContain(`\`${NODE} tools/test.mjs ${TEST_FILE}\` exited 1`)
     expect(result.stdout).toContain(`FAIL ${TEST_FILE}`)
     const log = /- log: (.+)$/m.exec(result.stderr)?.[1] ?? ''
-    expect(log.startsWith(join(s.env.TMPDIR, 'hackwin-ship'))).toBe(true)
-    expect(log.endsWith('acceptance.log')).toBe(true)
+    expect(log).toBe(shipLogPath(s.commonDir, ISSUE, 'acceptance'))
+    expect(existsSync(join(/** @type {string} */ (s.env.TMPDIR), 'hackwin-ship'))).toBe(false)
     expect(readFileSync(log, 'utf8')).toContain(`FAIL ${TEST_FILE}`)
   })
 

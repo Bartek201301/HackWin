@@ -222,6 +222,29 @@ export function agentBin(fixture, name, { claude = true, codex = true } = {}) {
 }
 
 /**
+ * An environment whose PATH starts with a `git` that records the arguments of every call, one
+ * line each, and then runs the real `git`.
+ * @param {Fixture} fixture
+ * @param {string} name
+ */
+export function gitRecorder(fixture, name) {
+  const bin = join(fixture.dir, `${name}-git-bin`)
+  const log = join(fixture.dir, `${name}-git.log`)
+  mkdirSync(bin, { recursive: true })
+  const real = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+  writeFileSync(
+    join(bin, 'git'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${real}' "$@"\n`,
+  )
+  chmodSync(join(bin, 'git'), 0o755)
+  return {
+    env: { ...fixture.env, PATH: `${bin}:${fixture.env.PATH ?? ''}` },
+    /** The arguments of each recorded call, joined by spaces. */
+    calls: () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []),
+  }
+}
+
+/**
  * Expect each text to occur in `text`, each after the one before.
  * @param {string} text
  * @param {string[]} parts
