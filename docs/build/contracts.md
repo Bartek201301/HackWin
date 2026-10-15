@@ -285,9 +285,9 @@ The parsed objects keep the key names of the files (`cli_version`, `team.members
 | Export | Inputs | Output and errors |
 | --- | --- | --- |
 | `loadConfig(git, { ref, fetch })` | `ref` is `origin/main` by default; `fetch` true by default (CM9): `git fetch --prune origin` | `Config`: `{ hackwin, owners, ref, sha }`. `RemoteError` when the fetch fails; `PreconditionError` when `hackwin.yml` is missing on the ref ("not configured", resolve: `hackwin setup` in the main checkout); `ConfigError` naming the key for every broken rule |
-| `loadCheckedConfig(git, { ref, fetch, running, repositoryUrl, out })` | `ref` is `mainRef(git)` by default; `fetch` true by default, false in a hook; `running` the version of the CLI; `repositoryUrl` `repository.url` of `package.json`; `out` an `Output` for the warning, or null | `Config`, after the version check of `enforceVersion`. When the configuration is invalid, `cli_version` is read from the raw `hackwin.yml` first, so a CLI of another phase gets the `PreconditionError` with the version to install, not the `ConfigError` of a key it does not know. The runner (section 3.6, step 4) calls it; the hooks may call it with `fetch: false`. Errors: those of `loadConfig` and `enforceVersion` |
+| `loadCheckedConfig(git, { ref, fetch, running, repositoryUrl, out })` | `ref` is `mainRef(git)` by default; `fetch` true by default, false in a hook; `running` the version of the CLI; `repositoryUrl` `repository.url` of `package.json`; `out` an `Output` for the warning, or null | `Config`, after the version check of `enforceVersion`. When the configuration is invalid, `cli_version` is read from the raw `hackwin.yml` first, so a CLI of another phase gets the `PreconditionError` with the version to install, not the `ConfigError` of a key it does not know. The runner (section 3.6, step 4) calls it; the hooks call it with `fetch: false`, through `loadHookConfig` of `src/internal/hook/config.js` (#61, PR #62). Errors: those of `loadConfig` and `enforceVersion` |
 | `mainRef(git)` | | The remote-tracking ref of the default branch: what `origin/HEAD` points to, or `origin/main` |
-| `enforceVersion({ running, pinned, repositoryUrl, out })` | Two versions; `out` as above | The `VersionStatus`. `older` and `other-phase` are a `PreconditionError` (exit 2) whose resolve is the install command of the pinned version (section 6.3) in any directory; `newer-patch` warns on `out` and continues. `src/cli/main.js` keeps exporting `enforceVersion({ running, pinned, out, repositoryUrl })` with `repository.url` of this package as default, for the hooks of 1.4a |
+| `enforceVersion({ running, pinned, repositoryUrl, out })` | Two versions; `out` as above | The `VersionStatus`. `older` and `other-phase` are a `PreconditionError` (exit 2) whose resolve is the install command of the pinned version (section 6.3) in any directory; `newer-patch` warns on `out` and continues. No hook calls it directly: the hooks load through `loadCheckedConfig` (#61, PR #62). `src/cli/main.js` still exports `enforceVersion({ running, pinned, out, repositoryUrl })` with `repository.url` of this package as default; only `test/cli/prepare.test.js` imports it |
 | `pinnedVersionOf(text)` | The text of `hackwin.yml` | Its `cli_version`, read without validating the rest, or null when it has no valid version |
 | `HACKWIN_FILE`, `OWNERS_FILE` | | `hackwin.yml`, `owners.yml`: the two files at the repository root |
 | `parseHackwinConfig(text)` | The text of `hackwin.yml` | The object of 6.1 with the defaults of 6.3, or `ConfigError` |
@@ -533,6 +533,32 @@ The reader (section 4.11) computes the state from the rules in force, not from t
 `prompts/<issue>.md` belongs to lane B (`take`); everything under `gate/` belongs to lane C (6.4). `src/core/state` only names these paths.
 
 `logs/` (`statePaths(dir).logs`) holds the logs of the project commands that a command runs, one directory per command. `ship` writes the logs of its steps 7 and 8 to `logs/ship/<issue>/check.log` and `logs/ship/<issue>/acceptance.log` (`shipLogPath(dir, issue, step)`), replaced on each run; they belong to lane B. The git common directory belongs to the member, so these logs are in no directory that other users of the machine share. Until #57 (1.5f) adopts the path, `ship` writes them to `$TMPDIR/hackwin-ship/<12 hex digits of the SHA-256 of the git common directory>-<issue>/` (PR #43).
+
+### 5.7 Gate comment marker
+
+The Gate, the Lead and the Lead's builder sessions all write on GitHub as the Lead's account (A5), so the author of a comment does not tell the Gate's comments from the Lead's. Every comment the Gate writes on a pull request (G21, A31) therefore starts with a marker line that names the pull request, the full head SHA, the stage and the result (scope change on #22, PR #64). The Gate (lane C) writes it; `take` (lane B) and the Gate itself read it.
+
+```text
+<!-- hackwin:gate-comment pr=<N> sha=<full head SHA> stage=<stage> result=<result> -->
+```
+
+- `pr`: the pull request's number. `sha`: the full head SHA of the run, 40 lower-case hex digits, or 64 in a SHA-256 repository. `stage`: the stage where the run ended, as `STAGES` of `src/commands/gate/stages.js` names stages 1 to 6: `fetch`, `task-link`, `scope`, `secrets`, `gated-paths`, `conflicts`; a secret found by the scan at intake also has `secrets`. `result`: the digest result of 9.6 that the run ended with; today `scope-violation`, `needs-owner` or `failed`. A stage and a result are lower-case words joined by single hyphens.
+- GitHub does not render an HTML comment, and the API returns the body as written.
+- Only the exact marker counts: at the very start of the body, with no space, tab, byte order mark or other character before it; the four keys once each, in this order, with single spaces; nothing else up to the end of its line (`\n`, `\r\n` or the end of the body). A reply that quotes a Gate comment, or a marker in a code block, is no Gate comment.
+
+`src/commands/gate/comment.js` exports:
+
+| Export | Inputs | Output and errors |
+| --- | --- | --- |
+| `MARKER_NAME` | | `hackwin:gate-comment` |
+| `formatGateMarker({ pr, sha, stage, result })` | A `GateMarker` | The marker line, without a line end. `TypeError` when `pr` is not a positive integer of at most 10 digits, `sha` is not a full SHA, or `stage` or `result` is not such a word |
+| `parseGateMarker(body)` | A comment body, or null or undefined | The `GateMarker` `{ pr, sha, stage, result }` with `pr` a number, or null when the body does not start with the exact marker. It takes time linear in the body's length |
+| `latestGateComment(comments, { pr, lead })` | `Comment[]` oldest first, as `listComments` returns them (section 4.3); the pull request's number; `lead` is `team.lead` of `hackwin.yml` | `{ comment, marker }` of the newest comment whose author is `lead`, compared without case, and whose marker names `pr`; or null. A marker in a comment of any other account never counts |
+
+The module's `failureComment` builds the whole body of a failed run's comment, marker first; only the Gate uses it.
+
+- **Whose marker.** A marker is the Gate's only when the comment's author is `team.lead`. A marker that the Lead types by hand under that account cannot be told apart from the Gate's (A5). A caller that acts on a Gate comment therefore also compares `marker.sha` with the head SHA it acts on.
+- **Who reads it.** `take` (#57, lane B) reads the Gate's comment of a pull request with `latestGateComment` and uses it only when `marker.sha` is the pull request's current head SHA (scope change on #57); until #57 is merged, `gateComment` in `src/commands/take/resume.js` takes the newest comment by `team.lead`. The Gate's restart (#24, lane C) recognizes its own comments the same way, so that no comment is repeated (AC22): by the marker in comments by `team.lead` (`latestGateComment`, or `parseGateMarker` with the same author check), never by the author alone or by a marker in another account's comment, and it compares `marker.sha` with the head SHA where it acts on one.
 
 ## 6. Decisions of plan section 9
 
