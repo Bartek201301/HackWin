@@ -37,7 +37,12 @@ import {
 } from '../../core/config/index.js'
 import { PreconditionError } from '../../core/runtime/errors.js'
 import { formatFinding, scanDiff } from '../../core/secrets/index.js'
-import { checkTaskLink, parseTaskBlock, parseTaskLink } from '../../core/tasks/index.js'
+import {
+  checkTaskLink,
+  parseTaskBlock,
+  parseTaskLink,
+  writtenByTeam,
+} from '../../core/tasks/index.js'
 import { readPullEvent } from './event.js'
 import { checkMergedTree } from './merged.js'
 import { RULES, STEPS, fail, plural, report } from './steps.js'
@@ -46,7 +51,7 @@ import { fetchAuth, githubWithToken, takeToken } from './token.js'
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { GitHub, PullRequest } from '../../core/github/index.js' */
-/** @import { TaskBlock } from '../../core/tasks/index.js' */
+/** @import { ParsedTaskBlock, TaskBlock } from '../../core/tasks/index.js' */
 /** @import { StepResult } from './steps.js' */
 
 /**
@@ -158,7 +163,8 @@ async function checkConfiguration(ctx, results, { pull, head, baseRef, paths }) 
 
 /**
  * Step 2: the pull request comes from a task branch and names one open task with a valid data
- * block (E11), and never from a `spike/` branch (E16).
+ * block (E11), and never from a `spike/` branch (E16). Only an issue that a member of the team
+ * wrote is a task (4.5).
  * @param {CommandContext} ctx
  * @param {StepResult[]} results
  * @param {{ github: GitHub, pull: PullRequest, config: Config }} input
@@ -199,8 +205,13 @@ async function checkTaskLinkStep(ctx, results, { github, pull, config }) {
       }
       case 'invalid-task-block': {
         const number = /** @type {number} */ (linkedIssue(pull))
-        const issue = await github.getIssue(number)
-        const parsed = issue ? parseTaskBlock(issue.body, config) : null
+        if (!link.member) {
+          // The one error of checkTaskLink names the issue and its author, safe to print (4.5).
+          return failLink(ctx, pull, link.errors.join('; '), [`issue #${number}`], {
+            resolve: `ask the Lead to write the task, move the work to the branch task/<N>-<slug> of that task with a pull request that holds \`Closes #<N>\`, and close pull request #${pull.number}`,
+          })
+        }
+        const parsed = await readTaskBlock(github, config, number)
         const errors = parsed?.isTask && !parsed.valid ? parsed.errors : ['no # hackwin:task block']
         return failLink(
           ctx,
@@ -211,8 +222,7 @@ async function checkTaskLinkStep(ctx, results, { github, pull, config }) {
       }
     }
   }
-  const issue = await github.getIssue(link.issue)
-  const parsed = issue && parseTaskBlock(issue.body, config)
+  const parsed = await readTaskBlock(github, config, link.issue)
   if (!parsed?.isTask || !parsed.valid) {
     // The issue changed between the two reads.
     return failLink(ctx, pull, `issue #${link.issue} is not a task with a valid data block`, [
@@ -233,14 +243,31 @@ async function checkTaskLinkStep(ctx, results, { github, pull, config }) {
  * @param {PullRequest} pull
  * @param {string} message
  * @param {string[]} objects
+ * @param {{ resolve?: string }} [options] The resolve when correcting the body or the task is not
+ *   the fix.
  * @returns {Promise<never>}
  */
-function failLink(ctx, pull, message, objects) {
+function failLink(ctx, pull, message, objects, { resolve } = {}) {
   return fail(ctx, STEPS.link, message, {
     rule: RULES.E11,
     objects,
-    resolve: `the pull request of a task comes from its branch task/<N>-<slug> and its body holds exactly one line \`Closes #<N>\` for that open task; correct the body or the task, then run the hackwin check of pull request #${pull.number} again`,
+    resolve:
+      resolve ??
+      `the pull request of a task comes from its branch task/<N>-<slug> and its body holds exactly one line \`Closes #<N>\` for that open task; correct the body or the task, then run the hackwin check of pull request #${pull.number} again`,
   })
+}
+
+/**
+ * The task block of an issue, read directly: null for an issue that does not exist or that no
+ * member of the team wrote, whose body is not parsed (4.5).
+ * @param {GitHub} github
+ * @param {Config} config
+ * @param {number} number
+ * @returns {Promise<ParsedTaskBlock | null>}
+ */
+async function readTaskBlock(github, config, number) {
+  const issue = await github.getIssue(number)
+  return issue && writtenByTeam(issue, config) ? parseTaskBlock(issue.body, config) : null
 }
 
 /**
