@@ -460,7 +460,10 @@ describe('1.6b/status-issue: created and pinned at the first start, found by its
     await quit(second)
 
     const calls = fake.calls.map((call) => call.endpoint ?? call.args.slice(0, 2).join(' '))
-    expect(calls.filter((call) => call === ISSUES)).toHaveLength(3)
+    // Each start finds the issue by its label, and each edit after a start reads it first (#24).
+    expect(
+      fake.calls.filter((call) => call.method === 'GET' && call.endpoint === ISSUES),
+    ).toHaveLength(4)
     expect(
       fake.calls.filter((call) => call.method === 'POST' && call.endpoint === ISSUES),
     ).toHaveLength(1)
@@ -629,7 +632,8 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
     // The issue shows this clone's id 40 s ahead of this clock, and there is no local heartbeat.
     const ahead = withStatus({ heartbeat_at: '2026-10-24T10:00:40.000Z', gate_id: id })
     const gate = await startLead({ fake: ahead })
-    expect(gate.io.out).toContain('Gate started: start 1')
+    // The clone has no state file, so the count goes on from the start the status issue counts.
+    expect(gate.io.out).toContain('Gate started: start 2, restart 1')
     await quit(gate)
 
     // Another id is another Gate, even when its heartbeat is older than this clone's local one.
@@ -744,10 +748,15 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
 
     await quit(first)
     const second = await startLead({ fake, clock, cwd: other.path })
-    expect(second.io.out).toContain('Gate started: start 1, pid')
+    // A start in another clone is a restart as well (M7; scope change on #24).
+    expect(second.io.out).toContain(
+      'the status issue #1 counts 1 Gate starts and this clone 0, so the count goes on from the status issue (M7)',
+    )
+    expect(second.io.out).toContain('Gate started: start 2, restart 1, pid')
     expect(parseStatusBody(issueOf(fake).body)).toMatchObject({
       heartbeat_at: clock.iso(),
       stopped_at: null,
+      starts: 2,
       gate_id: gateIdOf(otherFiles),
     })
     await quit(second)

@@ -3,6 +3,15 @@
 // which sets `gate:failed`, posts exactly one comment with the stage, the reason and the next
 // action (G21), writes the digest line and leaves the queue.
 //
+// A failed run posts its comment before the state file records the failure, so a Gate that
+// stops in between, killed or after an answer of GitHub that got lost, runs the same head SHA
+// again after its restart. Before it comments, the Gate therefore counts its own comments for
+// that head SHA and stage: comments of `team.lead` (A5) whose marker names the pull request, the
+// head SHA and the stage (comment.js). When there are more of them than failures the state file
+// records for that head SHA and stage, the comment of this run is there already, and no second
+// one is posted (AC22; scope change on #24). A marker that the Lead types by hand under the same
+// account cannot be told apart from the Gate's; the head SHA must match it as well.
+//
 // The Gate fetches a pull request's head by its full SHA into `refs/hackwin/pr/<PR>`, a ref of
 // its own outside the branches and remote branches of the Lead's clone, so the fetch gets exactly
 // the head SHA the Gate recorded, also when the author pushed again since. What was observed:
@@ -18,12 +27,13 @@
 // alone.
 
 import { loadConfig, rolesOf } from '../../core/config/index.js'
-import { RemoteError } from '../../core/runtime/index.js'
+import { PreconditionError, RemoteError } from '../../core/runtime/index.js'
 import { scanAddedLines, scanDiff } from '../../core/secrets/index.js'
 import { parseTaskLink } from '../../core/tasks/index.js'
 import { raiseAttention } from './attention.js'
-import { failureComment } from './comment.js'
+import { failureComment, parseGateMarker } from './comment.js'
 import { appendDigestLine, formatDigestLine, hoursAndMinutes } from './digest.js'
+import { recordFailure } from './repeated.js'
 
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { ChangedFile } from '../../core/git/index.js' */
@@ -43,7 +53,7 @@ export const STOP = Symbol('stop')
 export const REPEAT = Symbol('repeat from stage 6')
 
 /** The first wait before a failed GitHub or network call is made again; each later wait doubles, up to a poll interval. */
-const FIRST_RETRY_WAIT_MS = 5000
+export const FIRST_RETRY_WAIT_MS = 5000
 
 /** How many items a comment lists at most. */
 export const MAX_DETAILS = 50
@@ -303,12 +313,11 @@ export function capped(items) {
  */
 export async function retrying(run, title, work) {
   const { gate, pr } = run
-  const longest = gate.config.hackwin.gate.poll_seconds * 1000
-  for (let wait = FIRST_RETRY_WAIT_MS; ; wait = Math.min(wait * 2, longest)) {
+  for (let wait = FIRST_RETRY_WAIT_MS; ; wait = nextWait(gate, wait)) {
     try {
       return await work()
     } catch (error) {
-      if (!(error instanceof RemoteError)) throw error
+      if (!isGitHubFailure(error)) throw error
       gate.line(
         `#${pr} ${title}: failed, the Gate tries again in ${Math.round(wait / 1000)} s: ${messageOf(error)}`,
       )
@@ -316,6 +325,31 @@ export async function retrying(run, title, work) {
       if (gate.stopping || run.superseded()) return STOP
     }
   }
+}
+
+/**
+ * The wait after `wait` before a failed GitHub or network call is made again: twice as long, up
+ * to a poll interval.
+ * @param {Gate} gate
+ * @param {number} wait
+ * @returns {number}
+ */
+export function nextWait(gate, wait) {
+  return Math.min(wait * 2, gate.config.hackwin.gate.poll_seconds * 1000)
+}
+
+/**
+ * True for a failure of GitHub or the network, which the Gate waits out (7.5, failure behavior):
+ * a failed gh call or fetch, and gh that lost its login, which the Lead renews with
+ * `gh auth login`. Any other error is a fault of the Gate.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isGitHubFailure(error) {
+  if (error instanceof RemoteError) return true
+  if (!(error instanceof PreconditionError)) return false
+  const resolve = /** @type {any} */ (error.resolve)
+  return resolve?.command === 'gh auth login'
 }
 
 /**
@@ -364,37 +398,58 @@ export async function writeDigest(gate, entry) {
 /**
  * End a run as failed (9.2): the attention item first, so that a secret reaches the Lead also
  * while GitHub fails; then `gate:failed` with the failure's labels and exactly one comment (G21);
- * then the record, which leaves the queue, and the digest line. A GitHub call that fails throws
- * before the state changes, so the next try writes everything again.
+ * then the record, which leaves the queue, the repeated failures (repeated.js) and the digest
+ * line. A GitHub call that fails throws before the state changes, so the next try writes
+ * everything again, and finds the comment that it posted already.
  * @param {Gate} gate
  * @param {Notifier} notifier
- * @param {{ pr: number, record: PullRecord, author: string | null, main: string | null, startedAt: number, failure: StageFailure }} ending
+ * @param {{ pr: number, record: PullRecord, author: string | null, main: string | null, startedAt: number, failure: StageFailure, config?: Config, queued?: boolean }} ending
  *   `record` becomes the pull request's record: intake passes the record of a new head SHA.
+ *   `config` is the configuration on main, the one of the Gate's start by default. `queued` is
+ *   false for a head SHA that failed at intake, before it joined the queue.
  * @returns {Promise<void>}
  */
-export async function endFailed(gate, notifier, { pr, record, author, main, startedAt, failure }) {
+export async function endFailed(gate, notifier, ending) {
+  const { pr, record, author, main, startedAt, failure } = ending
+  const { config = gate.config, queued = true } = ending
   const { ctx, state } = gate
   const sha = record.head_sha
-  if (failure.attention) await raiseAttention(gate, notifier, { pr, ...failure.attention })
+  if (failure.attention) {
+    await raiseAttention(gate, notifier, { pr, ...failure.attention, stage: failure.stage })
+  }
   await setGateLabels(ctx.github, pr, ['gate:failed', ...failure.labels])
-  await ctx.github.createComment(
-    pr,
-    failureComment({
-      marker: { pr, sha, stage: failure.stage, result: failure.result },
-      title: failure.title,
-      reason: failure.reason,
-      details: failure.details,
-      log: failure.log,
-      next: failure.next,
-      main,
-    }),
-  )
+  if (await commentedAlready(gate, { pr, record, stage: failure.stage })) {
+    gate.line(
+      `#${pr}: the comment of this failure of head ${sha} at ${failure.title} is on the pull request already, from before the Gate stopped, so it posts no second one`,
+    )
+  } else {
+    await ctx.github.createComment(
+      pr,
+      failureComment({
+        marker: { pr, sha, stage: failure.stage, result: failure.result },
+        title: failure.title,
+        reason: failure.reason,
+        details: failure.details,
+        log: failure.log,
+        next: failure.next,
+        main,
+      }),
+    )
+  }
   const now = ctx.clock.now()
   state.prs[String(pr)] = record
   record.stage = failure.stage
   record.result = failure.result
   record.failures.push({ stage: failure.stage, sha, at: now.toISOString() })
   leaveQueue(state, pr)
+  await recordFailure(gate, notifier, {
+    pr,
+    sha,
+    stage: failure.stage,
+    title: failure.title,
+    queued,
+    threshold: config.hackwin.gate.repeated_failure_threshold,
+  })
   await writeDigest(gate, {
     time: now.toISOString(),
     pr,
@@ -405,6 +460,29 @@ export async function endFailed(gate, notifier, { pr, record, author, main, star
     note: failure.note,
   })
   await gate.save()
+}
+
+/**
+ * True when the comment of this run's failure is on the pull request already: the Gate's comments
+ * for its head SHA and stage outnumber the failures that the record holds for them. Only a
+ * comment of `team.lead` whose marker names the pull request counts (contracts 5.7).
+ * @param {Gate} gate
+ * @param {{ pr: number, record: PullRecord, stage: string }} failed
+ * @returns {Promise<boolean>}
+ */
+async function commentedAlready(gate, { pr, record, stage }) {
+  const sha = record.head_sha
+  const lead = gate.config.hackwin.team.lead.toLowerCase()
+  const comments = await gate.ctx.github.listComments(pr)
+  const posted = comments.filter((comment) => {
+    if (comment.author?.toLowerCase() !== lead) return false
+    const marker = parseGateMarker(comment.body)
+    return marker !== null && marker.pr === pr && marker.sha === sha && marker.stage === stage
+  }).length
+  const recorded = record.failures.filter(
+    (failure) => failure.sha === sha && failure.stage === stage,
+  ).length
+  return posted > recorded
 }
 
 /** @param {unknown} error */

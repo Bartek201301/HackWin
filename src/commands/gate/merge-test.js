@@ -17,6 +17,7 @@
 
 import { join } from 'node:path'
 import { runAcceptanceTests, runCheck } from '../../core/project/index.js'
+import { readText } from '../../core/state/index.js'
 import { parseTaskBlock } from '../../core/tasks/index.js'
 import { inlineCode } from './comment.js'
 import { namedFlakyTests } from './flaky.js'
@@ -38,7 +39,6 @@ import {
   openScratch,
   projectEnv,
 } from './scratch.js'
-import { readText } from './state.js'
 
 /** @import { Config } from '../../core/config/index.js' */
 /** @import { ProjectRun } from '../../core/project/index.js' */

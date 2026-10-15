@@ -17,6 +17,7 @@
 import { join } from 'node:path'
 import { ACTIONS_APP_ID, REQUIRED_CHECK } from '../../core/protection/index.js'
 import { RemoteError } from '../../core/runtime/index.js'
+import { writeAtomic } from '../../core/state/index.js'
 import { namedFlakyTests } from './flaky.js'
 import {
   IN_MAIN_CHECKOUT,
@@ -28,7 +29,6 @@ import {
   setGateLabels,
   takeCommand,
 } from './pulls.js'
-import { writeAtomic } from './state.js'
 
 /** @import { GitHub } from '../../core/github/index.js' */
 /** @import { Protection, RequiredCheck } from '../../core/protection/index.js' */

@@ -1,12 +1,12 @@
 // The Gate's local files under `<git-common-dir>/hackwin/gate/` (6.4): the state file
 // `state.json` of 9.6 (G4), the heartbeat (G5) and the id of this clone's Gate. They are written
-// atomically: a temporary file in the same directory, then a rename, so a crash never leaves half
-// a file behind.
+// atomically with `writeAtomic` of `src/core/state`: a temporary file in the same directory, then
+// a rename, so a crash never leaves half a file behind.
 
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { gateDir } from '../../core/state/index.js'
+import { rename } from 'node:fs/promises'
+import { join } from 'node:path'
+import { gateDir, parseJson, readText, writeAtomic } from '../../core/state/index.js'
 
 /** The schema of every file the Gate writes. */
 export const GATE_SCHEMA = 1
@@ -60,6 +60,22 @@ export function gateFiles(gitCommonDir) {
  * @property {Record<string, PullRecord>} prs By pull request number.
  * @property {AttentionItem[]} attention
  * @property {unknown[]} hotspots Phase 3.
+ * @property {Streaks} streaks The failures in a row that make a repeated failure (G23, A24):
+ *   a key of this Gate beside those of 9.6.
+ */
+
+/**
+ * Runs in a row that failed the same stage (G23), with the newest last.
+ * @typedef {object} Streak
+ * @property {string} stage
+ * @property {Array<{ pr: number, sha: string, at: string }>} runs
+ */
+
+/**
+ * @typedef {object} Streaks
+ * @property {Streak | null} queue The queue items in a row whose runs failed the same stage.
+ * @property {Record<string, Streak>} prs By pull request: its head SHAs in a row whose runs failed
+ *   the same stage.
  */
 
 /**
@@ -86,6 +102,10 @@ export function gateFiles(gitCommonDir) {
  * @property {string} since
  * @property {string} todo
  * @property {string | null} resolved_at
+ * @property {string | null} [stage] For a repeated failure: the stage whose pass closes it
+ *   (9.6). A key of this Gate beside those of 9.6.
+ * @property {boolean} [across] For a repeated failure across queue items: the pass of any queue
+ *   item closes it, not only one of its own pull request.
  */
 
 /**
@@ -106,6 +126,7 @@ export function emptyState() {
     prs: {},
     attention: [],
     hotspots: [],
+    streaks: { queue: null, prs: {} },
   }
 }
 
@@ -166,7 +187,42 @@ export async function loadState(file, now) {
   for (const [key, fallback] of Object.entries(state)) {
     if (sameKind(loaded[key], fallback)) /** @type {any} */ (state)[key] = loaded[key]
   }
+  state.streaks = cleanStreaks(state.streaks)
   return { state, kept: null }
+}
+
+/**
+ * The streaks of a loaded state file: anything that is not a streak reads as none.
+ * @param {unknown} value
+ * @returns {Streaks}
+ */
+export function cleanStreaks(value) {
+  const loaded = isObject(value) ? value : {}
+  /** @type {Record<string, Streak>} */
+  const prs = {}
+  for (const [key, streak] of Object.entries(isObject(loaded.prs) ? loaded.prs : {})) {
+    if (/^[1-9]\d*$/.test(key) && isStreak(streak)) prs[key] = streak
+  }
+  return { queue: isStreak(loaded.queue) ? loaded.queue : null, prs }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Streak}
+ */
+function isStreak(value) {
+  return (
+    isObject(value) &&
+    typeof value.stage === 'string' &&
+    Array.isArray(value.runs) &&
+    value.runs.every(
+      (/** @type {unknown} */ run) =>
+        isObject(run) &&
+        Number.isInteger(run.pr) &&
+        typeof run.sha === 'string' &&
+        typeof run.at === 'string',
+    )
+  )
 }
 
 /**
@@ -235,50 +291,6 @@ export async function loadGateId(file, now) {
     `${JSON.stringify({ schema: GATE_SCHEMA, gate_id: id, created_at: now.toISOString() })}\n`,
   )
   return { id, created: true }
-}
-
-/**
- * Write a file atomically: a temporary file in the same directory, then a rename.
- * @param {string} file
- * @param {string} text
- * @returns {Promise<void>}
- */
-export async function writeAtomic(file, text) {
-  await mkdir(dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
-  try {
-    await writeFile(temporary, text)
-    await rename(temporary, file)
-  } catch (error) {
-    await rm(temporary, { force: true })
-    throw error
-  }
-}
-
-/**
- * The text of a file, or null when it does not exist.
- * @param {string} file
- * @returns {Promise<string | null>}
- */
-export async function readText(file) {
-  try {
-    return await readFile(file, 'utf8')
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
-    throw error
-  }
-}
-
-/**
- * @param {string} text
- * @returns {unknown}
- */
-export function parseJson(text) {
-  try {
-    return JSON.parse(text)
-  } catch {
-    return null
-  }
 }
 
 /**

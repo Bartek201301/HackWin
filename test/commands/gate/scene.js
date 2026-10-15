@@ -4,8 +4,14 @@
 // that records every notification. The project's commands are quick ones of node: the check and
 // the acceptance test pass, and main holds the acceptance test that every task names. No check
 // run exists until a test adds one, so a run that passes stage 7 waits at stage 8.
+//
+// A scene can also cut the Gate off from GitHub and origin (`reachable`), and run a Gate in a
+// process of its own (`fork`, gate-process.js), which a test can kill.
 
+import { fork } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseDigestLine } from '../../../src/commands/gate/digest.js'
 import { createPipeline } from '../../../src/commands/gate/pipeline.js'
 import { gateFiles } from '../../../src/commands/gate/state.js'
@@ -134,6 +140,27 @@ export async function createScene({
   let lastIntakeOf = null
   /** @type {string[]} */
   const extra = []
+  /** @type {Array<import('node:child_process').ChildProcess>} */
+  const children = []
+  let reachable = true
+  /**
+   * The Gate's view of the fake GitHub: while the scene is not reachable, every gh call fails as
+   * when the network is down, without an HTTP status.
+   */
+  const gateGitHub = {
+    ...fake,
+    as: (/** @type {string} */ login) => {
+      const executor = fake.as(login)
+      return (/** @type {string[]} */ args, /** @type {any} */ call) =>
+        reachable
+          ? executor(args, call)
+          : Promise.resolve({
+              code: 1,
+              stdout: '',
+              stderr: 'error connecting to api.github.com\ncheck your internet connection\n',
+            })
+    },
+  }
   /** True when the poll that started last has finished its intake. */
   const pollDone = () => running !== null && lastIntakeOf === running.state.last_poll_at
 
@@ -213,7 +240,7 @@ export async function createScene({
     /** Start the Gate of the Lead with the real pipeline and wait for its header. */
     async start() {
       gate = await startDirect(fixture, {
-        fake,
+        fake: /** @type {FakeGitHub} */ (gateGitHub),
         login: LEAD,
         clock: manualClock(),
         env: { ...fixture.env, ...env },
@@ -442,9 +469,107 @@ export async function createScene({
       extra.push(dir)
     },
 
+    /**
+     * Cut the Gate off from GitHub and from origin, or connect it again: gh fails without an HTTP
+     * status, and the Lead's clone points origin at a path that does not exist.
+     * @param {boolean} up
+     */
+    async reachable(up) {
+      reachable = up
+      const url = up ? fixture.origin : join(fixture.origin, 'unreachable')
+      await fixture.git.run(['remote', 'set-url', 'origin', url])
+    },
+
+    /**
+     * Run `hackwin gate` of the Lead in a process of its own (gate-process.js), with the real
+     * pipeline and the system clock, whose gh calls the scene's fake GitHub answers. Its
+     * notifier records nothing unless `notify` names a platform and the PATH of its command.
+     * @param {{ notify?: { platform: string, release: string, env: Record<string, string> }, trace?: string }} [options]
+     *   `trace` is a file that receives every write, process and connection of the Gate's
+     *   process (trace.js).
+     */
+    fork(options = {}) {
+      const child = fork(
+        fileURLToPath(new URL('./gate-process.js', import.meta.url)),
+        [
+          JSON.stringify({
+            cwd: fixture.main,
+            env: { ...fixture.env, ...env },
+            notify: options.notify,
+          }),
+        ],
+        {
+          cwd: fixture.main,
+          env: {
+            ...fixture.env,
+            ...env,
+            ...(options.trace ? { HACKWIN_TEST_TRACE: options.trace } : {}),
+          },
+          execArgv: options.trace ? ['--import', new URL('./trace.js', import.meta.url).href] : [],
+          silent: true,
+        },
+      )
+      children.push(child)
+      let out = ''
+      child.stdout?.setEncoding('utf8').on('data', (chunk) => (out += chunk))
+      child.stderr?.setEncoding('utf8').on('data', (chunk) => (out += chunk))
+      /** @type {Promise<number | null>} */
+      const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)))
+      /** @type {any} */
+      let result = null
+      child.on('message', async (/** @type {any} */ message) => {
+        if (message.type === 'done' || message.type === 'error') {
+          result = message
+          return
+        }
+        if (message.type !== 'gh') return
+        /** @type {{ code: number, stdout: string, stderr: string }} */
+        let answer
+        try {
+          answer = await gateGitHub.as(LEAD)(message.args, {
+            input: message.input,
+            env: message.env,
+          })
+        } catch (error) {
+          answer = { code: 1, stdout: '', stderr: `${error}\n` }
+        }
+        if (!child.connected) return
+        try {
+          child.send({ type: 'gh', id: message.id, answer }, () => {})
+        } catch {
+          // The process ended meanwhile.
+        }
+      })
+      const handle = {
+        child,
+        get out() {
+          return out
+        },
+        /** The message the process sent when the Gate stopped: `done` or `error`. */
+        get result() {
+          return result
+        },
+        exited,
+        /** Kill the process at once, as a crash or a closed terminal does. */
+        async kill() {
+          child.kill('SIGKILL')
+          await exited
+        },
+        /** Type `quit` and wait until the process ended. */
+        async quit() {
+          if (child.exitCode === null && child.signalCode === null && child.connected) {
+            child.send({ type: 'quit' })
+          }
+          return exited
+        },
+      }
+      return handle
+    },
+
     /** Stop the Gate and remove the fixture. */
     async cleanup() {
       await scene.quit().catch(() => {})
+      for (const child of children) child.kill('SIGKILL')
       fixture.cleanup()
       for (const dir of extra) rmSync(dir, { recursive: true, force: true })
     },

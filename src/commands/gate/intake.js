@@ -33,6 +33,7 @@ import {
   setGateLabels,
   taskOf,
 } from './pulls.js'
+import { forgetPull } from './repeated.js'
 import { SECRETS_STAGE, secretFailure, stageTitle } from './stages.js'
 import { addsSecret, pullRecord } from './state.js'
 
@@ -215,6 +216,8 @@ async function admit(gate, tools, config, pull) {
         stage: SECRETS_STAGE.name,
         title: `${stageTitle(SECRETS_STAGE)}, at intake`,
       },
+      config,
+      queued: false,
     })
     return
   }
@@ -243,6 +246,7 @@ async function leaveClosed(gate, pr, pulls) {
   const pull = await ctx.github.getPullRequest(pr)
   // The list was older than this answer.
   if (pull !== null && pull.state === 'open') return
+  if (pull !== null && tookOwnMerge(gate, pr, pull)) return
   const merged = pull?.merged === true
   /** @type {number | null} */
   let task = null
@@ -264,10 +268,32 @@ async function leaveClosed(gate, pr, pulls) {
   })
   await gate.git.run(['update-ref', '-d', pullRef(pr)], { allowFailure: true })
   delete state.prs[String(pr)]
+  forgetPull(gate, pr)
   const how = merged ? 'was merged outside the Gate' : 'was closed without a merge'
   gate.line(
     `#${pr} ${how} and left the queue${task === null ? '' : `; its task #${task} is in-progress again`}`,
   )
+}
+
+/**
+ * Take a merge as the Gate's own when the run of its record stopped inside stage 10, as when the
+ * Gate was killed after GitHub merged and before the state file said so, and GitHub merged the
+ * head SHA of that run. The record is then merged, and its run takes up again after the merge
+ * (pipeline.js). Every other merge of a pull request with a record happened outside the Gate.
+ * @param {Gate} gate
+ * @param {number} pr
+ * @param {PullRequest} pull
+ * @returns {boolean} True when the merge is the Gate's own.
+ */
+export function tookOwnMerge(gate, pr, pull) {
+  const record = gate.state.prs[String(pr)]
+  if (!record || record.result !== null || record.stage !== 'merge') return false
+  if (!pull.merged || pull.headSha !== record.head_sha) return false
+  record.result = 'merged'
+  gate.line(
+    `#${pr}: GitHub merged head ${record.head_sha} before the Gate stopped, so the run goes on after the merge`,
+  )
+  return true
 }
 
 /**
