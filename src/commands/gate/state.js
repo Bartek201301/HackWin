@@ -134,6 +134,18 @@ export function pullRecord(headSha, time) {
 }
 
 /**
+ * True when the secret scan failed the record's head SHA, at intake or at stage 4: `retry` never
+ * queues that head SHA again, a new head SHA without the secret joins the queue.
+ * @param {PullRecord} record
+ * @returns {boolean}
+ */
+export function addsSecret(record) {
+  return record.failures.some(
+    (failure) => failure.stage === 'secrets' && failure.sha === record.head_sha,
+  )
+}
+
+/**
  * Load the state file. A missing file is the state of a Gate that never ran. A file that is not
  * a state of this schema is kept beside it under another name, so nothing is lost, and the Gate
  * starts from an empty state; `kept` names that file.
