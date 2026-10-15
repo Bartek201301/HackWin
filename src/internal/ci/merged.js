@@ -2,7 +2,8 @@
 // removed afterwards: the generated files of the head commit (E19); the head merged with the
 // current base branch, installed and regenerated without a change to any tracked file (E10, E13);
 // the format check of the pull request's own changed files (E14); `commands.check` and the task's
-// acceptance tests on the merged tree (E13, T5).
+// acceptance tests on the merged tree (E13, T5). Every project command runs with ctx.env, which
+// holds no token (token.js).
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -127,7 +128,12 @@ async function mergeAndRegenerate(ctx, results, { pull, config, baseRef, git, tr
     })
   }
 
-  const install = await runInstall({ cwd: tree, config, logFile: join(logs, 'install.log') })
+  const install = await runInstall({
+    cwd: tree,
+    config,
+    logFile: join(logs, 'install.log'),
+    env: ctx.env,
+  })
   if (!('skipped' in install) && !install.ok) {
     await fail(ctx, STEPS.merge, `the install failed: ${describeRun(install)}`, {
       rule: RULES.E13,
@@ -151,7 +157,7 @@ async function mergeAndRegenerate(ctx, results, { pull, config, baseRef, git, tr
     )
   }
 
-  const generated = await generatedFileCheck({ cwd: tree, config, git: ctx.git })
+  const generated = await generatedFileCheck({ cwd: tree, config, git: ctx.git, env: ctx.env })
   if (generated.changed.length > 0) {
     await fail(
       ctx,
@@ -192,7 +198,7 @@ async function mergeAndRegenerate(ctx, results, { pull, config, baseRef, git, tr
  */
 async function checkFormat(ctx, results, { config, changed, block, tree }) {
   const files = changed.filter((file) => file.status !== 'D').map((file) => file.path)
-  const format = await formatCheck({ cwd: tree, config, files })
+  const format = await formatCheck({ cwd: tree, config, files, env: ctx.env })
   if (format.unformatted.length > 0) {
     const command = [config.hackwin.commands.format, ...format.unformatted.map(quoteShellArg)]
     await fail(
@@ -227,7 +233,12 @@ async function checkFormat(ctx, results, { config, changed, block, tree }) {
  * @param {MergedInput & { tree: string, logs: string }} input
  */
 async function checkProject(ctx, results, { config, baseRef, block, tree, logs }) {
-  const check = await runCheck({ cwd: tree, config, logFile: join(logs, 'check.log') })
+  const check = await runCheck({
+    cwd: tree,
+    config,
+    logFile: join(logs, 'check.log'),
+    env: ctx.env,
+  })
   if (!check.ok) {
     await fail(ctx, STEPS.check, `the check failed on the merged tree: ${describeRun(check)}`, {
       rule: RULES.E13,
@@ -243,6 +254,7 @@ async function checkProject(ctx, results, { config, baseRef, block, tree, logs }
     config,
     files: tests,
     logFile: join(logs, 'acceptance.log'),
+    env: ctx.env,
   })
   if (acceptance.missing.length > 0) {
     await fail(

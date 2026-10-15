@@ -36,7 +36,8 @@ describe("1.4b/token: the token reaches only internal ci's own GitHub calls", ()
     const head = await scene.push(branch, WORK)
 
     // As in the workflow's step: the token is in the environment of the process, which the
-    // project's commands inherit, and in the environment of the command.
+    // project's commands would inherit without an `env` of their own, and in the environment of
+    // the command.
     const token = `hackwin-test-token-${randomBytes(12).toString('hex')}`
     vi.stubEnv('GH_TOKEN', token)
     vi.stubEnv('GITHUB_TOKEN', token)
@@ -53,8 +54,10 @@ describe("1.4b/token: the token reaches only internal ci's own GitHub calls", ()
     }
     expect(result.ghCalls.length).toBeGreaterThanOrEqual(2)
     for (const call of result.ghCalls) expect(call.env.GH_TOKEN, call.args.join(' ')).toBe(token)
-    expect(process.env.GH_TOKEN).toBeUndefined()
-    expect(process.env.GITHUB_TOKEN).toBeUndefined()
+    // internal ci changes neither environment: the project's commands got one without the token.
+    expect(process.env.GH_TOKEN).toBe(token)
+    expect(process.env.GITHUB_TOKEN).toBe(token)
+    expect(result.env.GH_TOKEN).toBe(token)
     expect(result.stderr).not.toContain(token)
   })
 

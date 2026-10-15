@@ -261,7 +261,7 @@ async function worktreesCheck({ ctx }) {
   // Git where join started, so that the worktree join runs in is kept even when its task is merged.
   const { removed, kept } = await removeMergedWorktrees(ctx.git, ctx.github)
   // A worktree of a task that is still open is not news; one of a merged task that stays is.
-  const stays = kept.filter(({ reason }) => reason !== 'its pull request is not merged')
+  const stays = kept.filter(({ merged }) => merged)
   const detail =
     removed.length === 0
       ? 'no worktree of a merged task to remove'

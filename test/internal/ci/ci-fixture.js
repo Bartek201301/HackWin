@@ -306,14 +306,15 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
       let stderr = ''
       /** @type {Array<{ args: string[], env: Record<string, string> }>} */
       const ghCalls = []
+      const runEnv = {
+        ...withoutRunnerEnv(hooks.env),
+        ...(event ? { GITHUB_EVENT_PATH: eventFile } : {}),
+        TMPDIR: tmp,
+        ...env,
+      }
       const code = await main(['internal', 'ci', '--json'], {
         cwd: checkout.path,
-        env: {
-          ...withoutRunnerEnv(hooks.env),
-          ...(event ? { GITHUB_EVENT_PATH: eventFile } : {}),
-          TMPDIR: tmp,
-          ...env,
-        },
+        env: runEnv,
         ghExecutor: (args, call) => {
           ghCalls.push({ args, env: { ...call?.env } })
           return fake.executor(args, call)
@@ -322,7 +323,7 @@ export async function createCiScene({ config = sceneConfig(), issues = defaultIs
         stdout: { write: (chunk) => (stdout += chunk) },
         stderr: { write: (chunk) => (stderr += chunk) },
       })
-      return { code, json: JSON.parse(stdout), stderr, checkout, fake, ghCalls }
+      return { code, json: JSON.parse(stdout), stderr, checkout, fake, ghCalls, env: runEnv }
     },
   }
 }

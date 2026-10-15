@@ -25,13 +25,15 @@
 import semver from 'semver'
 import { REPOSITORY_URL } from '../../cli/context.js'
 import {
+  HACKWIN_FILE,
+  OWNERS_FILE,
   installCommand,
   loadConfig,
   loadProposedConfig,
+  pinnedVersionOf,
   rolesOf,
   scopeCheck,
 } from '../../core/config/index.js'
-import { HACKWIN_FILE, OWNERS_FILE, pinnedVersionOf } from '../../core/config/load.js'
 import { PreconditionError } from '../../core/runtime/errors.js'
 import { formatFinding, scanDiff } from '../../core/secrets/index.js'
 import { checkTaskLink, parseTaskBlock, parseTaskLink } from '../../core/tasks/index.js'
@@ -47,12 +49,14 @@ import { fetchAuth, githubWithToken, takeToken } from './token.js'
 /** @import { StepResult } from './steps.js' */
 
 /**
- * @param {CommandContext} ctx
+ * @param {CommandContext} withToken The context of the runner, whose environment may hold the
+ *   token.
  * @returns {Promise<CommandResult>}
  */
-export async function run(ctx) {
-  // Before anything runs: the token reaches only the gh calls and the fetch below.
-  const token = takeToken(ctx)
+export async function run(withToken) {
+  // Before anything runs: the token reaches only the gh calls and the fetch below. Every step
+  // goes on with a context whose environment, and whose git, holds no token.
+  const { token, ctx } = takeToken(withToken)
   const github = githubWithToken(ctx.github, token)
   const event = await readPullEvent(ctx.env)
   const pull = await github.getPullRequest(event.number)
