@@ -20,7 +20,8 @@
 // uncommitted work during a merge (the pre-commit hook); a pushed head commit has none.
 //
 // The GitHub token reaches only the gh calls of internal ci and its fetch of the base branch,
-// never the project's commands, which run code from the pull request (token.js).
+// never another process it starts, such as the project's commands, which run code from the pull
+// request (token.js).
 
 import semver from 'semver'
 import { REPOSITORY_URL } from '../../cli/context.js'
@@ -40,7 +41,7 @@ import { checkTaskLink, parseTaskBlock, parseTaskLink } from '../../core/tasks/i
 import { readPullEvent } from './event.js'
 import { checkMergedTree } from './merged.js'
 import { RULES, STEPS, fail, plural, report } from './steps.js'
-import { fetchAuth, githubWithToken, takeToken } from './token.js'
+import { fetchAuth, githubWithToken, takeToken, withoutTokenInProcess } from './token.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
 /** @import { Config } from '../../core/config/index.js' */
@@ -54,9 +55,20 @@ import { fetchAuth, githubWithToken, takeToken } from './token.js'
  * @returns {Promise<CommandResult>}
  */
 export async function run(withToken) {
-  // Before anything runs: the token reaches only the gh calls and the fetch below. Every step
-  // goes on with a context whose environment, and whose git, holds no token.
+  // Before anything runs: the token reaches only the gh calls and the fetch of checkPullRequest.
+  // The steps go on with a context whose environment, and whose git, holds no token, and while
+  // they run the environment of the process holds none either.
   const { token, ctx } = takeToken(withToken)
+  return withoutTokenInProcess(() => checkPullRequest(ctx, token))
+}
+
+/**
+ * The steps for the pull request of the event.
+ * @param {CommandContext} ctx Its environment holds no token.
+ * @param {string | null} token
+ * @returns {Promise<CommandResult>}
+ */
+async function checkPullRequest(ctx, token) {
   const github = githubWithToken(ctx.github, token)
   const event = await readPullEvent(ctx.env)
   const pull = await github.getPullRequest(event.number)
