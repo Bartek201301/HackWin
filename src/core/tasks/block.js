@@ -1,7 +1,8 @@
 // The task block of an issue body (8.1, A7): a fenced YAML block whose first line is
 // `# hackwin:task`. An issue without it is not a task. Three rules make a block invalid: a path
 // that does not lie in exactly one role or on the `open` list, empty acceptance tests outside the
-// kind `foundation`, and a missing deadline.
+// kind `foundation`, and a missing deadline. Any account can write a block, and `take` prints its
+// errors, so no error carries a control character or a line break of the body.
 
 import { parseDocument } from 'yaml'
 import { isIsoTimeWithOffset } from '../config/fields.js'
@@ -24,6 +25,10 @@ export const TASK_KINDS = Object.freeze([
   'contract-change',
   'foundation',
 ])
+
+/** A control character (C0, DEL and C1), or the line or paragraph separator of Unicode. */
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+const UNSAFE_ALL = new RegExp(UNSAFE.source, 'g')
 
 const BLOCK_KEYS = Object.freeze([
   'kind',
@@ -64,7 +69,8 @@ export function parseTaskBlock(body, config) {
 
   const document = parseDocument(found.text, { prettyErrors: false })
   if (document.errors.length > 0) {
-    const reason = document.errors[0].message.split('\n')[0]
+    // The parser's message can quote a character of the block, such as "Invalid escape sequence".
+    const reason = escaped(document.errors[0].message.split('\n')[0])
     return { isTask: true, valid: false, errors: [`the task block is not valid YAML: ${reason}`] }
   }
   const data = document.toJS()
@@ -74,7 +80,7 @@ export function parseTaskBlock(body, config) {
   /** @type {string[]} */
   const errors = []
   for (const key of Object.keys(data)) {
-    if (!BLOCK_KEYS.includes(key)) errors.push(`${key} is not a key of the task block`)
+    if (!BLOCK_KEYS.includes(key)) errors.push(`${shown(key)} is not a key of the task block`)
   }
 
   const kind = data.kind
@@ -85,40 +91,40 @@ export function parseTaskBlock(body, config) {
       'kind foundation arrives with Phase 2 (I15); in Phase 1 the foundation is a task of the kind task with at least one acceptance test',
     )
   } else if (!TASK_KINDS.includes(kind)) {
-    errors.push(`kind ${JSON.stringify(kind)} is not one of ${TASK_KINDS.join(', ')}`)
+    errors.push(`kind ${quoted(kind)} is not one of ${TASK_KINDS.join(', ')}`)
   }
 
   const role = data.role
   const roleKnown = typeof role === 'string' && Object.hasOwn(config.owners.roles, role)
   if (typeof role !== 'string' || role === '') errors.push('role is missing')
-  else if (!roleKnown) errors.push(`role ${role} is not a role of owners.yml`)
+  else if (!roleKnown) errors.push(`role ${shown(role)} is not a role of owners.yml`)
 
   const wave = data.wave ?? null
   if (wave !== null && !(Number.isInteger(wave) && wave >= 0)) {
-    errors.push(`wave must be a whole number, not ${JSON.stringify(wave)}`)
+    errors.push(`wave must be a whole number, not ${quoted(wave)}`)
   }
 
   const paths = stringList(data.paths, 'paths', errors, { required: true })
   if (paths && paths.length === 0) errors.push('paths is empty; a task names its allowed paths')
   for (const [index, glob] of (paths ?? []).entries()) {
     const syntax = globError(glob)
+    const item = `paths[${index}] (${shown(glob)})`
     if (syntax) {
-      errors.push(`paths[${index}] (${glob}) ${syntax}`)
+      errors.push(`${item} ${syntax}`)
       continue
     }
     const where = rolesOfGlob(config, glob)
     if (where.open) continue
     if (where.roles.length === 0) {
-      errors.push(`paths[${index}] (${glob}) matches no file path`)
+      errors.push(`${item} matches no file path`)
     } else if (where.roles.length > 1) {
-      const spans = where.roles.map((entry) => `${entry.role} (${entry.path})`).join(', ')
+      // A sample path comes from the glob, so it can hold the glob's characters.
+      const spans = where.roles.map((entry) => `${entry.role} (${shown(entry.path)})`).join(', ')
       errors.push(
-        `paths[${index}] (${glob}) spans the roles ${spans}; every path lies in exactly one role or on the open list`,
+        `${item} spans the roles ${spans}; every path lies in exactly one role or on the open list`,
       )
     } else if (roleKnown && where.roles[0].role !== role) {
-      errors.push(
-        `paths[${index}] (${glob}) lies in the role ${where.roles[0].role}, not in the task's role ${role}`,
-      )
+      errors.push(`${item} lies in the role ${where.roles[0].role}, not in the task's role ${role}`)
     }
   }
 
@@ -139,7 +145,7 @@ export function parseTaskBlock(body, config) {
     errors.push('deadline is missing; every task has one (T11)')
   } else if (!isIsoTimeWithOffset(deadline)) {
     errors.push(
-      `deadline ${JSON.stringify(deadline)} is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00"`,
+      `deadline ${quoted(deadline)} is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00"`,
     )
   }
 
@@ -157,6 +163,38 @@ export function parseTaskBlock(body, config) {
       deadline,
     },
   }
+}
+
+/**
+ * A value of the block as an error shows it: a string without a control character or line break
+ * as it is, anything else quoted. Not exported by index.js.
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function shown(value) {
+  return typeof value === 'string' && !UNSAFE.test(value) ? value : quoted(value)
+}
+
+/**
+ * A value quoted as JSON, with every control character and line break escaped, also those that
+ * JSON leaves as they are (DEL, C1, U+2028 and U+2029).
+ * @param {unknown} value
+ * @returns {string}
+ */
+function quoted(value) {
+  return escaped(JSON.stringify(value) ?? String(value))
+}
+
+/**
+ * Text with every control character and line break written as a `\uXXXX` escape.
+ * @param {string} text
+ * @returns {string}
+ */
+function escaped(text) {
+  return text.replace(
+    UNSAFE_ALL,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  )
 }
 
 /**
