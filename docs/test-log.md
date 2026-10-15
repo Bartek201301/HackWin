@@ -17,6 +17,22 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-15 · Phase 1 · Contracts: the Gate comment marker, and enforceVersion in 4.4 (PR #67, issue #66)
+
+- Setup: one integrator task session (Claude Code) in the worktree `task/66-contracts-gate-comment-marker`, created by the integrator from `58fde88` after the merge of #64. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `f869c26`, on `58fde88`; PR #67 opened at 04:48:06 UTC.
+  - The Lead's review found that the first version said the Gate's restart recognizes its comments "by the marker, not by their author", which contradicted the rule two bullets above it. `8cbf01b` makes the restart check the author, as `take` does.
+  - `lead-55` sent `merge #67` with the head SHA by SendMessage. Its review: only `docs/build/contracts.md` changes. The new section 5.7 records the marker, the exact-match rule, the four exports of `src/commands/gate/comment.js` as they are at `58fde88`, the A5 caveat and the marker's readers. Section 4.4 says no hook calls `enforceVersion` directly. No dashes.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 1 file inside issue #66's paths; no secret pattern; no conflict with `58fde88`. Both inspection criteria held: section 5.7 names `MARKER_NAME`, `formatGateMarker`, `parseGateMarker` and `latestGateComment`, and "for the hooks of 1.4a" is gone from 4.4. Step 6, with the PR merged into `58fde88`: `npm test` passed 647 of 647; no `npm run test:ac`, because the task has inspection criteria only. Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge, a scope change on #24 replaced item 1 of the integrator's scope change of 14 October. The restart recognizes its own comments by the marker in comments by `team.lead`, never by the author alone or by a marker in another account's comment, and compares `marker.sha` with the head SHA where it acts on one.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - The wrong wording of the first version came from item 1 of the integrator's scope change on #24 ("by the marker ... not by their author"), which the session took over. A marker alone can be written by any account. The scope change on #24 is now replaced.
+  - The first `Edit` of `docs/build/contracts.md` was refused, because a shell edit had changed the file since it was read; under a minute lost.
+  - The integrator's `npm test` ran at a load average of 8.87 with 11 vitest processes of other sessions; it passed in 166.02 s.
+- Measured: PR open 7 min 47 s (04:48:06 to 04:55:53 UTC), including the Lead's review and one fix; 2 commits, 2 PR runs (81 s on `f869c26`, 83 s on `8cbf01b`), 0 conflicts; local merge test `npm test` 166.02 s; the run on main after the merge 76 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/67; head `8cbf01b`; merge commit `7924918`; runs `38683373685` and `38683578059` (PR) and `38684062433` (main).
+
 ### 2026-10-15 · Phase 1 · Step 1.6c, gate: intake and stages 1 to 6 (PR #64, issue #22)
 
 - Setup: one builder session of lane C (Claude Code) in the worktree `task/22-gate-intake-stages`, created by the integrator from `556f6b0` after the merge of #56. The session stopped once at the usage limit and went on after the reset. The integrator's planning session for the merge.
