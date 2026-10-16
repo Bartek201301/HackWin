@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readCheckRecord, shipLogPath, statePaths } from '../../../src/core/state/index.js'
@@ -310,6 +310,40 @@ describe('1.5d/ship: merge main and local checks', () => {
     const result = await ship(s)
     expect(result.code, result.stderr).toBe(3)
     expect(await remoteBranch(s)).toBe(before)
+  })
+})
+
+describe("1.5h/project-env/ship: the format, generate, check and acceptance commands run with the command's environment, not with process.env", () => {
+  test('a variable set only in the environment of the command reaches each of them, one set only in process.env does not', async () => {
+    // Each command first writes its name and the two variables into PROBE_LOG, which both
+    // environments set.
+    const probe = (/** @type {string} */ name) =>
+      `echo "${name} \${PROBE_CTX-unset} \${PROBE_PROCESS-unset}" >> "$PROBE_LOG"`
+    const s = await scene({
+      commands: {
+        format: `${probe('format')}; ${NODE} tools/format.mjs`,
+        generate: probe('generate'),
+        check: `${probe('check')}; ${NODE} tools/check.mjs`,
+        test: `${probe('test')}; ${NODE} tools/test.mjs`,
+      },
+    })
+    const log = join(s.fixture.dir, 'probe.log')
+    const env = { ...s.env, PROBE_CTX: 'ctx', PROBE_LOG: log }
+    // After the scene: the environment of the fixture is a copy of process.env.
+    vi.stubEnv('PROBE_PROCESS', 'process')
+    vi.stubEnv('PROBE_LOG', log)
+    try {
+      const result = await ship({ ...s, env })
+      expect(result.code, result.stderr).toBe(0)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
+      'format ctx unset',
+      'generate ctx unset',
+      'check ctx unset',
+      'test ctx unset',
+    ])
   })
 })
 

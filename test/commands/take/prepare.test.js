@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import {
   existsSync,
@@ -307,6 +307,34 @@ describe('1.5b/install: take runs commands.install in the worktree, and a failed
     expect(fake.find(8)?.labels).toContain('in-progress')
     expect(fake.find(8)?.assignees).toEqual([BUILDER1])
     expect(existsSync(promptFileOf(clone, 8))).toBe(false)
+  })
+})
+
+describe("1.5h/project-env/take: the install runs with the command's environment, not with process.env", () => {
+  test('a variable set only in the environment of the command reaches the install, one set only in process.env does not', async () => {
+    const fixture = await teamFixture(
+      'project-env',
+      (hackwin) => {
+        hackwin.commands.install = 'echo "${PROBE_CTX-unset} ${PROBE_PROCESS-unset}" > .install-env'
+      },
+      { 'package.json': '{}\n' },
+    )
+    const clone = await fixture.joinedClone({ name: 'builder1', login: BUILDER1 })
+    const fake = createFakeGitHub({
+      issues: [task(7, { role: 'counter', paths: ['src/features/counter/**'] })],
+    })
+    const env = { ...fixture.env, PROBE_CTX: 'ctx' }
+    // After the fixture: its environment is a copy of process.env.
+    vi.stubEnv('PROBE_PROCESS', 'process')
+    try {
+      const result = await take(fixture, clone.path, fake, BUILDER1, ['7'], { env })
+      expect(result.code, result.stderr).toBe(0)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    const worktree = worktreeOf(fixture, 'builder1', '7-task-7')
+    expect(readFileSync(join(worktree.path, '.install-env'), 'utf8')).toBe('ctx unset\n')
+    fixture.cleanup()
   })
 })
 
