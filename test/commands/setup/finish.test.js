@@ -276,6 +276,34 @@ describe('AC6: setup --resume finishes an interrupted setup and creates nothing 
   })
 })
 
+describe('1.4f/rules: who can update the default branch, by the kind of owner', () => {
+  test('1.4f/rules: on an organization repository the summary says that every admin of the repository can update main, not the Lead alone', async () => {
+    const { fixture, fake } = await createSetupFixture({ ownerType: 'Organization' })
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
+    expect(result.code).toBe(0)
+    const lines = JSON.parse(result.stdout).lines.join('\n')
+    expect(lines).toContain(
+      `protection: full, with the update restriction: changes to main only through a pull request whose check hackwin passed, no force push and no deletion, for every account, the owner included; only the admins of hackwin-test/app can update main, ${LEAD} and any other admin of the repository, the organization's owners included, so GitHub refuses a merge by any account without admin rights`,
+    )
+    expect(lines).not.toContain(`only ${LEAD} can update main`)
+  })
+
+  test('1.4f/rules: on an organization repository without the update restriction, the summary names the admins', async () => {
+    const { fixture, fake } = await createSetupFixture({ ownerType: 'Organization' })
+    fake.on('POST repos/{owner}/{repo}/rulesets', ({ body }) => {
+      if (body.rules.some((/** @type {any} */ rule) => rule.type === 'update')) {
+        throw httpError(422, 'Validation Failed')
+      }
+      return fake.addRuleset(body)
+    })
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain(
+      'GitHub does not restrict updates of main to the admins of hackwin-test/app (GitHub answered: gh: Validation Failed (HTTP 422))',
+    )
+  })
+})
+
 describe('AC70/setup: GitHub accepts the rules for everyone but not the update restriction', () => {
   test('AC70/setup: setup exits 0 and reports full protection without the update restriction', async () => {
     const { fixture, fake } = await createSetupFixture()
@@ -506,6 +534,38 @@ describe('1.4f/rules: the branch rules and their read back', () => {
 })
 
 describe('1.4f/resume: setup --resume runs only where the bootstrap push happened, for the Lead', () => {
+  test('1.4f/resume: after a setup that put its files back although its push landed, setup --resume first brings main up to origin', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    let result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(0)
+    const bootstrapCommit = await originMain(fixture)
+    // What such a setup leaves: origin holds the commit, the checkout is as it was, and clean.
+    await fixture.git.run(['reset', '--quiet', '--hard', 'HEAD~1'])
+    expect(await fixture.git.isClean()).toBe(true)
+    result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--resume'] })
+    expect(result.stderr).not.toContain('hackwin setup:')
+    expect(result.code).toBe(0)
+    expect(await fixture.git.revParse('HEAD')).toBe(bootstrapCommit)
+    expect(result.stdout).toContain('pass  hooks: core.hooksPath is .githooks')
+  })
+
+  test('1.4f/resume: a main checkout behind origin that cannot be fast-forwarded is refused before anything changes on GitHub', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    expect((await runSetup(fixture, fake, { answers: teamAnswers(3) })).code).toBe(0)
+    await fixture.git.run(['reset', '--quiet', '--hard', 'HEAD~1'])
+    writeFileSync(join(fixture.main, 'README.md'), '# Changed here\n')
+    const before = writes(fake).length
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--resume'] })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      'the main checkout does not hold origin/main, which holds the bootstrap commit of setup',
+    )
+    expect(result.stderr).toContain(
+      `run \`git switch main && git merge --ff-only origin/main\` in ${fixture.main}, then run \`hackwin setup --resume\``,
+    )
+    expect(writes(fake)).toHaveLength(before)
+  })
+
   test('1.4f/resume: on a repository without hackwin.yml on origin there is nothing to resume', async () => {
     const { fixture, fake } = await createSetupFixture()
     const result = await runSetup(fixture, fake, { args: ['--resume'] })

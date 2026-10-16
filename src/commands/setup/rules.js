@@ -223,16 +223,22 @@ function refusalOf(error) {
  * @param {string} context.branch
  * @param {string} context.lead
  * @param {string} context.repository `owner/name`.
+ * @param {boolean} context.personal The repository belongs to a personal account, whose owner is
+ *   its only admin. Otherwise every admin of the repository can bypass the update restriction,
+ *   an organization's owners included.
  * @param {string} context.root The main checkout, for the resume command.
  * @returns {string[]}
  */
-export function protectionLines(outcome, read, { branch, lead, repository, root }) {
+export function protectionLines(outcome, read, { branch, lead, repository, personal, root }) {
   const { state, rules } = read.value
   const everyone = `changes to ${branch} only through a pull request whose check ${REQUIRED_CHECK} passed, no force push and no deletion, for every account, the owner included`
+  const updaters = personal
+    ? `only ${lead} can update ${branch}, so GitHub refuses a merge by any other account`
+    : `only the admins of ${repository} can update ${branch}, ${lead} and any other admin of the repository, the organization's owners included, so GitHub refuses a merge by any account without admin rights`
   /** @type {Record<ProtectionState, string>} */
   const lines = {
-    'full-restricted': `protection: full, with the update restriction: ${everyone}; only ${lead} can update ${branch}, so GitHub refuses a merge by any other account`,
-    full: `protection: full, without the update restriction: ${everyone}; GitHub does not restrict updates of ${branch} to ${lead}${because(outcome.restrictionRefused)}, so merges by agent sessions are blocked only softly (10.6)`,
+    'full-restricted': `protection: full, with the update restriction: ${everyone}; ${updaters}`,
+    full: `protection: full, without the update restriction: ${everyone}; GitHub does not restrict updates of ${branch} to ${personal ? lead : `the admins of ${repository}`}${because(outcome.restrictionRefused)}, so merges by agent sessions are blocked only softly (10.6)`,
     soft: `protection: soft: ${softReason(outcome, repository)}. The pre-push hook blocks pushes to ${branch}, agent sessions have no right to merge, and the Gate serializes merges; a public repository gets full protection`,
   }
   const result = [lines[state]]

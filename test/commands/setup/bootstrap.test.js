@@ -323,7 +323,9 @@ describe('1.4f/bootstrap: the gaps of the re-review of PR #65', () => {
     expect(result.stderr).toContain(
       `to resolve: run \`git ls-remote origin refs/heads/main\` in ${fixture.main}: when it prints`,
     )
-    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}; otherwise`)
+    expect(result.stderr).toContain(
+      `run \`hackwin setup --resume\` in ${fixture.main}, which first fast-forwards main to origin/main, since the checkout is as clean as before; otherwise`,
+    )
     expect(snapshot(fixture.main)).toEqual(files)
     expect(await fixture.git.revParse('HEAD')).toBe(head)
   })

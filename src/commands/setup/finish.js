@@ -107,6 +107,7 @@ export async function resumeSetup(ctx, questions) {
       resolve: { command: 'hackwin setup --resume', dir: main },
     })
   }
+  await holdsBootstrap(ctx, config.hackwin.project.default_branch)
   checkLaterAnswers(questions)
   const repository = await ctx.github.repository()
   if (!repository.permissions.admin) {
@@ -122,6 +123,27 @@ export async function resumeSetup(ctx, questions) {
   )
   const finished = await finishSetup(ctx, questions, { repository, config })
   return { exitCode: finished.exitCode, lines: finished.lines, data: finished.data }
+}
+
+/**
+ * The main checkout must hold origin's default branch, the bootstrap commit with it: step 14 runs
+ * the checks of `join` there, whose hooks check needs the hook shims of that commit. The runner
+ * has fast-forwarded a clean checkout on the default branch already (CM10), as after a setup that
+ * put its files back although its push may have landed; a checkout it could not fast-forward is
+ * refused here, before anything changes on GitHub.
+ * @param {CommandContext} ctx
+ * @param {string} branch The default branch.
+ */
+async function holdsBootstrap(ctx, branch) {
+  const origin = await ctx.git.tryRevParse(`refs/remotes/origin/${branch}`)
+  const head = await ctx.git.tryRevParse('HEAD')
+  if (origin === null || (head !== null && (await ctx.git.isAncestor(origin, head)))) return
+  throw new PreconditionError(
+    `the main checkout does not hold origin/${branch}, which holds the bootstrap commit of setup, and the runner could not fast-forward it because the checkout has local changes or is not on ${branch}`,
+    {
+      resolve: `commit or stash the local changes, ${runIn(`git switch ${branch} && git merge --ff-only origin/${branch}`, ctx.repoRoot)}, then ${runIn('hackwin setup --resume', ctx.repoRoot)}`,
+    },
+  )
 }
 
 /**
@@ -161,6 +183,10 @@ async function finish(ctx, questions, { repository, config: given }) {
   ctx.out.line(`branch rules: the state read back from GitHub is ${protection.value.state}`)
   ctx.out.line(`push protection: the setting read back from GitHub is ${pushProtection.value}`)
 
+  // A personal account's repository has its owner as its only admin; an organization's has more.
+  const owner = (await ctx.github.api('repos/{owner}/{repo}'))?.owner
+  const personal = owner?.type === 'User'
+
   // Step 14.
   ctx.out.line(`join for the Lead's machine, in ${root}:`)
   const identity = resolveIdentity(config, await ctx.github.login())
@@ -171,7 +197,7 @@ async function finish(ctx, questions, { repository, config: given }) {
     joined.exitCode === 1
       ? `setup of ${name} is complete except for join on this machine`
       : `setup of ${name} is complete`,
-    ...protectionLines(rules, protection, { branch, lead, repository: name, root }),
+    ...protectionLines(rules, protection, { branch, lead, repository: name, personal, root }),
     ...pushProtectionLines(pushProtection, name, root),
     ...memberLines({ config, identity, invitations, joined, repository, root }),
     'next:',

@@ -455,7 +455,7 @@ function unknownPush(root, branch, commit, { cause, interrupted }) {
   return new RemoteError(
     `setup could not check whether its bootstrap commit ${commit} reached origin/${branch}: the push ${interrupted ? 'was interrupted' : 'failed'}, and git ls-remote failed too. Setup put its files back; the commit may be on origin`,
     {
-      resolve: `${check}: when it prints ${commit}, the push landed, and ${runIn('hackwin setup --resume', root)}; otherwise ${runIn('hackwin setup', root)}`,
+      resolve: `${check}: when it prints ${commit}, the push landed, and ${runIn('hackwin setup --resume', root)}, which first fast-forwards ${branch} to origin/${branch}, since the checkout is as clean as before; otherwise ${runIn('hackwin setup', root)}`,
       cause,
     },
   )

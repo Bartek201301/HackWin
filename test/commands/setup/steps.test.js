@@ -388,17 +388,18 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
   })
 })
 
+/** An HTTPS URL that git cannot reach: a push to it fails at once and sends nothing. */
+const UNREACHABLE = 'https://127.0.0.1:1/hackwin-test/app.git'
+
 /**
- * Make origin look like the repository on GitHub over HTTPS, as a clone has it, while git still
- * fetches from and pushes to the fixture's bare origin; and set git's credential helper.
+ * Make git push origin over HTTPS, to UNREACHABLE, while it still fetches from the fixture's bare
+ * origin; and set git's credential helper.
  * @param {import('../../harness/index.js').Fixture} fixture
  * @param {string} helper
  */
-async function httpsOrigin(fixture, helper) {
-  const url = 'https://github.com/hackwin-test/app.git'
-  await fixture.git.run(['config', `url.${fixture.origin}.insteadOf`, url])
-  await fixture.git.run(['remote', 'set-url', 'origin', url])
-  await fixture.git.run(['config', 'credential.https://github.com.helper', helper])
+async function httpsPush(fixture, helper) {
+  await fixture.git.run(['config', 'remote.origin.pushurl', UNREACHABLE])
+  await fixture.git.run(['config', 'credential.helper', helper])
 }
 
 /**
@@ -424,7 +425,7 @@ function scopeReads(fake) {
 describe('1.4f/preconditions: the workflow scope of the gh login that git pushes with', () => {
   test('1.4f/preconditions: a gh token without the workflow scope stops setup at step 1 with exit 2 and the fix, before any question or change', async () => {
     const { fixture, fake } = await createSetupFixture()
-    await httpsOrigin(fixture, '!gh auth git-credential')
+    await httpsPush(fixture, '!gh auth git-credential')
     serveScopes(fake, 'gist, read:org, repo')
     const before = snapshot(fixture.main)
     const head = await fixture.git.revParse('HEAD')
@@ -443,43 +444,48 @@ describe('1.4f/preconditions: the workflow scope of the gh login that git pushes
     expect(writes(fake)).toEqual([])
   })
 
-  test('1.4f/preconditions: with the workflow scope, setup goes on', async () => {
-    const { fixture, fake } = await createSetupFixture()
-    await httpsOrigin(fixture, '!/opt/homebrew/bin/gh auth git-credential')
-    serveScopes(fake, 'gist, read:org, repo, workflow')
-    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
-    expect(result.code).toBe(0)
-    expect(scopeReads(fake)).toHaveLength(1)
+  test('1.4f/preconditions: with the workflow scope, or where the scopes are unknown (no header, or an empty one), step 1 lets setup go on to its push', async () => {
+    for (const scopes of ['gist, read:org, repo, workflow', null, '', ' ']) {
+      const { fixture, fake } = await createSetupFixture()
+      await httpsPush(fixture, '!/opt/homebrew/bin/gh auth git-credential')
+      serveScopes(fake, scopes)
+      const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+      const name = JSON.stringify(scopes)
+      expect(scopeReads(fake), name).toHaveLength(1)
+      expect(result.stderr, name).not.toContain('gh is logged in without the workflow scope')
+      // Step 9 pushes to the unreachable URL: setup got past step 1.
+      expect(result.code, name).toBe(3)
+      expect(result.stderr, name).toContain(`git push origin`)
+      expect(writes(fake), name).toEqual([])
+    }
   })
 
-  test('1.4f/preconditions: where the scopes cannot be read, the push of step 9 names the missing scope', async () => {
+  test('1.4f/preconditions: the check goes by the URL git really pushes to, with insteadOf applied', async () => {
     const { fixture, fake } = await createSetupFixture()
-    await httpsOrigin(fixture, '!gh auth git-credential')
-    // A fine-grained token: GitHub sends no X-Oauth-Scopes.
-    serveScopes(fake, null)
-    const hook = join(fixture.origin, 'hooks', 'pre-receive')
-    writeFileSync(
-      hook,
-      "#!/bin/sh\ncat >/dev/null\necho 'refusing to allow an OAuth App to create or update workflow `.github/workflows/hackwin.yml` without `workflow` scope' >&2\nexit 1\n",
-    )
-    chmodSync(hook, 0o755)
+    // origin names GitHub over HTTPS, but git fetches from and pushes to the bare origin.
+    const url = 'https://github.com/hackwin-test/app.git'
+    await fixture.git.run(['config', `url.${fixture.origin}.insteadOf`, url])
+    await fixture.git.run(['remote', 'set-url', 'origin', url])
+    await fixture.git.run(['config', 'credential.helper', '!gh auth git-credential'])
+    serveScopes(fake, 'repo')
     const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
-    expect(scopeReads(fake)).toHaveLength(1)
-    expect(result.code).toBe(3)
-    expect(result.stderr).toContain(
-      'GitHub refuses a push that creates a workflow file from a login without the workflow scope',
-    )
-    expect(result.stderr).toContain('run `gh auth refresh -s workflow` in any directory')
+    expect(result.code).toBe(0)
+    expect(scopeReads(fake)).toEqual([])
   })
 
   test('1.4f/preconditions: where git pushes with another credential, the scopes of gh are not read', async () => {
-    for (const helper of ['osxkeychain', null]) {
-      const { fixture, fake } = await createSetupFixture()
-      if (helper !== null) await httpsOrigin(fixture, helper)
-      serveScopes(fake, 'repo')
-      const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
-      expect(result.code, String(helper)).toBe(0)
-      expect(scopeReads(fake), String(helper)).toEqual([])
-    }
+    const { fixture, fake } = await createSetupFixture()
+    await httpsPush(fixture, 'osxkeychain')
+    serveScopes(fake, 'repo')
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(scopeReads(fake)).toEqual([])
+    expect(result.code).toBe(3)
+    expect(result.stderr).toContain('git push origin')
+
+    const local = await createSetupFixture()
+    serveScopes(local.fake, 'repo')
+    const localRun = await runSetup(local.fixture, local.fake, { answers: teamAnswers(3) })
+    expect(localRun.code).toBe(0)
+    expect(scopeReads(local.fake)).toEqual([])
   })
 })

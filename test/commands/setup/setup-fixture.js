@@ -71,6 +71,7 @@ export const EVENT = Object.freeze({
  * @param {'offered' | 'refused'} [options.pushProtection] Offered: the setting reads `disabled`
  *   until enabled. Refused: enabling it answers HTTP 200 and the setting reads back null, as
  *   on `hackwin-fixture-private` (docs/verification.md E3).
+ * @param {'User' | 'Organization'} [options.ownerType] Who owns the repository.
  * @param {{ hackwin: unknown, owners: unknown }} [options.config] Commit a configuration on main,
  *   which makes the repository configured.
  */
@@ -80,6 +81,7 @@ export async function createSetupFixture({
   visibility = 'public',
   rulesetsOffered = visibility === 'public',
   pushProtection = visibility === 'public' ? 'offered' : 'refused',
+  ownerType = 'User',
   config,
 } = {}) {
   const fixture = await createFixture({ nodeProject, files, config })
@@ -93,7 +95,7 @@ export async function createSetupFixture({
     }
     return { login: params.login, type: 'User' }
   })
-  const security = servePushProtection(fake, pushProtection)
+  const security = servePushProtection(fake, pushProtection, ownerType)
   return { fixture, fake, security, env: toolsEnv(fixture) }
 }
 
@@ -102,11 +104,12 @@ export async function createSetupFixture({
  * `security_and_analysis`, and `PATCH repos/{owner}/{repo}` that changes it.
  * @param {FakeGitHub} fake
  * @param {'offered' | 'refused'} mode
+ * @param {'User' | 'Organization'} ownerType
  * @returns {{ pushProtection: string | null, afterPatch: Array<string | null> }} The setting,
  *   which a test may change, and what the reads after the next PATCH return before they return
  *   the setting: GitHub's reads lag its writes (src/commands/setup/settle.js).
  */
-function servePushProtection(fake, mode) {
+function servePushProtection(fake, mode, ownerType) {
   /** @type {{ pushProtection: string | null, afterPatch: Array<string | null> }} */
   const security = { pushProtection: mode === 'offered' ? 'disabled' : null, afterPatch: [] }
   /** @type {Array<string | null>} */
@@ -123,7 +126,7 @@ function servePushProtection(fake, mode) {
     return {
       full_name: state.repo,
       name: state.repo.split('/')[1],
-      owner: { login: state.repo.split('/')[0] },
+      owner: { login: state.repo.split('/')[0], type: ownerType },
       default_branch: state.defaultBranch,
       visibility: state.visibility,
       private: state.visibility === 'private',

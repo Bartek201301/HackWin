@@ -139,7 +139,7 @@ async function checkWorkflowScope(ctx) {
   const scopes = await tokenScopes(ctx.github)
   if (scopes === null || scopes.includes(WORKFLOW_SCOPE)) return
   throw new PreconditionError(
-    `gh is logged in without the ${WORKFLOW_SCOPE} scope (its scopes: ${scopes.join(', ') || 'none'}), and git pushes with its token: GitHub refuses a push that creates a workflow file without that scope, and the bootstrap commit creates ${WORKFLOW_PATH}`,
+    `gh is logged in without the ${WORKFLOW_SCOPE} scope (its scopes: ${scopes.join(', ')}), and git pushes with its token: GitHub refuses a push that creates a workflow file without that scope, and the bootstrap commit creates ${WORKFLOW_PATH}`,
     {
       resolve: `${runIn(`gh auth refresh -s ${WORKFLOW_SCOPE}`, 'any directory')}, then ${runIn('hackwin setup', ctx.repoRoot)}`,
     },
@@ -148,13 +148,14 @@ async function checkWorkflowScope(ctx) {
 
 /**
  * True when git pushes to origin over HTTPS with gh as its credential helper, so with gh's token.
+ * The URL is the one git really pushes to: `pushurl`, `insteadOf` and `pushInsteadOf` applied.
  * @param {Git} git
  * @returns {Promise<boolean>}
  */
 async function pushesWithGh(git) {
-  const url =
-    (await git.configGet('remote.origin.pushurl')) ?? (await git.configGet('remote.origin.url'))
-  if (url === null || !/^https:\/\//i.test(url)) return false
+  const pushUrl = await git.run(['remote', 'get-url', '--push', 'origin'], { allowFailure: true })
+  const url = pushUrl.code === 0 ? pushUrl.stdout.trim() : ''
+  if (!/^https:\/\//i.test(url)) return false
   const helper = await git.run(['config', '--get-urlmatch', 'credential.helper', url], {
     allowFailure: true,
   })
@@ -162,7 +163,9 @@ async function pushesWithGh(git) {
 }
 
 /**
- * The OAuth scopes of gh's token, or null where GitHub returns none or the call fails.
+ * The OAuth scopes of gh's token, or null where they are unknown: GitHub sends no scopes, an
+ * empty list of them, which a token that is no OAuth token may send, or the call fails. A classic
+ * token without any scope could not push the bootstrap commit anyway.
  * @param {GitHub} github
  * @returns {Promise<string[] | null>}
  */
@@ -170,11 +173,11 @@ async function tokenScopes(github) {
   try {
     const { stdout } = await github.run(['api', '-i', 'user'])
     const header = /^x-oauth-scopes:[ \t]*(.*?)\r?$/im.exec(stdout)
-    if (header === null) return null
-    return header[1]
+    const scopes = (header?.[1] ?? '')
       .split(',')
       .map((scope) => scope.trim())
       .filter(Boolean)
+    return scopes.length === 0 ? null : scopes
   } catch (error) {
     if (error instanceof RemoteError) return null
     throw error
