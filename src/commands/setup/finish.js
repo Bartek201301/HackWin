@@ -176,9 +176,19 @@ async function finish(ctx, questions, { repository, config: given }) {
   const enabling = await enablePushProtection(ctx.github)
   ctx.out.line('branch rules and push protection: reading them back once GitHub has settled')
   const since = ctx.clock.now().getTime()
+  /** @type {import('./settle.js').Stop} */
+  const stop = {}
   const [protection, pushProtection] = await Promise.all([
-    settledRead(ctx.clock, () => readProtection(ctx.github, { branch }), { since }),
-    settledRead(ctx.clock, () => readPushProtection(ctx.github), { since }),
+    settledRead(ctx.clock, () => readProtection(ctx.github, { branch }), {
+      since,
+      what: 'the branch rules',
+      stop,
+    }),
+    settledRead(ctx.clock, () => readPushProtection(ctx.github), {
+      since,
+      what: 'the push protection setting',
+      stop,
+    }),
   ])
   ctx.out.line(`branch rules: the state read back from GitHub is ${protection.value.state}`)
   ctx.out.line(`push protection: the setting read back from GitHub is ${pushProtection.value}`)
@@ -216,6 +226,7 @@ async function finish(ctx, questions, { repository, config: given }) {
         rules: protection.value.rules,
         settled: protection.settled,
         reads: protection.reads,
+        failures: protection.failures,
         offered: rules.offered,
         branchRules: rules.branchRules,
         updateRestriction: rules.updateRestriction,
@@ -228,6 +239,7 @@ async function finish(ctx, questions, { repository, config: given }) {
         status: pushProtection.value,
         settled: pushProtection.settled,
         reads: pushProtection.reads,
+        failures: pushProtection.failures,
         refused: enabling.refused,
       },
       join: { exitCode: joined.exitCode ?? 0, lines: joined.lines, data: joined.data },

@@ -273,8 +273,12 @@ describe('AC80/setup: push protection on the fixture repositories', () => {
           // One read right after a write can show the old value (settle.js), so every read here
           // waits until GitHub's reads have settled.
           const settled = async () =>
-            (await settledRead(systemClock, () => readPushProtection(lead), { since: Date.now() }))
-              .value
+            (
+              await settledRead(systemClock, () => readPushProtection(lead), {
+                since: Date.now(),
+                what: 'the push protection setting',
+              })
+            ).value
           const initial = await settled()
           repo.log(`push protection before the test: ${initial}`)
           try {

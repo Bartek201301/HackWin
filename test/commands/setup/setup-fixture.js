@@ -107,7 +107,8 @@ export async function createSetupFixture({
  * @param {'User' | 'Organization'} ownerType
  * @returns {{ pushProtection: string | null, afterPatch: Array<string | null> }} The setting,
  *   which a test may change, and what the reads after the next PATCH return before they return
- *   the setting: GitHub's reads lag its writes (src/commands/setup/settle.js).
+ *   the setting: GitHub's reads lag its writes (src/commands/setup/settle.js). The entry
+ *   `!timeout` makes that read fail as gh does when GitHub does not answer.
  */
 function servePushProtection(fake, mode, ownerType) {
   /** @type {{ pushProtection: string | null, afterPatch: Array<string | null> }} */
@@ -152,9 +153,10 @@ function servePushProtection(fake, mode, ownerType) {
         : {}),
     }
   }
-  fake.on('GET repos/{owner}/{repo}', ({ login }) =>
-    repositoryJson(login, lagging.length > 0 ? lagging.shift() : security.pushProtection),
-  )
+  fake.on('GET repos/{owner}/{repo}', ({ login }) => {
+    const status = lagging.length > 0 ? lagging.shift() : security.pushProtection
+    return status === '!timeout' ? TIMEOUT : repositoryJson(login, status ?? null)
+  })
   fake.on('PATCH repos/{owner}/{repo}', ({ login, body }) => {
     lagging = [...security.afterPatch]
     const wanted = body?.security_and_analysis ?? {}
@@ -206,6 +208,16 @@ function toolsDir(dir) {
   }
   return bin
 }
+
+/**
+ * gh's answer when GitHub does not answer, as the integrator's run of 16 October 2026 logged it:
+ * exit 1 and no HTTP status.
+ */
+export const TIMEOUT = rawResult({
+  code: 1,
+  stderr:
+    'Get "https://api.github.com/repos/hackwin-test/app": dial tcp 140.82.121.6:443: i/o timeout\n',
+})
 
 /** The answers of `join` that setup hands on for the Lead's machine (CM11). */
 export const JOIN_ANSWERS = Object.freeze({ language: 'English', explanation_style: 'concise' })

@@ -18,7 +18,7 @@ import {
 import { labelCatalogue } from '../../../src/commands/setup/labels.js'
 import { BRANCH_RULES, UPDATE_RESTRICTION } from '../../../src/commands/setup/rules.js'
 import { SETTLE, settledRead } from '../../../src/commands/setup/settle.js'
-import { createFakeClock } from '../../../src/core/runtime/index.js'
+import { RemoteError, createFakeClock } from '../../../src/core/runtime/index.js'
 import { accounts, httpError, ownersObject, teamConfig } from '../../harness/index.js'
 import {
   JOIN_ANSWERS,
@@ -607,7 +607,7 @@ describe('1.4f/settle: setup does not trust one read right after it writes a set
       seen.push(value)
       return value
     }
-    const result = await settledRead(clock, read, { since })
+    const result = await settledRead(clock, read, { since, what: 'the setting' })
     expect(result).toMatchObject({ value: 'enabled', settled: true, changes: 2 })
     expect(seen).toContain('disabled')
     expect(clock.now().getTime() - since).toBeGreaterThanOrEqual(SETTLE.minMs)
@@ -621,7 +621,7 @@ describe('1.4f/settle: setup does not trust one read right after it writes a set
         const at = swapped.now().getTime() - start
         return at >= 2_500 && at < 4_500 ? 'enabled' : 'disabled'
       },
-      { since: start },
+      { since: start, what: 'the setting' },
     )
     expect(stale).toMatchObject({ value: 'disabled', settled: true, changes: 2 })
   })
@@ -669,5 +669,147 @@ describe('1.4f/settle: setup does not trust one read right after it writes a set
         `the push protection setting read back from GitHub changed \\d+ times in 60 s, and the line above shows the last read; GitHub may hold another value\\. To read it again later, run \`hackwin setup --resume\` in ${fixture.main.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
       ),
     )
+  })
+})
+
+/** The error of a read that GitHub did not answer, as the GitHub client throws it. */
+function timedOut() {
+  return new RemoteError(
+    'GitHub call failed: gh api --method GET repos/{owner}/{repo}: dial tcp 140.82.121.6:443: i/o timeout',
+    { tail: ['dial tcp 140.82.121.6:443: i/o timeout'] },
+  )
+}
+
+describe('1.4f/settle: a read back survives a failure that may pass, and only that', () => {
+  test('1.4f/settle: a read that times out in the middle of settling is a missed sample, and the wait settles after it', async () => {
+    const clock = createFakeClock()
+    const since = clock.now().getTime()
+    let calls = 0
+    /** @type {number | null} */
+    let failedAt = null
+    const result = await settledRead(
+      clock,
+      async () => {
+        calls += 1
+        if (calls === 12) {
+          failedAt = clock.now().getTime() - since
+          throw timedOut()
+        }
+        return 'enabled'
+      },
+      { since, what: 'the push protection setting' },
+    )
+    expect(result).toMatchObject({ value: 'enabled', settled: true, failures: 1, changes: 0 })
+    // The reads before the failure no longer count: 5 s of agreeing reads after it.
+    expect(clock.now().getTime() - since).toBeGreaterThanOrEqual(
+      Number(failedAt) + SETTLE.intervalMs + SETTLE.stableMs,
+    )
+  })
+
+  test('1.4f/settle: reads that fail until the budget runs out end with exit 3 and the last failure, within the budget', async () => {
+    const clock = createFakeClock()
+    const since = clock.now().getTime()
+    const run = settledRead(
+      clock,
+      async () => {
+        throw timedOut()
+      },
+      { since, what: 'the push protection setting' },
+    )
+    await expect(run).rejects.toThrow(RemoteError)
+    await expect(run).rejects.toMatchObject({ exitCode: 3 })
+    await expect(run).rejects.toThrow(
+      /^setup could not read back the push protection setting steadily within 60 s: \d+ reads failed, the last with: GitHub call failed: .*i\/o timeout$/,
+    )
+    const elapsed = clock.now().getTime() - since
+    expect(elapsed).toBeGreaterThanOrEqual(SETTLE.maxMs)
+    expect(elapsed).toBeLessThan(SETTLE.maxMs + SETTLE.intervalMs)
+  })
+
+  test('1.4f/settle: a refusal ends the wait at once, and a read running beside it stops at its next read', async () => {
+    const clock = createFakeClock()
+    const since = clock.now().getTime()
+    const refusal = new RemoteError('GitHub call failed: Resource not accessible', { status: 403 })
+    let refused = 0
+    await expect(
+      settledRead(
+        clock,
+        async () => {
+          refused += 1
+          throw refusal
+        },
+        { since, what: 'the branch rules' },
+      ),
+    ).rejects.toBe(refusal)
+    expect(refused).toBe(1)
+    expect(clock.now().getTime()).toBe(since)
+
+    /** @type {import('../../../src/commands/setup/settle.js').Stop} */
+    const stop = {}
+    let other = 0
+    let failing = 0
+    const results = await Promise.allSettled([
+      settledRead(
+        clock,
+        async () => {
+          failing += 1
+          if (failing === 3) throw refusal
+          return 'full'
+        },
+        { since, what: 'the branch rules', stop },
+      ),
+      settledRead(
+        clock,
+        async () => {
+          other += 1
+          return 'enabled'
+        },
+        { since, what: 'the push protection setting', stop },
+      ),
+    ])
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+    expect(stop.error).toBe(refusal)
+    expect(other).toBeLessThanOrEqual(failing)
+  })
+
+  test('1.4f/settle: a network timeout during the read back of setup does not end setup', async () => {
+    const { fixture, fake, security } = await createSetupFixture()
+    security.afterPatch = ['enabled', 'enabled', '!timeout', 'enabled']
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
+    expect(result.code).toBe(0)
+    const json = JSON.parse(result.stdout)
+    expect(json.data.pushProtection).toMatchObject({ on: true, settled: true, failures: 1 })
+    expect(json.data.protection).toMatchObject({ state: 'full-restricted', settled: true })
+  })
+
+  test('1.4f/settle: network failures until the budget runs out end setup with exit 3, the last failure and the resume hint', async () => {
+    const { fixture, fake, security } = await createSetupFixture()
+    security.afterPatch = Array(200).fill('!timeout')
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(3)
+    expect(result.stderr).toMatch(
+      /hackwin setup: setup could not read back the push protection setting steadily within 60 s: \d+ reads failed, the last with: GitHub call failed: .*i\/o timeout/,
+    )
+    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
+  })
+
+  test('1.4f/settle: a refusal during the read back of setup ends it at once, and the other read stops', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    fake.on('GET repos/{owner}/{repo}/rules/branches/:branch*', () => {
+      throw httpError(403, 'Resource not accessible by integration')
+    })
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(3)
+    expect(result.stderr).toContain('Resource not accessible by integration')
+    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
+    const patchAt = fake.calls.findIndex(
+      (call) => call.method === 'PATCH' && call.endpoint === 'repos/{owner}/{repo}',
+    )
+    const reads = fake.calls
+      .slice(patchAt + 1)
+      .filter((call) => call.method === 'GET' && call.endpoint === 'repos/{owner}/{repo}')
+    const rulesReads = fake.calls.filter((call) => /\/rules\/branches\//.test(call.endpoint ?? ''))
+    expect(rulesReads).toHaveLength(1)
+    expect(reads.length).toBeLessThanOrEqual(1)
   })
 })
