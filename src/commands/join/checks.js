@@ -146,13 +146,14 @@ async function agentCheck({ ctx, identity }) {
 
 /**
  * Step 4: `commands.install` in the main checkout, skipped with a notice while no file matches
- * `paths.manifests` (A62).
+ * `paths.manifests` (A62). The install and its look for a manifest run with the command's
+ * environment, not with the environment of the process.
  * @param {Scope} scope
  * @returns {Promise<Outcome>}
  */
 async function installCheck({ ctx, config, main }) {
   const logFile = installLog(ctx)
-  const run = await runInstall({ cwd: main, config, logFile })
+  const run = await runInstall({ cwd: main, config, logFile, env: ctx.env })
   if ('skipped' in run) {
     return { result: 'skipped', detail: run.notice.replace(/^install skipped:\s*/, '') }
   }
