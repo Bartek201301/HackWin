@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,6 +21,10 @@ import {
   terminal,
   until,
 } from './helpers.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('../../harness/index.js').Fixture} Fixture */
 /** @typedef {import('./helpers.js').Terminal} Terminal */
@@ -318,8 +322,9 @@ describe('1.6a/header: the header of a starting Gate', () => {
       'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
     )
     expect(header).toContain(
-      'notice: stages 7 to 11 are not built yet: a pull request that passes stage 6 waits at the head of the queue',
+      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
     )
+    expect(header.filter((line) => line.includes('not built yet'))).toEqual([])
     expect(header).not.toContain(
       'notice: the pipeline is not built yet: this Gate polls, but takes no pull request',
     )

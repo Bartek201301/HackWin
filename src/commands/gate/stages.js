@@ -1,22 +1,31 @@
-// Stages 1 to 6 of the pipeline (9.2): fetch, task link, scope, secrets, gated paths and conflict
-// detection. They decide whether a pull request may be tested at all; none calls a model (G9).
-// A stage returns nothing when it passes, a Failure when the run fails there, or STOP when the
-// run ends without a result: after `quit`, or when intake took the pull request away from it.
+// The stages of the pipeline (9.2). Stages 1 to 6, here, decide whether a pull request may be
+// tested at all: fetch, task link, scope, secrets, gated paths and conflict detection. Stages 7
+// to 11 test, wait for CI, merge and clean up: merge-test.js, ci.js and merge.js. None calls a
+// model (G9). A stage returns nothing when it passes, a Failure when the run fails there, STOP
+// when the run ends without a result (after `quit`, or when intake took the pull request away
+// from it), or REPEAT from stage 9 when main moved since the merge test.
 
 import { createMatcher, rolesOf, scopeCheck } from '../../core/config/index.js'
-import { RemoteError } from '../../core/runtime/index.js'
 import { formatFinding } from '../../core/secrets/index.js'
 import { checkTaskLink } from '../../core/tasks/index.js'
 import { closeAttention, raiseAttention } from './attention.js'
+import { codeSpan } from './comment.js'
+import { ciStage } from './ci.js'
+import { afterMergeStage, freshnessStage, mergeStage } from './merge.js'
+import { mergeTestStage } from './merge-test.js'
 import {
   IN_MAIN_CHECKOUT,
+  MAX_DETAILS,
+  STOP,
+  capped,
   changedPaths,
+  count,
   currentConfig,
   fetchHead,
   leaveAlone,
   listed,
-  messageOf,
   outsiderOf,
+  retrying,
   scanHead,
   setGateLabels,
   takeCommand,
@@ -26,20 +35,13 @@ import {
 /** @import { ChangedFile, Git } from '../../core/git/index.js' */
 /** @import { PullRequest } from '../../core/github/index.js' */
 /** @import { Finding } from '../../core/secrets/index.js' */
-/** @import { TaskLinkReason } from '../../core/tasks/index.js' */
+/** @import { TaskLink, TaskLinkReason } from '../../core/tasks/index.js' */
 /** @import { Gate } from './gate.js' */
 /** @import { Tools } from './pipeline.js' */
-/** @import { Failure } from './pulls.js' */
+/** @import { Failure, REPEAT } from './pulls.js' */
 /** @import { PullRecord } from './state.js' */
 
-/** A stage's answer that ends the run without a result. */
-export const STOP = Symbol('stop')
-
-/** The first wait before stage 1 fetches again; each later wait doubles, up to a poll interval. */
-const FIRST_FETCH_WAIT_MS = 5000
-
-/** How many items a comment lists at most. */
-const MAX_DETAILS = 50
+export { REPEAT, STOP } from './pulls.js'
 
 /**
  * One run of a pull request through the stages, from the head SHA it started with.
@@ -51,10 +53,13 @@ const MAX_DETAILS = 50
  * @property {PullRecord} record The record the run started with.
  * @property {number} startedAt Milliseconds.
  * @property {string | null} author The pull request author's login.
- * @property {string} main The full SHA of main that stage 1 fetched; the run tests against it.
+ * @property {string} main The full SHA of main that the run tests against: the one stage 1
+ *   fetched, or the one stage 9 found when main moved since the merge test.
  * @property {Config} config The configuration on that main (A17).
  * @property {number | null} task The task that stage 2 found.
  * @property {ChangedFile[]} changed The files the head changes since its merge base with main.
+ * @property {number} reruns How often the merge test ran a command again for a known flaky test.
+ * @property {PullRequest | null} pull The pull request as stage 10 read it after the merge.
  * @property {() => boolean} superseded True once intake replaced the record: a new head SHA, a
  *   draft, or a closed pull request.
  * @property {(write: () => Promise<void>) => Promise<boolean>} act Writes to GitHub for this
@@ -65,7 +70,7 @@ const MAX_DETAILS = 50
  * @typedef {object} Stage
  * @property {string} name As the state, the marker and the digest name it.
  * @property {number} number
- * @property {(run: PullRun) => Promise<Failure | typeof STOP | void>} run
+ * @property {(run: PullRun) => Promise<Failure | typeof STOP | typeof REPEAT | void>} run
  */
 
 /**
@@ -87,24 +92,13 @@ export function stageTitle(stage) {
 async function fetchStage(run) {
   const { gate, pr, sha } = run
   const branch = gate.config.hackwin.project.default_branch
-  const longest = gate.config.hackwin.gate.poll_seconds * 1000
-  for (let wait = FIRST_FETCH_WAIT_MS; ; wait = Math.min(wait * 2, longest)) {
-    try {
-      await fetchHead(gate, pr, sha, { main: true })
-      break
-    } catch (error) {
-      if (!(error instanceof RemoteError)) throw error
-      gate.line(
-        `#${pr} stage 1, fetch: failed, the Gate tries again in ${Math.round(wait / 1000)} s: ${messageOf(error)}`,
-      )
-      await Promise.race([gate.ctx.clock.sleep(wait), gate.stopped])
-      if (gate.stopping || run.superseded()) return STOP
-    }
-  }
+  const fetched = await retrying(run, 'stage 1, fetch', () =>
+    fetchHead(gate, pr, sha, { main: true }),
+  )
+  if (fetched === STOP) return STOP
   run.main = await gate.git.revParse(`refs/remotes/origin/${branch}`)
   run.config = await currentConfig(gate, run.main)
   if (!(await run.act(() => setGateLabels(gate.ctx.github, pr, ['gate:testing'])))) return STOP
-  run.record.tested_main_sha = run.main
   gate.state.main_sha = run.main
 }
 
@@ -131,7 +125,7 @@ async function taskLinkStage(run) {
     run.task = link.issue
     return
   }
-  return taskLinkFailure(link.reason, pull)
+  return taskLinkFailure(link, pull)
 }
 
 /**
@@ -165,7 +159,7 @@ async function scopeStage(run) {
     details: capped(
       violations.map(
         ({ path, role, holder }) =>
-          `\`${path}\`: role \`${role}\`, held by ${holder ?? 'no member'}`,
+          `${codeSpan(path)}: role \`${role}\`, held by ${holder ?? 'no member'}`,
       ),
     ),
     next: `take these files out of the pull request: ${takeCommand(run.task)} ${IN_MAIN_CHECKOUT} resumes the task; the session restores them to their state on main and runs \`hackwin ship\`. A change that another role's files need is a task for that role, which the Lead writes (I14).`,
@@ -240,7 +234,7 @@ async function conflictStage(run) {
   const files = merge.conflicts.slice(0, MAX_DETAILS)
   const details = []
   for (const file of files) {
-    details.push(`\`${file}\`: ${await changedOnMain(gate.git, { base, main, file })}`)
+    details.push(`${codeSpan(file)}: ${await changedOnMain(gate.git, { base, main, file })}`)
   }
   if (merge.conflicts.length > files.length) {
     details.push(`and ${merge.conflicts.length - files.length} more files`)
@@ -255,7 +249,7 @@ async function conflictStage(run) {
   }
 }
 
-/** Stages 1 to 6, in order (G8). */
+/** Stages 1 to 11, in order (G8). */
 export const STAGES = Object.freeze(
   /** @type {Stage[]} */ ([
     { name: 'fetch', number: 1, run: fetchStage },
@@ -264,8 +258,24 @@ export const STAGES = Object.freeze(
     { name: 'secrets', number: 4, run: secretsStage },
     { name: 'gated-paths', number: 5, run: gatedStage },
     { name: 'conflicts', number: 6, run: conflictStage },
+    { name: 'merge-test', number: 7, run: mergeTestStage },
+    { name: 'ci', number: 8, run: ciStage },
+    { name: 'freshness', number: 9, run: freshnessStage },
+    { name: 'merge', number: 10, run: mergeStage },
+    { name: 'after-merge', number: 11, run: afterMergeStage },
   ]),
 )
+
+/**
+ * The stage of this name.
+ * @param {string} name
+ * @returns {Stage}
+ */
+export function stageNamed(name) {
+  const stage = STAGES.find((each) => each.name === name)
+  if (!stage) throw new Error(`no stage ${name}`)
+  return stage
+}
 
 /** The stage the secret scan belongs to, also when intake runs it. */
 export const SECRETS_STAGE = /** @type {Stage} */ (STAGES.find((stage) => stage.name === 'secrets'))
@@ -282,7 +292,7 @@ export function secretFailure({ pr, findings, task, atIntake }) {
     result: 'failed',
     labels: [],
     reason: `the head adds ${count(findings.length, 'line or file', 'lines or files')} that match a secret pattern${atIntake ? ', found by the scan at intake' : ''} (G12, A41). A pushed branch of a public repository is public, so the secret is exposed already. File, line and pattern of each finding:`,
-    details: capped(where.map((text) => `\`${text}\``)),
+    details: capped(where.map(codeSpan)),
     next: `the Lead rotates the secret at once, then types \`ack ${pr}\` in the Gate terminal. The author removes it from the branch: ${takeCommand(task)} ${IN_MAIN_CHECKOUT} resumes the task; the session removes it and runs \`hackwin ship\`. The secret stays in the history of the pushed branch, so only the rotation makes it harmless.`,
     note: `secret: ${count(findings.length, 'finding', 'findings')}`,
     attention: {
@@ -295,11 +305,11 @@ export function secretFailure({ pr, findings, task, atIntake }) {
 /** @type {Record<TaskLinkReason | 'issue-not-open' | 'invalid-task-block', (pull: PullRequest, task: string) => [string, string]>} */
 const TASK_LINK = {
   'no-task-branch': (pull) => [
-    `the branch \`${pull.headRef}\` is not a task branch \`task/<N>-<slug>\`; only \`hackwin ship\` opens a pull request, from the branch of a task (8.4)`,
+    `the branch ${codeSpan(pull.headRef)} is not a task branch \`task/<N>-<slug>\`; only \`hackwin ship\` opens a pull request, from the branch of a task (8.4)`,
     `open the pull request with \`hackwin ship\` in the task's worktree, and close this one`,
   ],
   'spike-branch': (pull) => [
-    `the branch \`${pull.headRef}\` is a \`spike/\` branch, which is never merged (E16)`,
+    `the branch ${codeSpan(pull.headRef)} is a \`spike/\` branch, which is never merged (E16)`,
     `ask the Lead for a task for the change, start it with \`hackwin take <task>\` ${IN_MAIN_CHECKOUT}, open its pull request with \`hackwin ship\`, and close this one`,
   ],
   'no-closes-line': (pull, task) => [
@@ -311,7 +321,7 @@ const TASK_LINK = {
     `edit the body to keep only the line \`Closes #${task}\`, then ask the Lead to type \`retry ${pull.number}\` in the Gate terminal`,
   ],
   'branch-issue-mismatch': (pull, task) => [
-    `the line \`Closes #<N>\` names another issue than the branch \`${pull.headRef}\` (T1)`,
+    `the line \`Closes #<N>\` names another issue than the branch ${codeSpan(pull.headRef)} (T1)`,
     `edit the body to name the task of the branch, \`Closes #${task}\`, then ask the Lead to type \`retry ${pull.number}\` in the Gate terminal`,
   ],
   'issue-not-open': (pull, task) => [
@@ -325,21 +335,37 @@ const TASK_LINK = {
 }
 
 /**
- * The failure of stage 2 for each reason of the task link.
- * @param {TaskLinkReason | 'issue-not-open' | 'invalid-task-block'} reason
+ * The failure of stage 2 for each reason of the task link. For `invalid-task-block` the comment
+ * gives the reasons of `checkTaskLink`, which are safe to print (contracts 4.5): an issue that no
+ * member of the team wrote is no task, and the comment names the issue and its author (scope
+ * change on #24, #74).
+ * @param {Exclude<TaskLink, { ok: true }>} link
  * @param {PullRequest} pull
  * @returns {Failure}
  */
-function taskLinkFailure(reason, pull) {
+function taskLinkFailure(link, pull) {
+  const { reason } = link
   const branchTask = /^task\/(\d+)/.exec(pull.headRef)?.[1]
   const named = /^Closes #(\d+)\s*$/m.exec(pull.body ?? '')?.[1]
   const task = reason === 'issue-not-open' || reason === 'invalid-task-block' ? named : branchTask
+  if ('member' in link && !link.member) {
+    const author = link.author ?? 'an unknown account'
+    return {
+      result: 'failed',
+      labels: [],
+      reason: `the issue #${task} that the pull request names is no task: no member of the team wrote it (\`${reason}\`):`,
+      details: capped(link.errors.map(codeSpan)),
+      next: `the author asks the Lead for a task, an issue that the Lead or a member of the team writes, and edits the body to hold exactly one line \`Closes #<task>\` that names it; then the Lead types \`retry ${pull.number}\` in the Gate terminal. The issue #${task} of ${author} stays no task.`,
+      note: `task link: #${task} written by ${author}, not a member`,
+    }
+  }
   const [text, next] = TASK_LINK[reason](pull, task ?? '<N>')
+  const errors = 'errors' in link ? link.errors : []
   return {
     result: 'failed',
     labels: [],
-    reason: `${text} (\`${reason}\`)`,
-    details: [],
+    reason: `${text} (\`${reason}\`)${errors.length > 0 ? ':' : ''}`,
+    details: capped(errors.map(codeSpan)),
     next,
     note: `task link: ${reason}`,
   }
@@ -379,23 +405,4 @@ async function changedOnMain(git, { base, main, file }) {
     ...(commits.length > 0 ? [`changed without a pull request by ${listed(commits, 3)}`] : []),
   ]
   return parts.join('; ')
-}
-
-/**
- * @param {number} n
- * @param {string} one
- * @param {string} many
- */
-function count(n, one, many) {
-  return `${n} ${n === 1 ? one : many}`
-}
-
-/**
- * The first MAX_DETAILS items, then how many more.
- * @param {string[]} items
- * @returns {string[]}
- */
-function capped(items) {
-  if (items.length <= MAX_DETAILS) return items
-  return [...items.slice(0, MAX_DETAILS), `and ${items.length - MAX_DETAILS} more`]
 }

@@ -19,7 +19,10 @@ import {
   runIn,
 } from '../../core/runtime/index.js'
 import { isJoinComplete, promptPath, readLocal } from '../../core/state/index.js'
-import { toTask } from '../../core/tasks/index.js'
+// src/core/tasks/index.js does not export shown; until it does, it comes from block.js itself, so
+// that take names an author as checkTaskLink does.
+import { shown } from '../../core/tasks/block.js'
+import { toTask, writtenByTeam } from '../../core/tasks/index.js'
 import {
   checkHooksPath,
   mainCheckout,
@@ -135,7 +138,8 @@ async function takeNumber(ctx, scope, number) {
 }
 
 /**
- * The precondition of `take N`: issue N is an open task issue (exit 2 otherwise).
+ * The precondition of `take N`: issue N is an open task issue that a member of the team wrote
+ * (exit 2 otherwise).
  * @param {CommandContext} ctx
  * @param {CheckScope} scope
  * @param {number} number
@@ -147,6 +151,12 @@ async function requireTask(ctx, scope, number) {
   if (issue === null) throw new PreconditionError(`#${number} does not exist`, { resolve })
   if (issue.isPullRequest) {
     throw new PreconditionError(`#${number} is a pull request, not a task issue`, { resolve })
+  }
+  if (!writtenByTeam(issue, scope.config)) {
+    throw new PreconditionError(`#${number} is not a task issue: ${outsiderText(issue.author)}`, {
+      resolve,
+      details: { author: issue.author, member: false },
+    })
   }
   const task = toTask(issue, scope.config)
   if (task === null) {
@@ -719,6 +729,18 @@ function skippedData({ task, failure }) {
     reason: failure.reason,
     objects: failure.objects,
   }
+}
+
+/**
+ * Why an issue that no member of the team wrote is no task (8.1, contracts 4.5), naming its
+ * author as checkTaskLink does: as it is, or quoted with each control character, line break and
+ * bidirectional format character escaped.
+ * @param {string | null} author
+ * @returns {string}
+ */
+function outsiderText(author) {
+  const who = author ? shown(author) : 'an unknown account'
+  return `it was written by ${who}, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task (8.1)`
 }
 
 /**

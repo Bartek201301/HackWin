@@ -1,7 +1,11 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { mkdirSync } from 'node:fs'
 import { emptyState, saveState } from '../../../src/commands/gate/state.js'
 import { BUILDER1, createScene, task } from './scene.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('./scene.js').Scene} Scene */
 
@@ -48,9 +52,9 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
     const draft = await ownPull(s, 74, 'counter', { draft: true })
     await s.start()
 
-    await s.until(() => s.out.includes(`#${first.pr} passed stages 1 to 6`), 'the first run')
+    await s.until(() => s.out.includes(`#${first.pr} passed stages 1 to 7`), 'the first run')
     expect(s.state().queue).toEqual([first.pr, second.pr])
-    expect(gateLabels(s.labels(first.pr))).toEqual(['gate:testing'])
+    expect(gateLabels(s.labels(first.pr))).toEqual(['gate:waiting-ci'])
     expect(gateLabels(s.labels(second.pr))).toEqual(['gate:queued'])
     expect(s.labels(draft.pr)).toEqual([])
     expect(s.state().prs[String(draft.pr)]).toBeUndefined()
@@ -59,7 +63,7 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
       files: { 'src/features/counter/f70.js': 'export const n = 71\n' },
     })
     await s.poll()
-    await s.until(() => s.out.includes(`#${second.pr} passed stages 1 to 6`), 'the second run')
+    await s.until(() => s.out.includes(`#${second.pr} passed stages 1 to 7`), 'the second run')
     expect(s.state().queue).toEqual([second.pr, first.pr])
     expect(s.state().prs[String(first.pr)]).toMatchObject({
       head_sha: later,
@@ -99,7 +103,7 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
     mkdirSync(s.files.root, { recursive: true })
     await saveState(s.files.state, before)
     await s.start()
-    await s.until(() => s.out.includes(`#${waiting.pr} passed stages 1 to 6`), 'the runs')
+    await s.until(() => s.out.includes(`#${waiting.pr} passed stages 1 to 7`), 'the runs')
     expect(s.state().queue).toEqual([waiting.pr, queued.pr])
     expect(s.state().attention.map((item) => [item.type, item.pr, item.resolved_at])).toEqual([
       ['secret', outside.pr, null],
@@ -161,11 +165,11 @@ describe('1.6c/intake: drafts, the order of the queue and new head SHAs', () => 
       'the refused retry',
     )
     await s.poll()
-    await s.until(() => s.out.includes(`#${unlinked.pr} passed stages 1 to 6`), 'the retried run')
+    await s.until(() => s.out.includes(`#${unlinked.pr} passed stages 1 to 7`), 'the retried run')
     expect(s.out).toContain(
       `retry #${unlinked.pr}: the head ${unlinked.head} joined the back of the queue`,
     )
-    expect(gateLabels(s.labels(unlinked.pr))).toEqual(['gate:testing'])
+    expect(gateLabels(s.labels(unlinked.pr))).toEqual(['gate:waiting-ci'])
     expect(s.comments(unlinked.pr)).toHaveLength(1)
     await s.quit()
     expect(s.state().queue).toEqual([unlinked.pr])

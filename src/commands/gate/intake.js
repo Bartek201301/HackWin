@@ -16,7 +16,7 @@
 // writes for one pull request run one after another (Tools.serial).
 
 import { setTaskStatus } from '../../core/tasks/index.js'
-import { closeAttention } from './attention.js'
+import { CLOSED_WITH_THE_PULL, closeAttention } from './attention.js'
 import {
   UNDER_WAY,
   currentConfig,
@@ -33,6 +33,7 @@ import {
   setGateLabels,
   taskOf,
 } from './pulls.js'
+import { forgetPull } from './repeated.js'
 import { SECRETS_STAGE, secretFailure, stageTitle } from './stages.js'
 import { addsSecret, pullRecord } from './state.js'
 
@@ -40,14 +41,6 @@ import { addsSecret, pullRecord } from './state.js'
 /** @import { Gate } from './gate.js' */
 /** @import { Tools } from './pipeline.js' */
 /** @import { PullRecord } from './state.js' */
-
-/** The attention types that close when the pull request is merged or closed (9.6). */
-const CLOSED_WITH_THE_PULL = Object.freeze([
-  'migration',
-  'production-config',
-  'scope-violation',
-  'repeated-failure',
-])
 
 /**
  * One intake.
@@ -157,6 +150,23 @@ async function closeItemsOfClosed(gate, tools, open) {
 }
 
 /**
+ * A new head SHA that a run found, as stage 10 does when the head moved after the merge test: it
+ * is admitted as at intake, after the work for the pull request that started earlier.
+ * @param {Gate} gate
+ * @param {Tools} tools
+ * @param {PullRequest} pull
+ * @returns {Promise<void>}
+ */
+export async function admitHead(gate, tools, pull) {
+  const branch = gate.config.hackwin.project.default_branch
+  const config = await currentConfig(gate, `refs/remotes/origin/${branch}`)
+  await tools.serial(pull.number, async () => {
+    if (gate.state.prs[String(pull.number)]?.head_sha === pull.headSha) return
+    await admit(gate, tools, config, pull)
+  })
+}
+
+/**
  * A new head SHA: a pull request of no member or from another repository is left alone.
  * Otherwise the labels of the earlier run go, the head is fetched and scanned, and the pull
  * request fails, or joins the back of the queue when it targets the default branch.
@@ -206,6 +216,8 @@ async function admit(gate, tools, config, pull) {
         stage: SECRETS_STAGE.name,
         title: `${stageTitle(SECRETS_STAGE)}, at intake`,
       },
+      config,
+      queued: false,
     })
     return
   }
@@ -229,10 +241,12 @@ async function admit(gate, tools, config, pull) {
  */
 async function leaveClosed(gate, pr, pulls) {
   const { ctx, state } = gate
-  if (!state.prs[String(pr)]) return
+  // The Gate's own merge: its run ends the record (stage 11).
+  if (!state.prs[String(pr)] || state.prs[String(pr)].result === 'merged') return
   const pull = await ctx.github.getPullRequest(pr)
   // The list was older than this answer.
   if (pull !== null && pull.state === 'open') return
+  if (pull !== null && tookOwnMerge(gate, pr, pull)) return
   const merged = pull?.merged === true
   /** @type {number | null} */
   let task = null
@@ -254,10 +268,41 @@ async function leaveClosed(gate, pr, pulls) {
   })
   await gate.git.run(['update-ref', '-d', pullRef(pr)], { allowFailure: true })
   delete state.prs[String(pr)]
+  forgetPull(gate, pr)
   const how = merged ? 'was merged outside the Gate' : 'was closed without a merge'
   gate.line(
     `#${pr} ${how} and left the queue${task === null ? '' : `; its task #${task} is in-progress again`}`,
   )
+}
+
+/**
+ * Take a merge as the Gate's own when GitHub merged the head SHA that the record's run took into
+ * stage 10: the run stopped there, as when the Gate was killed after GitHub merged and before the
+ * state file said so, or it ended failed or was given up there without a readable answer whether
+ * GitHub merged (`merge_unknown`). The record is then merged and in the queue, and its run takes
+ * up again after the merge (pipeline.js): stage 11 labels it, closes its task and readies the
+ * dependents. Every other merge of a pull request with a record happened outside the Gate, also
+ * the Lead's merge by hand after stage 10 read that GitHub refused the merge.
+ * @param {Gate} gate
+ * @param {number} pr
+ * @param {PullRequest} pull
+ * @returns {boolean} True when the merge is the Gate's own.
+ */
+export function tookOwnMerge(gate, pr, pull) {
+  const { state } = gate
+  const record = state.prs[String(pr)]
+  if (!record || record.stage !== 'merge') return false
+  const unknown = record.result === 'failed' && record.merge_unknown === true
+  if (record.result !== null && !unknown) return false
+  if (!pull.merged || pull.headSha !== record.head_sha) return false
+  record.result = 'merged'
+  if (!state.queue.includes(pr)) state.queue.unshift(pr)
+  gate.line(
+    unknown
+      ? `#${pr}: GitHub merged head ${record.head_sha}, whose run ended at stage 10, so the Gate finishes it after the merge`
+      : `#${pr}: GitHub merged head ${record.head_sha}, which the Gate had not recorded, so the run goes on after the merge`,
+  )
+  return true
 }
 
 /**
@@ -305,6 +350,8 @@ async function requeue(gate, pr, pull) {
   await setGateLabels(ctx.github, pr, ['gate:queued'])
   record.stage = 'intake'
   record.result = null
+  // The Lead's retry tries the head again, CI reruns included (G14).
+  record.ci_reruns = 0
   joinQueue(state, pr)
   gate.line(`retry #${pr}: the head ${record.head_sha} joined the back of the queue`)
 }

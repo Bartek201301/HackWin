@@ -1,5 +1,7 @@
 // The runner: parses the command line, builds the context, loads the command module lazily,
-// runs it, and maps the result or the error to output and an exit code (CM2, CM6).
+// runs it, and maps the result or the error to output and an exit code (CM2, CM6). When GitHub is
+// unreachable while it prepares the context, a command can still print what it knows locally
+// through the `unreachable` export of its module.
 
 import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -9,6 +11,7 @@ import {
   EXIT,
   HackwinError,
   NotBuiltError,
+  RemoteError,
   UsageError,
   exitCodeOf,
 } from '../core/runtime/errors.js'
@@ -26,7 +29,7 @@ import { COMMANDS, resolveCommand } from './registry.js'
 import { PACKAGE_ROOT, REPOSITORY_URL, VERSION, createContext } from './context.js'
 
 /** @import { CommandEntry } from './registry.js' */
-/** @import { CommandContext, CommandResult, CommandRun } from './context.js' */
+/** @import { CommandContext, CommandResult, CommandRun, CommandUnreachable, UnreachableResult } from './context.js' */
 /** @import { GhExecutor } from '../core/github/index.js' */
 /** @import { Clock } from '../core/runtime/clock.js' */
 /** @import { Output, Writer } from '../core/runtime/output.js' */
@@ -89,6 +92,9 @@ export async function main(argv, options = {}) {
 
   const entry = line.entry
   const out = createOutput({ stdout, stderr, json: line.json })
+  const moduleRoot = options.moduleRoot ?? fileURLToPath(PACKAGE_ROOT)
+  /** @type {UnreachableResult | null} */
+  let unreachable = null
   try {
     const ctx = await createContext({
       command: entry.name,
@@ -102,8 +108,13 @@ export async function main(argv, options = {}) {
       clock: options.clock ?? systemClock,
       ghExecutor: options.ghExecutor,
     })
-    await prepareContext(ctx, entry)
-    const run = await loadCommand(entry, options.moduleRoot ?? fileURLToPath(PACKAGE_ROOT))
+    try {
+      await prepareContext(ctx, entry)
+    } catch (error) {
+      unreachable = await runUnreachable(ctx, entry, error, moduleRoot)
+      throw error
+    }
+    const run = await loadCommand(entry, moduleRoot)
     const result = checkResult(entry, await run(ctx))
     const exitCode = result.exitCode ?? EXIT.OK
     if (out.json) {
@@ -120,7 +131,7 @@ export async function main(argv, options = {}) {
     }
     return exitCode
   } catch (error) {
-    return report(error, { out, stdout, stderr, command: entry.name, debug })
+    return report(error, { out, stdout, stderr, command: entry.name, debug, unreachable })
   }
 }
 
@@ -198,9 +209,8 @@ async function isConfigured(git, ref) {
  * @returns {Promise<CommandRun>}
  */
 export async function loadCommand(entry, moduleRoot) {
-  const file = join(moduleRoot, entry.module)
-  if (!existsSync(file)) throw new NotBuiltError(entry.name, entry.module)
-  const module = await import(pathToFileURL(file).href)
+  const module = await importCommand(entry, moduleRoot)
+  if (module === null) throw new NotBuiltError(entry.name, entry.module)
   if (typeof module.run !== 'function') {
     throw new NotBuiltError(
       entry.name,
@@ -208,7 +218,49 @@ export async function loadCommand(entry, moduleRoot) {
       `${entry.module} does not export a run function`,
     )
   }
-  return module.run
+  return /** @type {CommandRun} */ (module.run)
+}
+
+/**
+ * What a user command still prints when preparing its context failed with a RemoteError
+ * (contracts section 3.2): the runner loads the command's module anyway and calls its
+ * `unreachable(ctx, error)` with the context it built, without config and identity. Null when
+ * the error is another one, the command is plumbing, or its module does not exist yet or exports
+ * no `unreachable`; the runner then prints the error alone. GitHub unreachable exits 3 (7.6), so
+ * when the import of the module or the hook throws, the runner still reports the RemoteError: the
+ * failure becomes one warning that says why the local information could not be shown, and null.
+ * @param {CommandContext} ctx
+ * @param {CommandEntry} entry
+ * @param {unknown} error The error of prepareContext.
+ * @param {string} moduleRoot
+ * @returns {Promise<UnreachableResult | null>}
+ */
+async function runUnreachable(ctx, entry, error, moduleRoot) {
+  if (entry.plumbing || !(error instanceof RemoteError)) return null
+  try {
+    const module = await importCommand(entry, moduleRoot)
+    if (typeof module?.unreachable !== 'function') return null
+    delete ctx.config
+    delete ctx.identity
+    const hook = /** @type {CommandUnreachable} */ (module.unreachable)
+    return (await hook(ctx, error)) ?? {}
+  } catch (failure) {
+    const why = failure instanceof Error ? failure.message : String(failure)
+    ctx.out.warn(`the local information of hackwin ${entry.name} could not be shown: ${why}`)
+    return null
+  }
+}
+
+/**
+ * The entry module of a command, or null when it does not exist yet.
+ * @param {CommandEntry} entry
+ * @param {string} moduleRoot
+ * @returns {Promise<Record<string, unknown> | null>}
+ */
+async function importCommand(entry, moduleRoot) {
+  const file = join(moduleRoot, entry.module)
+  if (!existsSync(file)) return null
+  return import(pathToFileURL(file).href)
 }
 
 /**
@@ -313,7 +365,8 @@ function checkResult(entry, result) {
 }
 
 /**
- * Print an error and return its exit code.
+ * Print an error and return its exit code. The lines of an `unreachable` hook come first, on
+ * stdout; with --json they and the hook's data are fields of the one document.
  * @param {unknown} error
  * @param {object} options
  * @param {Output} options.out
@@ -321,15 +374,19 @@ function checkResult(entry, result) {
  * @param {Writer} options.stderr
  * @param {string | undefined} options.command
  * @param {boolean} options.debug
+ * @param {UnreachableResult | null} [options.unreachable]
  * @returns {number}
  */
-function report(error, { out, stdout, stderr, command, debug }) {
+function report(error, { out, stdout, stderr, command, debug, unreachable = null }) {
   const exitCode = exitCodeOf(error)
   if (out.json) {
     writeJson(stdout, {
       command: command ?? null,
       ok: false,
       exitCode,
+      ...(unreachable === null
+        ? {}
+        : { lines: unreachable.lines ?? [], data: unreachable.data ?? null }),
       error:
         error instanceof HackwinError
           ? error.toJSON()
@@ -340,6 +397,7 @@ function report(error, { out, stdout, stderr, command, debug }) {
       stderr.write(`${error.stack}\n`)
     }
   } else {
+    for (const text of unreachable?.lines ?? []) stdout.write(`${text}\n`)
     for (const text of formatError(error, { command, stack: debug })) stderr.write(`${text}\n`)
   }
   return exitCode

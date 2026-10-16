@@ -117,8 +117,9 @@ export function startMain(fixture, options) {
  * Start the Gate with its options (a pipeline, a keep awake), on a context that the runner
  * prepared as for `hackwin gate` in a terminal. `done` settles with the result.
  * @param {Fixture} fixture
- * @param {{ fake: FakeGitHub, login: string, clock?: ManualClock, io?: Terminal, options?: import('../../../src/commands/gate/gate.js').GateOptions, prepare?: (ctx: any) => void, cwd?: string }} setup
- *   `cwd` is a checkout of another clone; the main checkout by default.
+ * @param {{ fake: FakeGitHub, login: string, clock?: ManualClock, io?: Terminal, options?: import('../../../src/commands/gate/gate.js').GateOptions, prepare?: (ctx: any) => void, cwd?: string, env?: Record<string, string | undefined> }} setup
+ *   `cwd` is a checkout of another clone; the main checkout by default. `env` is the Gate's
+ *   environment; the fixture's by default.
  */
 export async function startDirect(fixture, setup) {
   const { fake, login, clock = manualClock(), io = terminal(), cwd = fixture.main } = setup
@@ -127,7 +128,7 @@ export async function startDirect(fixture, setup) {
     args: [],
     flags: {},
     cwd,
-    env: fixture.env,
+    env: setup.env ?? fixture.env,
     stdin: io.stdin,
     stdoutIsTTY: true,
     out: createOutput({ stdout: io.stdout, stderr: io.stderr }),
@@ -146,14 +147,15 @@ export async function noKeepAwake() {
 }
 
 /**
- * Wait until `check` returns a truthy value, looking every 10 ms.
+ * Wait until `check` returns a truthy value, looking every 10 ms. The wait is long, so that a
+ * loaded machine does not fail a test; it only delays the report of a real failure.
  * @template T
  * @param {() => T | Promise<T>} check
  * @param {string} what
  * @param {number} [timeoutMs]
  * @returns {Promise<T>}
  */
-export async function until(check, what, timeoutMs = 10_000) {
+export async function until(check, what, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const value = await check()

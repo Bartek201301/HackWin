@@ -4,7 +4,10 @@
 // its own files (A46), commits and runs `ship` again.
 
 import { PreconditionError } from '../../core/runtime/errors.js'
-import { toTask } from '../../core/tasks/index.js'
+// src/core/tasks/index.js does not export shown; until it does, it comes from block.js itself, so
+// that ship names an author as checkTaskLink does.
+import { shown } from '../../core/tasks/block.js'
+import { toTask, writtenByTeam } from '../../core/tasks/index.js'
 import { checkHooksPath, mainCheckout, repairHooksPath } from '../../core/worktrees/index.js'
 import { STEPS, fail, plural, progress } from './steps.js'
 
@@ -86,8 +89,9 @@ export async function syncBranch(ctx, worktree) {
 }
 
 /**
- * Read the task issue of the worktree and require that it is shippable: an open issue with a
- * valid task block, `in-progress` or `in-review` (7.9, preconditions). Otherwise exit 2.
+ * Read the task issue of the worktree and require that it is shippable: an open issue that a
+ * member of the team wrote, with a valid task block, `in-progress` or `in-review` (7.9,
+ * preconditions, 8.1). Otherwise exit 2.
  * @param {CommandContext} ctx
  * @param {TaskWorktree} worktree
  * @returns {Promise<Task & { block: TaskBlock }>}
@@ -98,9 +102,11 @@ async function shippableTask(ctx, worktree) {
   const issue = await ctx.github.getIssue(number)
   const task = issue === null || issue.isPullRequest ? null : toTask(issue, config)
   if (task === null) {
-    const what = issueProblem(issue)
+    const outsider = issue !== null && !issue.isPullRequest && !writtenByTeam(issue, config)
+    const what = issueProblem(issue, outsider)
     throw new PreconditionError(`#${number}, the issue of ${worktree.branch}, ${what}`, {
       resolve: `ship from the worktree of a task issue; ask the Lead when #${number} should be one`,
+      ...(outsider ? { details: { author: issue.author, member: false } } : {}),
     })
   }
   if (task.block === null) {
@@ -126,12 +132,20 @@ async function shippableTask(ctx, worktree) {
 }
 
 /**
+ * Why the issue of the worktree is no task. An issue that no member of the team wrote is none
+ * (8.1, contracts 4.5); its author is named as checkTaskLink names it: as it is, or quoted with
+ * each control character, line break and bidirectional format character escaped.
  * @param {Issue | null} issue
+ * @param {boolean} outsider True when no member of the team wrote the issue.
  * @returns {string}
  */
-function issueProblem(issue) {
+function issueProblem(issue, outsider) {
   if (issue === null) return 'does not exist'
   if (issue.isPullRequest) return 'is a pull request'
+  if (outsider) {
+    const who = issue.author ? shown(issue.author) : 'an unknown account'
+    return `is not a task: it was written by ${who}, who is not a member of the team in hackwin.yml; only an issue that team.lead or one of team.members wrote is a task`
+  }
   return 'has no # hackwin:task block'
 }
 

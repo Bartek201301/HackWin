@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { mkdirSync } from 'node:fs'
 import { pullRef } from '../../../src/commands/gate/pulls.js'
 import { emptyState, pullRecord, saveState } from '../../../src/commands/gate/state.js'
 import { BUILDER1, LEAD, createScene, task } from './scene.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('./scene.js').Scene} Scene */
 
@@ -82,7 +86,7 @@ describe('1.6c/outsiders: the Gate tests only the pull requests of the team', ()
     })
     const member = await s.openPull({ branch: 'task/114-counter-own', author: BUILDER1, task: 114 })
     await s.start()
-    await s.until(() => s.out.includes(`#${member} passed stages 1 to 6`), "the member's run")
+    await s.until(() => s.out.includes(`#${member} passed stages 1 to 7`), "the member's run")
 
     expect(s.out).toContain(
       `ATTENTION scope-violation #${fork}: the Gate does not test #${fork}: its head lies in ${FORK}, not in this repository, and the Gate tests only branches of this repository; close it, or move the change to a task branch of this repository`,
@@ -202,7 +206,7 @@ describe('1.6c/intake: every open head SHA is scanned, whatever its base', () =>
 
     await s.as(BUILDER1).updatePullRequest(clean, { base: 'main' })
     await s.poll()
-    await s.until(() => s.out.includes(`#${clean} passed stages 1 to 6`), 'the retargeted run')
+    await s.until(() => s.out.includes(`#${clean} passed stages 1 to 7`), 'the retargeted run')
     await s.quit()
     expect(s.state().queue).toEqual([clean])
     expect(s.comments(clean)).toEqual([])

@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { parseGateMarker } from '../../../src/commands/gate/comment.js'
 import { BUILDER1, BUILDER2, createScene, task } from './scene.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('./scene.js').Scene} Scene */
 
@@ -74,12 +78,12 @@ describe("AC25: a pull request with a file outside its author's scope", () => {
     const later = await s.push(branch, { remove: ['src/features/greeting/hello.js'] })
     await s.poll()
     await s.until(
-      () => s.out.includes(`#${pr} passed stages 1 to 6 with head ${later}`),
+      () => s.out.includes(`#${pr} passed stages 1 to 7 with head ${later}`),
       'the later head SHA',
     )
     expect(
       s.labels(pr).filter((label) => label.startsWith('gate:') || label === 'scope-violation'),
-    ).toEqual(['gate:testing'])
+    ).toEqual(['gate:waiting-ci'])
     expect(s.comments(pr)).toHaveLength(1)
     expect(s.out).toContain(
       `#${pr}: the scope-violation attention item is closed: head ${later} passes stage 3`,
@@ -108,7 +112,7 @@ describe("1.6c/scope: stage 3 checks the author's roles, never the role of the t
     const own = await s.openPull({ branch: 'task/30-greeting-counter', author: BUILDER1, task: 30 })
     await s.start()
 
-    await s.until(() => s.out.includes(`#${own} passed stages 1 to 6`), 'the run of the own change')
+    await s.until(() => s.out.includes(`#${own} passed stages 1 to 7`), 'the run of the own change')
     expect(s.labels(outside)).toEqual(expect.arrayContaining(['gate:failed', 'scope-violation']))
     expect(s.comments(outside)[0].body).toContain(
       `- \`src/features/counter/limit.js\`: role \`counter\`, held by ${BUILDER1}`,

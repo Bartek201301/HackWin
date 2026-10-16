@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { mkdirSync } from 'node:fs'
 import { parseGateMarker } from '../../../src/commands/gate/comment.js'
 import { parseDigestLine } from '../../../src/commands/gate/digest.js'
 import { emptyState, pullRecord, saveState } from '../../../src/commands/gate/state.js'
 import { BUILDER1, LEAD, createScene, task } from './scene.js'
+
+// The waits of these tests are long (helpers.js, until; scene.js), so that a loaded machine
+// fails no test; a test may take as long as its waits.
+vi.setConfig({ testTimeout: 120_000 })
 
 /** @typedef {import('./scene.js').Scene} Scene */
 
@@ -89,7 +93,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     })
     const pr = await s.openPull({ branch: 'task/92-shared-deploy', author: LEAD, task: 92 })
     await s.start()
-    await s.until(() => s.out.includes(`#${pr} passed stages 1 to 6 with head ${head}`), 'the run')
+    await s.until(() => s.out.includes(`#${pr} passed stages 1 to 7 with head ${head}`), 'the run')
     expect(s.out).toContain(
       `ATTENTION production-config #${pr}: review the production config change in deploy/prod.env.yml and apply it by hand outside HackWin, then record it in docs/ledger.md; the Gate tests and merges the pull request like any other`,
     )
@@ -98,7 +102,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     await s.quit()
     expect(s.state().prs[String(pr)]).toMatchObject({
       gated: ['production_config'],
-      stage: 'conflicts',
+      stage: 'ci',
       result: null,
     })
     expect(s.state().attention).toEqual([
@@ -191,7 +195,7 @@ describe('1.6c/stages: what each of stages 1 to 6 does', () => {
     })
     await s.poll()
     await s.until(
-      () => s.out.includes(`#${pr} passed stages 1 to 6 with head ${second}`),
+      () => s.out.includes(`#${pr} passed stages 1 to 7 with head ${second}`),
       'the run of the new head',
     )
     await s.quit()
