@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   chmodSync,
   existsSync,
@@ -10,14 +10,22 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
-import { setTimeout as sleep } from 'node:timers/promises'
+import { execFileSync } from 'node:child_process'
+import { delimiter, join } from 'node:path'
 import { VERSION } from '../../../src/cli/context.js'
 import { createGit } from '../../../src/core/git/index.js'
 import { PreconditionError, createOutput } from '../../../src/core/runtime/index.js'
-import { bootstrap } from '../../../src/commands/setup/bootstrap.js'
+import { bootstrap, stageFiles } from '../../../src/commands/setup/bootstrap.js'
 import { teamConfig } from '../../harness/index.js'
-import { createSetupFixture, runSetup, snapshot, teamAnswers, writes } from './setup-fixture.js'
+import {
+  createSetupFixture,
+  runSetup,
+  slowOrigin,
+  snapshot,
+  teamAnswers,
+  waitFor,
+  writes,
+} from './setup-fixture.js'
 
 /** A GitHub token of the built-in pattern, made at run time so that no source line holds one. */
 const TOKEN = ['gh', 'p_', 'A1b2'.repeat(9)].join('')
@@ -42,13 +50,17 @@ async function state(fixture) {
   }
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 /**
  * Call steps 8 and 9 directly, as setup does after its questions, with the configuration of a
  * fixture team of 3 and the Node fixture's owners.yml kept.
  * @param {import('../../harness/index.js').Fixture} fixture
- * @param {{ signals?: any }} [options]
+ * @param {{ signals?: any, env?: Record<string, string | undefined> }} [options]
  */
-async function runBootstrap(fixture, options = {}) {
+async function runBootstrap(fixture, { env = fixture.env, ...options } = {}) {
   let stderr = ''
   const out = createOutput({
     stdout: { write: () => true },
@@ -57,8 +69,8 @@ async function runBootstrap(fixture, options = {}) {
   })
   const ctx = /** @type {any} */ ({
     repoRoot: fixture.main,
-    env: fixture.env,
-    git: createGit({ cwd: fixture.main, env: fixture.env }),
+    env,
+    git: createGit({ cwd: fixture.main, env }),
     out,
   })
   const result = await bootstrap(
@@ -102,29 +114,6 @@ function fakeSignals() {
       return (handlers.get(signal)?.size ?? 0) > 0
     },
   }
-}
-
-/**
- * A pre-receive hook on the fixture's origin that marks its start, waits, and then accepts or
- * refuses the push.
- * @param {import('../../harness/index.js').Fixture} fixture
- * @param {boolean} accept
- */
-function slowOrigin(fixture, accept) {
-  const marker = join(fixture.dir, 'push-started')
-  const hook = join(fixture.origin, 'hooks', 'pre-receive')
-  writeFileSync(
-    hook,
-    `#!/bin/sh\ncat >/dev/null\ntouch '${marker}'\nsleep 1\n${accept ? 'exit 0' : 'echo refused >&2\nexit 1'}\n`,
-  )
-  chmodSync(hook, 0o755)
-  return marker
-}
-
-/** @param {string} file */
-async function waitFor(file) {
-  for (let tries = 0; tries < 200 && !existsSync(file); tries += 1) await sleep(25)
-  if (!existsSync(file)) throw new Error(`${file} did not appear`)
 }
 
 describe('1.4d/bootstrap: the commit holds only what setup writes, and no secret', () => {
@@ -308,5 +297,141 @@ describe('AC6/files: symlinks and interrupts', () => {
     expect(await fixture.git.revParse('HEAD')).toBe(result.commit)
     expect(await fixture.git.isClean()).toBe(true)
     expect(signals.listening('SIGINT')).toBe(false)
+    // Setup stops here, before the steps after the push, for `setup --resume`.
+    expect(result.interrupted).toBe(true)
+  })
+})
+
+describe('1.4f/bootstrap: the gaps of the re-review of PR #65', () => {
+  test('1.4f/bootstrap: when the push fails and origin cannot be asked, setup says it could not check, not that nothing changed', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    // The push is refused, and origin is gone before setup asks it with git ls-remote.
+    const hook = join(fixture.origin, 'hooks', 'pre-receive')
+    writeFileSync(
+      hook,
+      `#!/bin/sh\ncat >/dev/null\nmv '${fixture.origin}' '${fixture.origin}.gone'\nexit 1\n`,
+    )
+    chmodSync(hook, 0o755)
+    const files = snapshot(fixture.main)
+    const head = await fixture.git.revParse('HEAD')
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(3)
+    expect(result.stderr).toMatch(
+      /setup could not check whether its bootstrap commit [0-9a-f]{40} reached origin\/main: the push failed, and git ls-remote failed too\. Setup put its files back; the commit may be on origin/,
+    )
+    expect(result.stderr).not.toContain('nothing changed on GitHub')
+    expect(result.stderr).toContain(
+      `to resolve: run \`git ls-remote origin refs/heads/main\` in ${fixture.main}: when it prints`,
+    )
+    expect(result.stderr).toContain(
+      `run \`hackwin setup --resume\` in ${fixture.main}, which first fast-forwards main to origin/main, since the checkout is as clean as before; otherwise`,
+    )
+    expect(snapshot(fixture.main)).toEqual(files)
+    expect(await fixture.git.revParse('HEAD')).toBe(head)
+  })
+
+  test('1.4f/bootstrap: a push that GitHub refuses for a missing workflow scope names the scope to add; nothing changes', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    // GitHub's answer to the Lead's push on hackwin-fixture-a, 15 October 2026.
+    const hook = join(fixture.origin, 'hooks', 'pre-receive')
+    writeFileSync(
+      hook,
+      "#!/bin/sh\ncat >/dev/null\necho 'refusing to allow an OAuth App to create or update workflow `.github/workflows/hackwin.yml` without `workflow` scope' >&2\nexit 1\n",
+    )
+    chmodSync(hook, 0o755)
+    const before = await state(fixture)
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(3)
+    expect(result.stderr).toContain(
+      'GitHub refuses a push that creates a workflow file from a login without the workflow scope, and the bootstrap commit creates .github/workflows/hackwin.yml',
+    )
+    expect(result.stderr).toContain(
+      `to resolve: add the scope to the gh login that git pushes with: run \`gh auth refresh -s workflow\` in any directory, then run \`hackwin setup\` in ${fixture.main}`,
+    )
+    expect(await state(fixture)).toEqual(before)
+    expect(writes(fake)).toEqual([])
+  })
+
+  test('1.4f/bootstrap: the interrupt handlers are removed when setup fails before it writes anything', async () => {
+    const { fixture } = await createSetupFixture()
+    const before = await state(fixture)
+    const signals = fakeSignals()
+    // mkdtemp of the scratch directory fails: TMPDIR names a directory that does not exist.
+    vi.stubEnv('TMPDIR', join(fixture.dir, 'missing'))
+    await expect(runBootstrap(fixture, { signals })).rejects.toThrow(/ENOENT/)
+    vi.unstubAllEnvs()
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+      expect(signals.listening(signal), signal).toBe(false)
+    }
+    expect(await state(fixture)).toEqual(before)
+  })
+
+  test('1.4f/bootstrap: the git calls after the push run in a process group of their own, out of reach of a Ctrl+C in the terminal', async () => {
+    const { fixture } = await createSetupFixture()
+    // A git first on PATH that notes its process group and the git command, then runs git.
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+    const bin = join(fixture.dir, 'git-bin')
+    const log = join(fixture.dir, 'git-groups.log')
+    mkdirSync(bin)
+    writeFileSync(
+      join(bin, 'git'),
+      `#!/bin/sh\necho "$(ps -o pgid= -p $$ | tr -d ' ') $*" >> '${log}'\nexec '${realGit}' "$@"\n`,
+    )
+    chmodSync(join(bin, 'git'), 0o755)
+    const env = { ...fixture.env, PATH: `${bin}${delimiter}${fixture.env.PATH}` }
+    const { result } = await runBootstrap(fixture, { env })
+    expect(await originMain(fixture)).toBe(result.commit)
+
+    const own = execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], {
+      encoding: 'utf8',
+    }).trim()
+    const calls = readFileSync(log, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => {
+        // The git command is the first word that is no option and no value of `-c`.
+        const [group, ...args] = line.split(' ')
+        const command = args.find((arg, index) => !arg.startsWith('-') && args[index - 1] !== '-c')
+        return { group, command }
+      })
+    const pushAt = calls.findIndex((call) => call.command === 'push')
+    expect(pushAt).toBeGreaterThan(-1)
+    const after = calls.slice(pushAt + 1)
+    expect(after.map((call) => call.command)).toEqual(['diff', 'update-ref', 'reset'])
+    for (const call of after) expect(call.group, call.command).not.toBe(own)
+    expect(calls[pushAt].group).toBe(own)
+  })
+
+  test('1.4f/bootstrap: a kept file under a symlinked directory gets the message about the link, not a failed git check-ignore', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    // The research skill of .agents/ is kept as it is (6.5), and .agents is a link.
+    await fixture.git.run(['mv', '.agents', 'shared-agents'])
+    symlinkSync('shared-agents', join(fixture.main, '.agents'))
+    await fixture.commit('Link .agents to shared-agents', { push: true })
+    const before = await state(fixture)
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      'hackwin writes .agents/skills/research/SKILL.md, but .agents/skills/research/SKILL.md lies under .agents, which is a symbolic link to shared-agents; hackwin never writes through a link it did not create',
+    )
+    expect(result.stderr).not.toContain('check-ignore')
+    expect(await state(fixture)).toEqual(before)
+    expect(writes(fake)).toEqual([])
+  })
+
+  test('1.4f/bootstrap: an empty list of files is never staged as the whole tree; setup makes no commit', async () => {
+    const { fixture } = await createSetupFixture()
+    const index = join(fixture.dir, 'index')
+    const git = createGit({ cwd: fixture.main, env: { ...fixture.env, GIT_INDEX_FILE: index } })
+    writeFileSync(join(fixture.main, 'stray.txt'), 'stray\n')
+    await expect(stageFiles(git, [])).rejects.toThrow('setup found no file of its own to commit')
+    expect(existsSync(index)).toBe(false)
+
+    // A second bootstrap over files that are as setup writes them: nothing of setup's changes.
+    const { result } = await runBootstrap(fixture)
+    const before = await state(fixture)
+    await expect(runBootstrap(fixture)).rejects.toThrow('setup found no file of its own to commit')
+    expect(await state(fixture)).toEqual(before)
+    expect(await originMain(fixture)).toBe(result.commit)
   })
 })

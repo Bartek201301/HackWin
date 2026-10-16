@@ -213,7 +213,6 @@ async function teamFromTerminal(questions, { login }) {
  * @returns {Promise<Array<{ login: string, write: boolean }>>}
  */
 export async function checkLogins(questions, github, team) {
-  const access = []
   for (const [index, member] of team.members.entries()) {
     const login = member.github
     const user = await nullWhenNotFound(() => github.api(`users/${encodeURIComponent(login)}`))
@@ -223,13 +222,28 @@ export async function checkLogins(questions, github, team) {
         { resolve: `correct the login of ${member.name}, then ${questions.rerun()}` },
       )
     }
-    const permission = await nullWhenNotFound(() =>
-      github.api(`repos/{owner}/{repo}/collaborators/${encodeURIComponent(login)}/permission`),
-    )
-    const level = /** @type {{ permission?: string } | null} */ (permission)?.permission
-    access.push({ login, write: level === 'admin' || level === 'write' || level === 'maintain' })
   }
-  return access
+  const writers = await writersOf(github)
+  return team.members.map(({ github: login }) => ({
+    login,
+    write: writers.has(login.toLowerCase()),
+  }))
+}
+
+/**
+ * The logins, in lower case, that can write to the repository: admin, maintain or write. One
+ * list of the collaborators answers it for the whole team. A login whose invitation waits to be
+ * accepted is not among them.
+ * @param {GitHub} github
+ * @returns {Promise<Set<string>>}
+ */
+export async function writersOf(github) {
+  const collaborators = await github.apiPages('repos/{owner}/{repo}/collaborators')
+  return new Set(
+    collaborators
+      .filter((collaborator) => collaborator?.permissions?.push === true)
+      .map((collaborator) => String(collaborator.login).toLowerCase()),
+  )
 }
 
 /**

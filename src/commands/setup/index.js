@@ -3,13 +3,16 @@
 // CM11), the logins, the ownership map, the detected stack commands and path groups, the event,
 // the visibility, every committed file of 6.4, and the bootstrap commit with its push, the only
 // direct push to the default branch in the life of the project. A failure before that push
-// leaves GitHub and the checkout as they were. A configured repository exits 2: configuration
-// changes go through a pull request by the Lead.
+// leaves GitHub and the checkout as they were. Steps 10 to 15 follow (finish.js): labels,
+// invitations, branch rules, push protection, `join` for the Lead's machine and the summary;
+// after a failure there, `setup --resume` runs them again. A second `setup` on a configured
+// repository exits 2: configuration changes go through a pull request by the Lead.
 
 import { parseHackwinConfig, parseOwners, validateConfig } from '../../core/config/index.js'
 import { NotBuiltError, PreconditionError, runIn } from '../../core/runtime/index.js'
 import { renderHackwinConfig, renderOwners } from '../../generate/index.js'
 import { bootstrap } from './bootstrap.js'
+import { checkLaterAnswers, finishSetup, resumeSetup } from './finish.js'
 import { askOwnership, ownersUnchanged, proposeOwners } from './ownership.js'
 import { checkPreconditions } from './preconditions.js'
 import { askProject, reportVisibility } from './project.js'
@@ -22,7 +25,7 @@ import { askTeam, checkLogins } from './team.js'
 /** @import { HackwinConfig } from '../../core/config/index.js' */
 /** @import { Questions } from './questions.js' */
 
-/** The module of this command, for the flags that are not built yet. */
+/** The module of this command, for the flag that is not built yet. */
 const MODULE = 'src/commands/setup/index.js'
 
 /** `tasks` of hackwin.yml with the default of 6.3. */
@@ -49,23 +52,22 @@ const RESOLVER_PHASE_1 = Object.freeze({ enabled: false, model: null, max_turns:
  * @returns {Promise<CommandResult>}
  */
 export async function run(ctx) {
-  for (const flag of ['resume', 'regenerate']) {
-    if (ctx.flags[flag]) {
-      throw new NotBuiltError(`setup --${flag}`, MODULE, `setup --${flag} is not built yet`)
-    }
+  if (ctx.flags.regenerate) {
+    throw new NotBuiltError('setup --regenerate', MODULE, 'setup --regenerate is not built yet')
   }
-  if (ctx.config) throw configured(ctx)
+  const resume = ctx.flags.resume === true
+  if (ctx.config && !resume) throw configured(ctx)
 
-  const questions = await openQuestions(ctx)
+  const questions = await openQuestions(ctx, { required: !resume })
   try {
-    return await setUp(ctx, questions)
+    return resume ? await resumeSetup(ctx, questions) : await setUp(ctx, questions)
   } finally {
     questions.close()
   }
 }
 
 /**
- * Steps 1 to 9.
+ * Steps 1 to 9, then steps 10 to 15.
  * @param {CommandContext} ctx
  * @param {Questions} questions
  * @returns {Promise<CommandResult>}
@@ -73,6 +75,7 @@ export async function run(ctx) {
 async function setUp(ctx, questions) {
   const pre = await checkPreconditions(ctx)
   const { repository, branch } = pre
+  checkLaterAnswers(questions)
 
   const team = await askTeam(questions, { login: pre.login })
   const access = await checkLogins(questions, ctx.github, team)
@@ -131,10 +134,20 @@ async function setUp(ctx, questions) {
 
   const changes = [`${result.written.length} files written`]
   if (result.removed.length > 0) changes.push(`${result.removed.join(', ')} removed`)
+  ctx.out.line(
+    `bootstrap commit ${result.commit} pushed to origin/${branch} of ${repository.nameWithOwner}: ${changes.join(', ')}`,
+  )
+  if (result.interrupted) {
+    throw new PreconditionError(
+      `setup was interrupted after its bootstrap push: origin/${branch} holds ${result.commit}, and the steps after it did not run`,
+      { resolve: runIn('hackwin setup --resume', ctx.repoRoot) },
+    )
+  }
+
+  const finished = await finishSetup(ctx, questions, { repository })
   return {
-    lines: [
-      `bootstrap commit ${result.commit} pushed to origin/${branch} of ${repository.nameWithOwner}: ${changes.join(', ')}`,
-    ],
+    exitCode: finished.exitCode,
+    lines: finished.lines,
     data: {
       repository: repository.nameWithOwner,
       defaultBranch: branch,
@@ -149,6 +162,7 @@ async function setUp(ctx, questions) {
       removed: result.removed,
       kept: result.kept,
       notices: result.notices,
+      ...finished.data,
     },
   }
 }
