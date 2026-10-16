@@ -145,7 +145,7 @@ export async function runChecks(ctx, worktree, synced) {
 
   // Step 5: only the changed files that still exist (E14).
   const present = changed.filter((file) => file.status !== 'D').map((file) => file.path)
-  const format = await formatCheck({ cwd, config, files: present })
+  const format = await formatCheck({ cwd, config, files: present, env: ctx.env })
   if (format.unformatted.length > 0) {
     const command = [config.hackwin.commands.format, ...format.unformatted.map(quoteShellArg)]
     const count = format.unformatted.length
@@ -171,7 +171,7 @@ export async function runChecks(ctx, worktree, synced) {
   )
 
   // Step 6.
-  const generated = await generatedFileCheck({ cwd, config, git: ctx.git })
+  const generated = await generatedFileCheck({ cwd, config, git: ctx.git, env: ctx.env })
   if (generated.changed.length > 0) {
     const count = generated.changed.length
     fail(
@@ -200,7 +200,12 @@ export async function runChecks(ctx, worktree, synced) {
   )
 
   // Step 7.
-  const check = await runCheck({ cwd, config, logFile: logFile(ctx, task.number, 'check') })
+  const check = await runCheck({
+    cwd,
+    config,
+    logFile: logFile(ctx, task.number, 'check'),
+    env: ctx.env,
+  })
   if (!check.ok) {
     fail(ctx, STEPS.check, describeRun(check), {
       objects: [],
@@ -218,6 +223,7 @@ export async function runChecks(ctx, worktree, synced) {
     config,
     files: tests,
     logFile: logFile(ctx, task.number, 'acceptance'),
+    env: ctx.env,
   })
   if (acceptance.missing.length > 0) {
     fail(
