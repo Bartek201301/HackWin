@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Git fetch: try again when another process in the same clone updated the ref (PR #137, issue #136)
+
+- Setup: the integrator did this task itself, at the Lead's request after the red run on main after #135, in its own worktree `task/136-fetch-ref-race`, created from `dab4572`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - Issue #136 records the cause of run `39494892687`. Two `git fetch` processes in one clone updated `refs/remotes/origin/main` at once, the test's and the Gate's in the same main checkout, and the one that wrote second failed. The Gate already ran its own fetches one at a time, but not those of another process.
+  - Locally (git 2.53.0), two concurrent fetches in one clone after origin's main moved failed one of the two in 150 of 150 rounds, and a second try succeeded in 50 of 50. The same race exists between the Gate and the Lead's other commands and Claude Code sessions in the same clone. A lost fetch in the Gate's check after a merge raises an attention item and skips the smoke test.
+  - One commit, `f40e98b`; PR #137 opened at 20:59:38 UTC. `Git#fetch` in `src/core/git/index.js` makes up to 3 tries, only for the two wordings of git's incorrect-old-value check. The integrator read them in git's source of v2.53.0 and v2.55.0: `fetching ref <ref> failed: incorrect old value provided` and `cannot lock ref '<ref>': is at <oid> but expected <oid>`. Every other failure throws at once.
+  - At `lead-55`'s review the retry was kept narrow. Issue #136 got its body narrowed to the two wordings and one "Scope change:" comment, because `cannot lock ref` alone also covers name conflicts.
+  - Two new tests in 1.3a/git:
+    - two real fetches in one clone after origin moved, in 5 rounds, both resolve. Against main's `fetch` it failed in 3 of 3 local runs;
+    - a `git` stand-in shows that only the two wordings are tried again, up to 3 times.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 2 files inside issue #136's paths; no secret pattern; no dash; no conflict with `dab4572`.
+    - Step 6, with the PR merged into `dab4572` at a load average of 3.36 with no other vitest process: `npm test` passed 1013 of 1013, and `npm run test:ac -- 1.3a/git` passed 1.3a/git 19. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39497581982`, succeeded on git 2.55.0. Both jobs passed 1012 tests and skipped 1 of 1013, and `test/integration/release/release.test.js`, the file that failed in run `39494892687`, passed 18 of 18.
+- Problems: none in this task. Which fetch of the Gate collided in run `39494892687` is inferred from the timing, not shown by the log. Three tries make the race unlikely, not impossible.
+- Measured: PR open 6 min 18 s (20:59:38 to 21:05:56 UTC); 1 commit, 1 PR run (142 s), 0 conflicts; local merge test `npm test` 148.07 s; the run on main after the merge 153 s.
+- Evidence: issue #136; PR https://github.com/Bartek201301/HackWin/pull/137; head `f40e98b`; merge commit `5edf320`; runs `39496688138` (PR), `39497581982` (main) and `39494892687` (the red run on main after #135).
+
 ### 2026-10-20 · Phase 1 · 1.4l setup: one guide to six documents instead of the skeletons; design.md becomes the visual design (PR #135, issue #132)
 
 - Setup: a builder session of lane A in worktree `task/132-setup-documents-guide`, created by the integrator from `682d424`. `lead-55` opened the session, reviewed the PR and sent the merge.
