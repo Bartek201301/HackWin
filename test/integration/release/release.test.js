@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url'
 import { readLocal } from '../../../src/core/state/index.js'
 import { WORKFLOW_PATH, generatedBy } from '../../../src/generate/index.js'
 import { installOf } from './clis.js'
+import { OFF_FIXTURE, fixtureOnly, offFixture } from './live.js'
 import {
   BUILDER1,
   LEAD,
@@ -28,6 +29,9 @@ import {
 
 /** @typedef {import('./clis.js').Cli} Cli */
 /** @typedef {import('./scene.js').Scene} Scene */
+
+/** Each scenario runs several commands; a loaded machine must not fail it on time. */
+const TIMEOUT_MS = 120_000
 
 /** The six commands of Phase 1, each as a member would run it (7.0). */
 const COMMANDS = Object.freeze([['setup'], ['join'], ['take'], ['ship'], ['status'], ['gate']])
@@ -130,6 +134,71 @@ describe('1.7d/clis: the CLIs of the scenarios are this checkout with another ve
   })
 })
 
+describe('1.7d/live-guard: every gh call of the live scenarios names the fixture repository', () => {
+  const FIXTURE = 'Bartek201301/hackwin-fixture-c'
+  const ON_FIXTURE = { env: { GH_REPO: FIXTURE } }
+
+  test('1.7d/live-guard: a call on {owner}/{repo} without GH_REPO is refused, as gh would pick the repository from its working directory', () => {
+    for (const args of [
+      ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues', '--input', '-'],
+      ['api', '--method', 'GET', 'repos/{owner}/{repo}/pulls?state=open&per_page=100&page=1'],
+      ['pr', 'merge', '12', '--merge', '--match-head-commit', 'a'.repeat(40)],
+      ['run', 'view', '7', '--log'],
+    ]) {
+      expect(offFixture(args, {}, FIXTURE), args.join(' ')).toContain('names no GH_REPO')
+      expect(offFixture(args, ON_FIXTURE, FIXTURE), args.join(' ')).toBeNull()
+    }
+  })
+
+  test('1.7d/live-guard: another repository is refused, by GH_REPO, by the endpoint or by --repo', () => {
+    const other = { env: { GH_REPO: 'Bartek201301/HackWin' } }
+    expect(offFixture(['api', 'repos/{owner}/{repo}/labels'], other, FIXTURE)).toBe(
+      `GH_REPO Bartek201301/HackWin is not ${FIXTURE}`,
+    )
+    expect(offFixture(['api', 'repos/Bartek201301/HackWin/issues'], ON_FIXTURE, FIXTURE)).toBe(
+      `Bartek201301/HackWin is not ${FIXTURE}`,
+    )
+    expect(
+      offFixture(['issue', 'list', '--repo', 'Bartek201301/HackWin'], ON_FIXTURE, FIXTURE),
+    ).toBe(`Bartek201301/HackWin is not ${FIXTURE}`)
+    expect(offFixture(['api', 'graphql', '-f', 'query=x'], ON_FIXTURE, FIXTURE)).toBe(
+      'gh api graphql names no repository',
+    )
+    expect(offFixture(['api', `repos/${FIXTURE}/issues`], {}, FIXTURE)).toBeNull()
+  })
+
+  test('1.7d/live-guard: only the reads that need no repository pass without it', () => {
+    for (const args of [['version'], ['api', 'user'], ['api', '-i', 'user'], ['api', 'users/x']]) {
+      expect(offFixture(args, {}, FIXTURE), args.join(' ')).toBeNull()
+    }
+    expect(offFixture(['api', '--method', 'PATCH', 'user'], {}, FIXTURE)).toBe(
+      'gh api user names no repository',
+    )
+  })
+
+  test('1.7d/live-guard: a refused call throws before gh runs', async () => {
+    /** @type {string[][]} */
+    const ran = []
+    /** @type {string[]} */
+    const logged = []
+    const executor = fixtureOnly(
+      FIXTURE,
+      async (args) => {
+        ran.push(args)
+        return { code: 0, stdout: '', stderr: '' }
+      },
+      (line) => logged.push(line),
+    )
+    await expect(executor(['api', 'repos/{owner}/{repo}/issues'], {})).rejects.toThrow(
+      `${OFF_FIXTURE}gh api repos/{owner}/{repo}/issues: the call names no GH_REPO`,
+    )
+    expect(ran).toEqual([])
+    expect(logged).toHaveLength(1)
+    await executor(['api', 'repos/{owner}/{repo}/issues'], ON_FIXTURE)
+    expect(ran).toEqual([['api', 'repos/{owner}/{repo}/issues']])
+  })
+})
+
 describe('AC77: a bug fix release of the same phase, installed in the steps of 20.6', () => {
   test('AC77: the pull request of setup --regenerate with the raised cli_version passes CI, which installs the version it names, the Gate merges it, and after the merge an older CLI exits 2', async () => {
     const scene = await configured(clis.old)
@@ -225,126 +294,152 @@ describe('AC77: a bug fix release of the same phase, installed in the steps of 2
     }
   }, 300_000)
 
-  test('AC77: a pull request that sets cli_version to a release of another phase fails CI', async () => {
-    const scene = await configured(clis.old)
-    const task = await takeReleaseTask(scene, clis.old)
-    const hackwin = /** @type {string} */ (await task.git.showFile('HEAD', 'hackwin.yml'))
-    writeFileSync(
-      join(task.path, 'hackwin.yml'),
-      hackwin.replace(`cli_version: ${RELEASES.old}`, `cli_version: ${RELEASES.other}`),
-    )
-    const commit = await task.git
-      .with({ env: scene.env(clis.old) })
-      .run(['commit', '--quiet', '-am', 'Set another phase'], { allowFailure: true })
-    // Only CI validates a proposed hackwin.yml (10.2 step 1); the pre-commit hook and ship
-    // check scope, secrets, format and the project's commands, which this change passes.
-    expect(commit.code).toBe(0)
-    const ship = await scene.run(clis.old, ['ship'], { cwd: task.path })
-    expect(ship.code).toBe(0)
-    const [pull] = await scene.github().listPullRequests({ state: 'open' })
-    expect(pull.headSha).toBe(await task.git.revParse('HEAD'))
+  test(
+    'AC77: a pull request that sets cli_version to a release of another phase fails CI',
+    async () => {
+      const scene = await configured(clis.old)
+      const task = await takeReleaseTask(scene, clis.old)
+      const hackwin = /** @type {string} */ (await task.git.showFile('HEAD', 'hackwin.yml'))
+      writeFileSync(
+        join(task.path, 'hackwin.yml'),
+        hackwin.replace(`cli_version: ${RELEASES.old}`, `cli_version: ${RELEASES.other}`),
+      )
+      const commit = await task.git
+        .with({ env: scene.env(clis.old) })
+        .run(['commit', '--quiet', '-am', 'Set another phase'], { allowFailure: true })
+      // Only CI validates a proposed hackwin.yml (10.2 step 1); the pre-commit hook and ship
+      // check scope, secrets, format and the project's commands, which this change passes.
+      expect(commit.code).toBe(0)
+      const ship = await scene.run(clis.old, ['ship'], { cwd: task.path })
+      expect(ship.code).toBe(0)
+      const [pull] = await scene.github().listPullRequests({ state: 'open' })
+      expect(pull.headSha).toBe(await task.git.revParse('HEAD'))
 
-    const ci = await scene.ci(pull.number)
-    // The install step keeps the base branch's version for a version of another phase ...
-    expect(ci.install.code).toBe(0)
-    expect(ci.install.stdout).toContain(
-      `hackwin.yml on main pins ${RELEASES.old}; installing hackwin ${RELEASES.old}`,
-    )
-    expect(ci.npm).toEqual([installOf(RELEASES.old)])
-    // ... whose check fails the pull request in step 1, on the key cli_version [D10].
-    expect(ci.check?.code).toBe(2)
-    expect(ci.check?.stdout).toBe('')
-    expect(ci.check?.stderr).toBe(
-      [
-        `hackwin internal ci: hackwin.yml: cli_version (${RELEASES.other}) is of phase ${phaseOf(RELEASES.other)}, but origin/main pins ${RELEASES.old} of phase ${phaseOf(RELEASES.old)}; a project stays on the phase it started with [D10]`,
-        '  key: cli_version',
-        '',
-      ].join('\n'),
-    )
-    expect(ci.passed).toBe(false)
-    const checks = scene.fake.state.checks[pull.headSha]
-    expect(checks.map((/** @type {any} */ run) => [run.name, run.conclusion])).toEqual([
-      ['hackwin', 'failure'],
-    ])
-  })
+      const ci = await scene.ci(pull.number)
+      // The install step keeps the base branch's version for a version of another phase ...
+      expect(ci.install.code).toBe(0)
+      expect(ci.install.stdout).toContain(
+        `hackwin.yml on main pins ${RELEASES.old}; installing hackwin ${RELEASES.old}`,
+      )
+      expect(ci.npm).toEqual([installOf(RELEASES.old)])
+      // ... whose check fails the pull request in step 1, on the key cli_version [D10].
+      expect(ci.check?.code).toBe(2)
+      expect(ci.check?.stdout).toBe('')
+      expect(ci.check?.stderr).toBe(
+        [
+          `hackwin internal ci: hackwin.yml: cli_version (${RELEASES.other}) is of phase ${phaseOf(RELEASES.other)}, but origin/main pins ${RELEASES.old} of phase ${phaseOf(RELEASES.old)}; a project stays on the phase it started with [D10]`,
+          '  key: cli_version',
+          '',
+        ].join('\n'),
+      )
+      expect(ci.passed).toBe(false)
+      const checks = scene.fake.state.checks[pull.headSha]
+      expect(checks.map((/** @type {any} */ run) => [run.name, run.conclusion])).toEqual([
+        ['hackwin', 'failure'],
+      ])
+    },
+    TIMEOUT_MS,
+  )
 
-  test('AC77: setup --regenerate run with a CLI of another phase exits 2 and changes nothing', async () => {
-    const scene = await configured(clis.old)
-    const task = await takeReleaseTask(scene, clis.old)
-    const head = await task.git.revParse('HEAD')
+  test(
+    'AC77: setup --regenerate run with a CLI of another phase exits 2 and changes nothing',
+    async () => {
+      const scene = await configured(clis.old)
+      const task = await takeReleaseTask(scene, clis.old)
+      const head = await task.git.revParse('HEAD')
 
-    const result = await scene.run(clis.other, ['setup', '--regenerate'], { cwd: task.path })
+      const result = await scene.run(clis.other, ['setup', '--regenerate'], { cwd: task.path })
 
-    expect(result.code).toBe(2)
-    expect(result.stdout).toBe('')
-    expect(result.stderr).toBe(`${otherPhaseError('setup', RELEASES.other, RELEASES.old)}\n`)
-    expect(await task.git.revParse('HEAD')).toBe(head)
-    expect(await task.git.isClean()).toBe(true)
-  })
+      expect(result.code).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toBe(`${otherPhaseError('setup', RELEASES.other, RELEASES.old)}\n`)
+      expect(await task.git.revParse('HEAD')).toBe(head)
+      expect(await task.git.isClean()).toBe(true)
+    },
+    TIMEOUT_MS,
+  )
 })
 
 describe('AC76: the version rule of every command, and the install before a manifest', () => {
-  test('AC76: a CLI older than cli_version on main exits 2 from every command and prints the install command', async () => {
-    const scene = await configured(clis.fix)
-    const { fixture } = scene
-    for (const argv of COMMANDS) {
-      const result = await scene.run(clis.old, argv)
-      expect(result.code, argv.join(' ')).toBe(2)
-      expect(result.stdout, argv.join(' ')).toBe('')
-      expect(result.stderr).toBe(`${olderError(argv[0], RELEASES.old, RELEASES.fix)}\n`)
-    }
-    // The git hooks of the clone run the CLI on PATH, and refuse a commit with the same error.
-    const head = await fixture.git.revParse('HEAD')
-    writeFileSync(join(fixture.main, 'README.md'), '# Changed\n')
-    const commit = await fixture
-      .gitAt(fixture.main)
-      .with({ env: scene.env(clis.old) })
-      .run(['commit', '--quiet', '-am', 'Change the README'], { allowFailure: true })
-    expect(commit.code).not.toBe(0)
-    expect(commit.stderr).toContain(
-      olderError('internal hook pre-commit', RELEASES.old, RELEASES.fix),
-    )
-    expect(await fixture.git.revParse('HEAD')).toBe(head)
-  })
+  test(
+    'AC76: a CLI older than cli_version on main exits 2 from every command and prints the install command',
+    async () => {
+      const scene = await configured(clis.fix)
+      const { fixture } = scene
+      for (const argv of COMMANDS) {
+        const result = await scene.run(clis.old, argv)
+        expect(result.code, argv.join(' ')).toBe(2)
+        expect(result.stdout, argv.join(' ')).toBe('')
+        expect(result.stderr).toBe(`${olderError(argv[0], RELEASES.old, RELEASES.fix)}\n`)
+      }
+      // The git hooks of the clone run the CLI on PATH, and refuse a commit with the same error.
+      const head = await fixture.git.revParse('HEAD')
+      writeFileSync(join(fixture.main, 'README.md'), '# Changed\n')
+      const commit = await fixture
+        .gitAt(fixture.main)
+        .with({ env: scene.env(clis.old) })
+        .run(['commit', '--quiet', '-am', 'Change the README'], { allowFailure: true })
+      expect(commit.code).not.toBe(0)
+      expect(commit.stderr).toContain(
+        olderError('internal hook pre-commit', RELEASES.old, RELEASES.fix),
+      )
+      expect(await fixture.git.revParse('HEAD')).toBe(head)
+    },
+    TIMEOUT_MS,
+  )
 
-  test('AC76: a CLI of another phase exits 2 from every command and prints the install command', async () => {
-    const scene = await configured(clis.old)
-    for (const argv of COMMANDS) {
-      const result = await scene.run(clis.other, argv)
-      expect(result.code, argv.join(' ')).toBe(2)
-      expect(result.stdout, argv.join(' ')).toBe('')
-      expect(result.stderr).toBe(`${otherPhaseError(argv[0], RELEASES.other, RELEASES.old)}\n`)
-    }
-  })
+  test(
+    'AC76: a CLI of another phase exits 2 from every command and prints the install command',
+    async () => {
+      const scene = await configured(clis.old)
+      for (const argv of COMMANDS) {
+        const result = await scene.run(clis.other, argv)
+        expect(result.code, argv.join(' ')).toBe(2)
+        expect(result.stdout, argv.join(' ')).toBe('')
+        expect(result.stderr).toBe(`${otherPhaseError(argv[0], RELEASES.other, RELEASES.old)}\n`)
+      }
+    },
+    TIMEOUT_MS,
+  )
 
-  test('AC76: a newer bug fix release of the same phase prints a one-line warning and continues', async () => {
-    const scene = await configured(clis.old)
-    const status = await scene.run(clis.fix, ['status'])
-    const joined = await scene.join(clis.fix)
-    for (const result of [status, joined]) {
-      expect(result.code).toBe(0)
-      expect(result.stdout).not.toBe('')
-      expect(result.stderr).toBe(newerWarning(RELEASES.fix, RELEASES.old))
-    }
-  })
+  test(
+    'AC76: a newer bug fix release of the same phase prints a one-line warning and continues',
+    async () => {
+      const scene = await configured(clis.old)
+      const status = await scene.run(clis.fix, ['status'])
+      const joined = await scene.join(clis.fix)
+      for (const result of [status, joined]) {
+        expect(result.code).toBe(0)
+        expect(result.stdout).not.toBe('')
+        expect(result.stderr).toBe(newerWarning(RELEASES.fix, RELEASES.old))
+      }
+    },
+    TIMEOUT_MS,
+  )
 
-  test('AC76: in a repository whose manifest does not exist yet, join and take skip the install with a notice', async () => {
-    const { 'package.json': manifest, ...files } = PROJECT
-    expect(manifest).toBeDefined()
-    const scene = await createScene(clis)
-    // main without the manifest that paths.manifests names, as before the foundation (A62).
-    await scene.fixture.git.run(['rm', '--quiet', 'package.json'])
-    await scene.fixture.commit('Before the foundation', { files, push: true })
-    const setup = await scene.setup(clis.old, setupAnswers())
-    expect(setup.code).toBe(0)
-    const joinNotice = 'skip  install: no file matches paths.manifests (package.json)'
-    expect(setup.stdout).toContain(joinNotice)
-    const joined = await scene.join(clis.old)
-    expect(joined.code).toBe(0)
-    expect(joined.stdout).toContain(joinNotice)
-    const issue = await scene.task({ title: 'A first task', role: 'shared', paths: ['docs/**'] })
-    const take = await scene.run(clis.old, ['take', String(issue)])
-    expect(take.code).toBe(0)
-    expect(take.stdout).toContain('install skipped: no file matches paths.manifests (package.json)')
-  })
+  test(
+    'AC76: in a repository whose manifest does not exist yet, join and take skip the install with a notice',
+    async () => {
+      const { 'package.json': manifest, ...files } = PROJECT
+      expect(manifest).toBeDefined()
+      const scene = await createScene(clis)
+      // main without the manifest that paths.manifests names, as before the foundation (A62).
+      await scene.fixture.git.run(['rm', '--quiet', 'package.json'])
+      await scene.fixture.commit('Before the foundation', { files, push: true })
+      const setup = await scene.setup(clis.old, setupAnswers())
+      expect(setup.code).toBe(0)
+      const joinNotice = 'skip  install: no file matches paths.manifests (package.json)'
+      expect(setup.stdout).toContain(joinNotice)
+      const joined = await scene.join(clis.old)
+      expect(joined.code).toBe(0)
+      expect(joined.stdout).toContain(joinNotice)
+      const issue = await scene.task({ title: 'A first task', role: 'shared', paths: ['docs/**'] })
+      const take = await scene.run(clis.old, ['take', String(issue)])
+      expect(take.code).toBe(0)
+      expect(take.stdout).toContain(
+        'install skipped: no file matches paths.manifests (package.json)',
+      )
+    },
+    TIMEOUT_MS,
+  )
 })

@@ -26,6 +26,8 @@ import {
   joinLive,
   keepingPushProtection,
   leadClone,
+  leadExecutor,
+  leadGitHub,
   prereleaseBuild,
   remoteMain,
   runLive,
@@ -69,7 +71,7 @@ const COMMANDS = Object.freeze(['setup', 'join', 'take', 'ship', 'status', 'gate
  * @param {readonly string[]} paths
  */
 async function writeTask(repo, title, paths) {
-  const issue = await repo.github('lead').createIssue({
+  const issue = await leadGitHub(repo).createIssue({
     title,
     body: taskBody({ role: 'shared', paths, acceptance: [ACCEPTANCE] }),
     labels: ['ready', 'role:shared'],
@@ -183,7 +185,7 @@ async function procedure({ repo, clone, versions, old, fix, gateOf }) {
   expect(ship.stderr).toBe(warning)
   expect(ship.code).toBe(0)
   const head = await task.git.revParse('HEAD')
-  const [pull] = await repo.github('lead').listPullRequests({ state: 'open' })
+  const [pull] = await leadGitHub(repo).listPullRequests({ state: 'open' })
   expect(pull.headSha).toBe(head)
 
   // 4. CI checks the pull request with the version it names, and the Gate merges it.
@@ -195,7 +197,7 @@ async function procedure({ repo, clone, versions, old, fix, gateOf }) {
   expect(log).toContain(`checked with hackwin ${versions.fix}, the version this pull request sets`)
   expect(check.conclusion).toBe('success')
   await gate.advanceUntil(
-    async () => (await repo.github('lead').getPullRequest(pull.number))?.merged,
+    async () => (await leadGitHub(repo).getPullRequest(pull.number))?.merged,
     `the Gate's merge of #${pull.number}`,
   )
   expect(await gate.quit()).toBe(0)
@@ -336,7 +338,7 @@ describe('AC77: a bug fix release of the same phase on a fixture repository, wit
               const gate = startGate(cli, {
                 cwd: clone.path,
                 env: clone.envOf(cli),
-                ghExecutor: repo.executor('lead'),
+                ghExecutor: leadExecutor(repo),
                 patienceMs: PROCEDURE_TIMEOUT_MS,
               })
               gates.push(gate)
