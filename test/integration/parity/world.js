@@ -336,10 +336,10 @@ export function repositoryRefusal(args, call, repo) {
 
 /**
  * The timing of a read of real GitHub after a write, in milliseconds. GitHub's reads lag its
- * writes: on hackwin-fixture-b on 20 October 2026 an issue that the Lead had just created
- * answered HTTP 404 1.3 s later and was there 0.5 s after that, and src/commands/setup/settle.js
- * records reads that went back to the old value for up to 9.8 s. So a read counts only when every
- * read of the last `stableMs` agreed and at least `minMs` have passed since the read began.
+ * writes: src/commands/setup/settle.js records reads of a repository setting that went back to
+ * the old value for up to 9.8 s after the write. That reads of issues, labels and pull requests
+ * lag the same way is assumed, not observed. So a read counts only when every read of the last
+ * `stableMs` agreed and at least `minMs` have passed since the read began.
  * @typedef {object} Settle
  * @property {number} minMs
  * @property {number} stableMs
