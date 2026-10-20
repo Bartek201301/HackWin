@@ -68,7 +68,8 @@ export function harnessStateDir() {
  * @property {string} [dir] The directory of the locks; `<harnessStateDir()>/locks` by default.
  * @property {number} [timeoutMs] How long to wait for another holder; 20 minutes by default.
  * @property {number} [pollMs] How often to look again while waiting.
- * @property {(holder: LockHolder | null) => void} [onWait] Called once when the lock is taken.
+ * @property {(holder: LockHolder | null) => void} [onWait] Called once, the first time the lock is
+ *   found held by a live holder, before the timeout can end the wait.
  */
 
 /**
@@ -83,7 +84,6 @@ export async function acquireLock(name, options = {}) {
   const timeoutMs = options.timeoutMs ?? 20 * 60_000
   const pollMs = options.pollMs ?? 1000
   const path = join(dir, `${name}.lock`)
-  const deadline = Date.now() + timeoutMs
   /** @type {LockHolder} */
   const self = {
     pid: process.pid,
@@ -92,6 +92,8 @@ export async function acquireLock(name, options = {}) {
     since: '',
     started: ownStart(),
   }
+  // The wait starts after ownStart(), whose ps call does not count against the timeout (#119).
+  const deadline = Date.now() + timeoutMs
   let waiting = false
   mkdirSync(dir, { recursive: true })
 
@@ -117,14 +119,15 @@ export async function acquireLock(name, options = {}) {
       }
       continue
     }
+    // The wait is reported before the deadline can end it, however long the round took (#119).
+    if (!waiting) {
+      waiting = true
+      options.onWait?.(holder)
+    }
     if (Date.now() >= deadline) {
       throw new Error(
         `the fixture repository ${name} is still locked after ${Math.round(timeoutMs / 1000)} s by ${describeHolder(holder)}; the lock is ${path}`,
       )
-    }
-    if (!waiting) {
-      waiting = true
-      options.onWait?.(holder)
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs))
   }
@@ -182,6 +185,8 @@ function isAbandoned(path, holder) {
   } catch (error) {
     return /** @type {any} */ (error).code === 'ESRCH'
   }
+  // Without a recorded start there is nothing to compare, so ps is not asked (#119).
+  if (typeof holder.started !== 'string') return false
   const now = processStart(holder.pid)
   return now !== null && startsDiffer(holder, now)
 }
