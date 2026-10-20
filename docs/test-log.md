@@ -17,6 +17,47 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Integration 1.7d: the version rule and a bug fix release, live with the first pre-releases (PR #107, issue #29)
+
+- Setup: a builder session in worktree `task/29-integration-version-release`, role integrator. Its live scenarios ran on `hackwin-fixture-c` as the Lead only, with no builder token. `lead-55` reviewed the PR, with a review subagent, and sent the merge.
+- What happened:
+  - Commits:
+    - `cef1dc2`: the scenarios;
+    - `95bdb7c`: `fixtureOnly`, after the Lead's safety stop for the incident of #106;
+    - `619e5c8`: the Lead's review, with the retry of `checkLog` that could never run, and push protection kept around every live setup.
+    
+    Plus three merges of main. PR #107 opened at 02:27:18 UTC.
+  - Offline, `release.test.js` runs the five steps of 20.6 against the fake GitHub, with CLIs `0.1.0-pre.1`, `0.1.1-pre.1` and `0.2.0-pre.1` built from the checkout. Live, `release.fixture.test.js` installs the three GitHub pre-releases by URL and uses real GitHub Actions runs on the fixture. The live AC77 scenarios need `HACKWIN_TEST_PRERELEASE=<n>`; without it they fail at once and name the versions to create.
+  - The live AC77 scenarios waited for the pre-releases (PR #113). They passed on their first run, on `fce5693` from 09:32:25 to 09:38:24 UTC, and again on `619e5c8` from 10:22:10 to 10:29:41 UTC: AC76 16 of 16, AC77 10 of 10.
+    - Fixture run `39407894985` logged `installing hackwin 0.1.1-pre.1` for the bug fix PR, and the Gate merged that PR.
+    - Fixture run `39408283598` failed the PR of another phase with the D10 error.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 5 files inside issue #29's path; no secret pattern; no dash; no conflict with `531b782`.
+    - Step 6 merged the PR into `531b782`, which the branch already held.
+      - `npm test` passed 972 of 972 in 145.46 s, at a load average of 12.91 at the end, with 7 vitest processes of other sessions.
+      - `HACKWIN_TEST_PRERELEASE=1 npm run test:ac -- AC76 AC77` passed AC76 16 and AC77 10, from 10:36:00 to 10:43:24 UTC, with the live scenarios on `hackwin-fixture-c`.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39409976798`, failed: `node 22` passed, and `node 24` failed one test.
+    - The test is `release.test.js:324`, "AC77: the pull request of setup --regenerate with the raised cli_version passes CI ...". The Gate's stderr held a second line besides the expected version warning: `warning: the laptop may sleep now: systemd-inhibit exited with code 1: Failed to inhibit: Access denied; merges wait while it sleeps`.
+    - The integrator's reading, from the log and the code, not run on Linux: the offline Gate starts the real keep awake, which on the runner ends with "Access denied", and whether its warning comes before the assertion depends on timing. The 8 Node jobs of the PR's 4 runs had passed this test.
+- Problems:
+  - From the PR's workflow notes:
+    - The Lead's safety stop of the night (#106) arrived mid-task. The session added its own check, `fixtureOnly`, in its paths, kept it after #108 as a second layer, and ran nothing live between the stop and the merge of #108.
+    - `withFixtureRepo` resets before a scenario, not after, so a passed scenario leaves the fixture as it made it. The session reset `hackwin-fixture-c` by hand afterwards.
+    - The harness keeps a run log only for a run that did not pass, and the next run on the same fixture starts it anew. After five passed scenarios, only the fifth one's log was left.
+    - AGENTS.md wants the acceptance tests to pass before a PR is opened; the live AC77 tests could not pass before the pre-releases existed. The session opened the PR anyway, to get CI.
+    - The harness has no fake gh for a CLI in a child process, so each CLI's own `main` was loaded in-process instead.
+    - On the Node fixture, setup always warns that `.github/workflows/check.yml` was changed by the team, because the fixture's `check.yml` is the HackYeah project's real check. That cost one failed live run on a too-strict assertion.
+    - Under load, the same offline file took 30 s, 90 s and 77 s, and `npm test` took 177 s and then 382 s; the offline scenarios got a 2-minute timeout.
+    - The PR names 09:23:24 UTC as the time the pre-releases were created. That is GitHub's `createdAt` of each release, the time of its commit; they were published at 09:24:14 to 09:24:20 UTC.
+  - From the Lead's review: the retry in `checkLog` could never run, because `GitHub.run` throws on a non-zero exit. `1.7d/live-helpers` covers it now.
+  - Follow-ups for the integrator, from the Lead, not blocking:
+    - record `HACKWIN_TEST_PRERELEASE` in the contracts next to 6.2;
+    - for the next PRD revision: brief 10.2 says CI installs the version the PR names, while the workflow does so only within the same phase, which matches AC77.
+  - The failure of `node 24` on main above; the fix is the Lead's call.
+- Measured: PR open 8 h 16 min 22 s (02:27:18 to 10:43:40 UTC), most of it waiting for the pre-releases; 3 commits and 3 merges of main; 4 PR runs (136 s, 145 s, 146 s, 135 s); 0 conflicts. The live AC76 and AC77 run took 7 min 31 s on the PR head. Local merge test: `npm test` 145.46 s, `test:ac` 443.86 s. The run on main after the merge failed after 149 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/107; head `619e5c8`; merge commit `d7a7c54`; runs `39358994049`, `39360827936`, `39402418409` and `39407429823` (PR) and `39409976798` (main, failed); fixture runs `39407894985` and `39408283598`.
+
 ### 2026-10-20 · Phase 1 · The first pre-releases: v0.1.0-pre.1, v0.1.1-pre.1 and v0.2.0-pre.1 (PR #113, issue #112)
 
 - Setup: the human approved the pre-releases on 20 October 2026 in the Lead's chat (plan section 9, decision 5), and `lead-55` sent the integrator the steps. The integrator made the version change itself, in its own worktree `task/112-version-pre-one`, created from `56e1f02`; `lead-55` reviewed it and sent the merge. The packs and installs ran in the integrator's scratch directory, outside the repository.
