@@ -17,6 +17,176 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Harness: the lock taken over whatever the hostname, and the guard's residual gaps (PR #110, issue #94)
+
+- Setup: the integrator did this task itself, at the Lead's request, while PR #107 (#29) and PR #109 (#28) waited for the pre-releases, in its own worktree `task/94-harness-lock-takeover`, created from `dec9eaa`. A scope change on #94 folded in the three residual gaps of the guard from the Lead's review of PR #108. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - The first commit, `b740450`; PR #110 opened at 03:08:00 UTC.
+    - The lock no longer looks at the host name, because the locks live in this clone's git common directory, so the process id decides.
+    - A holder records its process start, and a live process id whose start differs by more than 5 s counts as reused. Holder files without a start keep the pid-only check, which kept the existing test valid: it writes a live holder with a `since` before that process started.
+    - The guard reads `-XPOST` and `--method=POST` as one argument, refuses `gh repo create`, `gh repo fork` and every `gh gist` command, runs a GraphQL mutation only with `GH_REPO` set to the fixture repository, and refuses GraphQL fields that name the build repository under any variable name.
+  - The Lead's review: the holder recorded its start from `process.uptime()`, a monotonic clock that on macOS may not count sleep, while the check reads the wall clock through `ps`. On a Mac that sleeps, another session could then take over a live lock. `8ad2a76` records the holder's start through `ps` too, with `process.uptime()` only as a fallback, and adds a test for a live holder whose start came from `ps`.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 3 files inside issue #94's path; no secret pattern; no dash; no conflict with `dec9eaa`. Step 6, with the PR merged into `dec9eaa` at a load average of 1.39 and no other vitest process: `npm test` passed 955 of 955, and `npm run test:ac` passed 1.3d/driver (32). Main had not moved, and the merge was pinned to the head SHA.
+  - Before the review round, a live run of AC2 on `hackwin-fixture-private` through the new lock and guard passed 3 of 3, and left the lock directory empty.
+- Problems, from the PR and the Lead's review:
+  - Against main's `lock.js` and `guard.js`, three of the four new tests of the first round failed. The fourth, a live holder that is kept, passed on both by design.
+  - The integrator did not verify how `process.uptime()` behaves across a sleep; it took the Lead's fix.
+  - The Lead first read that `EPERM` falls through to the start check; it does not. `isAbandoned` returns at `process.kill` for every error, so a process id reused by another user's process still keeps a stale lock. This goes under "Remaining limitations" when the file is next touched.
+  - Remaining, in the PR:
+    - a GraphQL mutation by node id still passes under `GH_REPO`;
+    - without `ps`, a live process id keeps the lock;
+    - a process id reused within 5 s counts as the same process.
+- Measured: PR open 10 min 23 s (03:08:00 to 03:18:23 UTC), including the Lead's review and one fix; 2 commits, 2 PR runs (142 s on `b740450`, 135 s on `8ad2a76`), 0 conflicts; local merge test `npm test` 163.82 s; the run on main after the merge 145 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/110; head `8ad2a76`; merge commit `ba5fd99`; runs `39362674569` and `39363071747` (PR) and `39363588551` (main).
+
+### 2026-10-20 · Phase 1 · Incident and fix: a live scenario wrote to the build repository; the harness guard (PR #108, issue #106)
+
+- Setup: the integrator did this task itself, at the Lead's request and as a priority before any more live runs, in its own worktree `task/106-harness-guard-fixture-only`, created from `e589df5`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - **The incident.** At 02:01 and 02:08 UTC a live AC14 scenario of #28 created four issues in the build repository `Bartek201301/HackWin`: #102 to #105, "Counter reset", each with a `# hackwin:task` block of role `counter`.
+    - The scenario had made its client with `createGitHub({ executor })` and no repository, so the client set no `GH_REPO`, and gh filled `repos/{owner}/{repo}` from the git remote of its worktree.
+    - The guard in `test/harness/guard.js` let it through: it refused another repository only when `GH_REPO` or an explicit `repos/<owner>/<name>` named one.
+    - `lead-55` found it and told #28 and #29 to hold all live runs.
+  - **Containment.** The integrator closed #102 to #105 as not planned, each with a one-line comment, and deleted nothing. Since 01:50 UTC there was no other issue, no pull request but #100 and #101, no new label, and no branch but `main` and `log/next`.
+  - **The fix.** The integrator found four more gaps of the same kind:
+    - subcommands such as `gh issue create` without `-R` or `GH_REPO`;
+    - `-R`/`--repo`, which the guard never read;
+    - full `https://api.github.com/repos/...` URLs;
+    - GraphQL `owner` and `name` fields.
+    
+    The guard now lets a call through only when the repository it acts on is known to be the fixture repository, refuses a write outside `repos/` other than `graphql`, never lets a call reach `Bartek201301/HackWin` (`BUILD_REPO`), and lets nothing through for a repository that is not a fixture repository. Contracts 6.4 records the rule.
+  - Seven new offline tests under 1.3d/driver reproduce the incident, including the same client the scenario used; six of them fail against the old guard. A live run of the setup scenarios through the new guard on `hackwin-fixture-a` and `hackwin-fixture-private` passed 26 of 26, with no refusal.
+  - One commit, `9ccd512`; PR #108 opened at 02:30:46 UTC. `lead-55` reviewed the diff and sent `merge #108` with the head SHA by SendMessage.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 3 files inside issue #106's paths; no secret pattern; no dash; no conflict with `e589df5`. Step 6, with the PR merged into `e589df5` at a load average of 1.83 and no other vitest process: `npm test` passed 950 of 950, and `npm run test:ac` passed 1.3d/driver (27). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge, `lead-55` was told that #28 and #29 may run live again once they merge `origin/main`.
+- Problems:
+  - The guard's rule for another repository relied on `GH_REPO` being set; a client without a repository bypassed it, and four issues reached the build repository before anyone noticed.
+  - Residual gaps from the Lead's review, kept for a later change:
+    - a GraphQL mutation by node id, or with variables not named `owner` and `name`, passes (the reset needs `unpinIssue` by id);
+    - `-XPOST` or `--method=POST` written as one argument reads as GET when no field is given, outside `repos/`;
+    - `gh repo create <name>` and `gh gist create` pass when `GH_REPO` is the fixture repository.
+  - `npx prettier` ran once before `npm ci` in the worktree and fetched a separate Prettier (3.9.10); the files were formatted again with the project's 3.9.9, which left them unchanged.
+- Measured: from the first issue of the incident (02:01:26 UTC) to the merge of the fix (02:36:49 UTC), 35 min 23 s. PR open 6 min 3 s (02:30:46 to 02:36:49 UTC); 1 commit, 1 PR run (141 s), 0 conflicts; local merge test `npm test` 165.00 s; the run on main after the merge 146 s.
+- Evidence: issues #102 to #105 (closed); issue #106; PR https://github.com/Bartek201301/HackWin/pull/108; head `9ccd512`; merge commit `dec9eaa`; runs `39359319496` (PR) and `39359868013` (main).
+
+### 2026-10-20 · Phase 1 · Verification row 2: the deny patterns of PR #95 (PR #101, issue #96)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/96-verification-deny-patterns`, created by the integrator from `238d709` after the merge of #95; `lead-55` opened the session for the night. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `338a9e9`; PR #101 opened at 01:51:31 UTC.
+  - `lead-55` sent `merge #101` with the head SHA by SendMessage, to merge after #100. Its review: only `docs/verification.md`. The rule table matches what `src/generate/claude-settings.js` generates since #95, as far as the Lead checked, and question 8 stays open.
+  - Merged with the procedure of the plan, section 8, after #100. Steps 1 to 5 passed: 1 file inside issue #96's paths; no secret pattern; no dash; no conflict with `e779d88`. Step 6 waited for the load to fall below 15 and started at 2.18: `npm test` passed 943 of 943; no `npm run test:ac`, because the task has inspection criteria only. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - PR #95 has no comments or reviews on GitHub: the Lead's review, which the issue cites, was a message between sessions. The session could read it only through the issue body and the body of PR #95.
+  - `scanDiff(git, range)` of `src/core/secrets` scans an empty diff and reports 0 findings, without an error, when it gets a string range instead of a `DiffRange` object. The Lead checked that all five callers pass objects and that `tsc` would flag a string, so this is hardening only. It is not routed yet.
+  - The permissions page now lists `|&` as a separator, which the bullet of 10 October in row 2 does not. Not routed yet.
+  - The session's `npm test` took 295 s.
+- Measured: PR open 16 min 26 s (01:51:31 to 02:07:57 UTC); 1 commit, 1 PR run (139 s), 0 conflicts; local merge test `npm test` 193.72 s; the run on main after the merge 140 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/101; head `338a9e9`; merge commit `e589df5`; runs `39355745348` (PR) and `39357251294` (main).
+
+### 2026-10-20 · Phase 1 · Step 1.4k, PreToolUse: the gh api merge that ends at merge, and git push --all (PR #100, issue #97)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/97-pretooluse-gh-api-merge`, created by the integrator from `238d709` after the merge of #95; `lead-55` opened the session for the night, beside the sessions of #28, #29 and #96. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `1c8cac3`; PR #100 opened at 01:51:20 UTC.
+  - `lead-55` sent `merge #100` with the head SHA by SendMessage, to merge after #99. Its review:
+    - one test file with four new AC63/deny cases: `gh api -X PUT .../pulls/14/merge` with nothing after it, and `git push origin --all`, `--branches` and `--mirror`;
+    - no change in `src`, because the hook already refused them; the session showed that the tests fail with the hook's patterns weakened.
+  - Merged with the procedure of the plan, section 8, after #99. Steps 1 to 5 passed: 1 file inside issue #97's paths; no secret pattern; no conflict with `cac9df8`. Step 6 waited for the load to fall below 15 and started at 3.06 with 2 vitest processes: `npm test` passed 943 of 943, and `npm run test:ac` passed AC63/deny (32). Main had not moved, and the merge was pinned to the head SHA.
+- Problems: the PR's "Workflow notes" say "None".
+- Measured: PR open 10 min 28 s (01:51:20 to 02:01:48 UTC); 1 commit, 1 PR run (144 s), 0 conflicts; local merge test `npm test` 186.22 s; the run on main after the merge 144 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/100; head `1c8cac3`; merge commit `e779d88`; runs `39355728937` (PR) and `39356679641` (main).
+
+### 2026-10-20 · Phase 1 · Plan 6: the manual check names the undocumented forms; AGENTS.md on Markdown-only tasks (PR #99, issue #98)
+
+- Setup: the integrator did this integrator task itself, at the Lead's request ("#98 is yours"), in its own worktree `task/98-plan-manual-check`, created from `238d709`. It opened the pull request for `lead-55` to review, and merged it only on `merge #99`.
+- What happened:
+  - One commit, `333352d`; PR #99 opened at 01:45:00 UTC.
+    - Plan section 6, item 6 names the forms to try exactly, `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/merge` with nothing after `merge` and `git push origin --all`, with the reason (question 8 open). It says `/status` runs HackWin's `status`, and adds a bullet on the hooks needing `hackwin` on Claude Code's `PATH` (exit 127 otherwise, not blocking), a known gap.
+    - `AGENTS.md`: a task that changes only Markdown skips the format step.
+  - `lead-55` reviewed it and sent `merge #99` with the head SHA by SendMessage.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 2 files inside issue #98's paths; no secret pattern; no dash; no conflict with `238d709`. Step 6 waited until the one-minute load average was below 15. Other sessions' suites had raised it to 31.40, with 22 vitest processes. It then ran at 12.31 with 2 vitest processes: `npm test` passed 939 of 939; no `npm run test:ac`, because the task has inspection criteria only. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes": `AGENTS.md` says never to merge one's own pull request; the integrator authored this one and merged it only on the Lead's `merge #99`, as with every pull request.
+- Measured: PR open 10 min 21 s (01:45:00 to 01:55:21 UTC); 1 commit, 1 PR run (99 s), 0 conflicts; local merge test `npm test` 172.70 s, after the wait for the load; the run on main after the merge 142 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/99; head `333352d`; merge commit `cac9df8`; runs `39355156402` (PR) and `39356091147` (main).
+
+### 2026-10-20 · Phase 1 · Step 1.4g, setup --regenerate (PR #95, issue #14)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/14-setup-regenerate`, created by the integrator from `8fa4613` after the merges of #70, #92 and #93, once #14's dependencies (#3, #4, #5, #6, #13) were closed; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `713ab4a`; PR #95 opened at 01:10:01 UTC.
+  - `lead-55` reviewed it with a review subagent at `713ab4a`, then the fix commit `793977f` itself. Committing in `--regenerate` is right, because of 7.1, step 3 of 20.6, and the clean tree that `ship` needs. No live run was needed.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 10 files inside issue #14's paths; no secret pattern; no conflict with `8fa4613`. Step 6, with the PR merged into `8fa4613` and no other vitest process: `npm test` passed 939 of 939, and `npm run test:ac` passed AC77/regenerate (2) and 1.4g/regenerate (16). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge:
+    - three follow-up issues from the Lead's review: #96 (lane B: row 2 of `docs/verification.md` lists the deny patterns of PR #95); #97 (lane A: the PreToolUse hook's tests get the `gh api` merge that ends at `merge`, and `git push --all`, `--branches` and `--mirror`); #98 (integrator: the manual check per release names the undocumented forms, and `AGENTS.md` says a Markdown-only task skips the format step);
+    - worktrees for #26, #28 and #29 at `238d709`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - For PRD revision 4:
+    - the PRD should say that `setup --regenerate` commits;
+    - `mergeClaudeSettings` never removes a HackWin rule that a later release drops;
+    - a CLI older than the branch's `cli_version` but newer than main's lowers the branch's pin without a warning (seen in the code, not tested).
+  - The test matcher of `test/generate/claude-settings.test.js` had used `.*` for `*`, which assumes the undocumented empty match of question 8; that hid the gap in AC63/deny.
+  - A test id is the text before the first colon of the full name, so a `1.4g/...` test inside the `AC63/deny` describe block counted as AC63/deny; the session moved it.
+  - The fixture's `join` turns on the git hooks, and a later commit in the fixture failed with "exec: hackwin: not found", because the fixture's git environment has no `hackwin` on `PATH`. Committing before `join` avoided it.
+- Measured: PR open 24 min 19 s (01:10:01 to 01:34:20 UTC), including the Lead's review and one fix; 2 commits, 2 PR runs (151 s on `713ab4a`, 139 s on `793977f`), 0 conflicts; local merge test `npm test` 163.96 s; the run on main after the merge 149 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/95; head `793977f`; merge commit `238d709`; runs `39351900366` and `39353534892` (PR) and `39354178067` (main).
+
+### 2026-10-20 · Phase 1 · Step 1.5h, take and ship: project commands with the command's environment (PR #93, issue #91)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/91-take-ship-project-env`, created by the integrator from `fa2c3fa` on 16 October; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The issue came from the integrator's search of every caller of `src/core/project` after the Lead's review of PR #70. The wave-3 tasks #26 to #29 now depend on #90 and #91, because their scenarios stub the agent through `ctx.env`.
+  - One commit, `faa2685`; PR #93 opened at 18:18:49 UTC on 16 October.
+  - `lead-55` sent `merge #93` with the head SHA by SendMessage, to merge after #70 and #92. Its review: 5 files. `env: ctx.env` is passed to `runInstall` in `take` and to `formatCheck`, `generatedFileCheck`, `runCheck` and `runAcceptanceTests` in `ship`, plus the 1.5h/project-env tests and a `commands` option in `test/commands/ship/scene.js`.
+  - Merged with the procedure of the plan, section 8, after #92. Steps 1 to 5 passed: 5 files inside issue #91's paths; no secret pattern; no conflict with `c19a2b0`. Step 6, with the PR merged into `c19a2b0` and no other vitest process: `npm test` passed 922 of 922, and `npm run test:ac` passed 1.5h/project-env (2). Main had not moved, and the merge was pinned to the head SHA.
+- Problems: the PR's "Workflow notes" say "none".
+- Measured: PR open 3 d 6 h 28 min 38 s (18:18:49 UTC on 16 October to 00:47:27 UTC on 20 October), mostly waiting for #70; 1 commit, 1 PR run (119 s), 0 conflicts; local merge test `npm test` 170.41 s; the run on main after the merge 143 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/93; head `faa2685`; merge commit `8fa4613`; runs `38946375853` (PR) and `39349724334` (main).
+
+### 2026-10-20 · Phase 1 · Step 1.4j, join: the install runs with the command's environment (PR #92, issue #90)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/90-join-install-env`, created by the integrator from `fa2c3fa` on 16 October; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The issue came from the Lead's review of PR #70: `join`'s `runInstall` (`src/commands/join/checks.js:155`) passed no `env`. The integrator searched every caller of `src/core/project` and found the same in `take` and `ship`, which became #91.
+  - One commit, `c3f205b`; PR #92 opened at 18:17:02 UTC on 16 October.
+  - `lead-55` sent `merge #92` with the head SHA by SendMessage, to merge after #70, because setup's step 14 calls `join`. Its review: 2 files, one line in `checks.js` plus the 1.4j/install-env test.
+  - Merged with the procedure of the plan, section 8, after #70. Steps 1 to 5 passed: 2 files inside issue #90's paths; no secret pattern; no conflict with `ac60eea`. Step 6, with the PR merged into `ac60eea` and no other vitest process: `npm test` passed 920 of 920, and `npm run test:ac` passed 1.4j/install-env (1). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes": `gh issue view 90 --comments` printed nothing for an issue without comments, so the session checked again with `gh api .../issues/90/comments`. No network timeouts during the task.
+- Measured: PR open 3 d 6 h 24 min 43 s (18:17:02 UTC on 16 October to 00:41:45 UTC on 20 October), mostly waiting for #70; 1 commit, 1 PR run (125 s), 0 conflicts; local merge test `npm test` 175.10 s; the run on main after the merge 137 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/92; head `c3f205b`; merge commit `c19a2b0`; runs `38946139732` (PR) and `39349162604` (main).
+
+### 2026-10-20 · Phase 1 · Step 1.4f, setup: labels, invitations, branch rules, push protection, resume (PR #70, issue #13)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/13-setup-labels-protection`, created by the integrator from `0bf16f6` after the merge of #65; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9328e18`, then a merge of `origin/main` (`a8ea88b`); PR #70 opened at 05:48:01 UTC on 15 October.
+  - `1b736b7` and `259cb28` made the live test restore the push protection it found, and setup read back push protection and the branch rules once GitHub settles.
+  - The live acceptance tests were blocked until the human added the `workflow` scope to the Lead's gh token on 16 October. After that, the review fixes came in `d9a187d`.
+  - `lead-55` sent `merge #70` for `d9a187d` on 16 October. The integrator's first turn on it ended with "API Error: Can't reach the API server (ENOTFOUND)" before any step ran, and `lead-55` sent it again.
+  - Step 6 ran four times. The live scenarios acted only as the Lead, so they ran in the integrator's shell on `hackwin-fixture-a` and `hackwin-fixture-private`.
+    1. On 16 October on `d9a187d`: `npm test` passed 913 of 913, but AC6 failed. `setup --resume` stopped on "dial tcp 140.82.121.6:443: i/o timeout" during its read back of the branch rules (log `hackwin-fixture-a.failed-2026-10-16T18-02-06.528Z.log`). The integrator stopped and reported. The Lead chose to have the session make a network failure inside the settle wait a missed sample (`2167e7c`).
+    2. On 16 October on `2167e7c`: `npm test` passed 919 of 919, and `npm run test:ac` failed after 7548 s.
+       - AC6 and the public AC80/setup failed on "read: connection reset by peer"; the private AC80/setup timed out after 1800 s (log `hackwin-fixture-a.failed-2026-10-16T18-25-06.061Z.log`).
+       - The integrator's turn ended on "Can't reach the API server (ENOTFOUND)" before it reported. `lead-55` read the output and judged it a network outage.
+    3. On 20 October on `2167e7c`: `npm test` passed 919 of 919, and `npm run test:ac` failed after 2730 s. AC2 and the private AC80/setup waited 1200 s for the lock of `hackwin-fixture-private` and failed. Run 2 had left that lock, held by process 453, which was gone (`ESRCH`).
+       - The harness kept it because the machine's hostname had changed with the network, from `MacBook-Air-Bartus.local` to `macbook-air-bartus.home`, and `isAbandoned` (`test/harness/lock.js:158`) treats another hostname as a live holder before it checks the pid.
+       - The Lead first read it as a reused pid; the integrator's check showed the hostname. The integrator removed the stale lock, as the Lead decided, and opened #94.
+    4. On 20 October on `2167e7c`, with the lock removed, at a load average of 1.03: `npm test` passed 919 of 919, and `npm run test:ac` passed AC1 (3), AC2 (3), AC6 (13), AC70/setup (1) and AC80/setup (6) in 457 s.
+       - The private fixture's reset deleted the 24 labels that run 2 had left, and every scenario passed. No new failed-run log; the lock directory was empty.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed each time: 17 files inside issue #13's paths; no secret pattern; no conflict with `fa2c3fa`. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes", the Lead's reviews and the merge:
+  - The live bootstrap push needs the `workflow` scope, which the Lead's token lacked; it blocked every live acceptance test until the human added it on 16 October.
+  - For the PRD revision (`lead-55`):
+    - each `setup --resume` rewrites both rule sets with setup's own bodies, undoing a later change by the team, and sends the push protection call again;
+    - the read back adds at least 15 s to every setup;
+    - setup needs the `workflow` scope of the token git pushes with.
+  - The harness guard refuses `collaborators/maljul`, reads included, so step 3 uses the collaborator list. It also refuses every `gh auth` command, so step 1 reads the `X-Oauth-Scopes` header.
+  - `join`'s install ran with `process.env`, so the setup tests put their stub `npm` on the test process's `PATH`. That led to #90 (PR #92) and #91 (PR #93).
+  - On 15 October a read of push protection right after setup returned a stale value. The test skipped its restore, and the session set `hackwin-fixture-a` back by hand.
+  - The network failures of 16 October and the fixture lock kept by a changed hostname (#94).
+- Measured: PR open 4 d 18 h 47 min 43 s (05:48:01 UTC on 15 October to 00:35:44 UTC on 20 October), including the missing token scope, two review rounds, two network outages and the stale lock; 7 commits (two merges of `origin/main`), 4 PR runs (104 s, 106 s, 137 s and 127 s), 0 conflicts. Local step 6 runs: 1 failed on 16 October, 2 on `2167e7c` failed, 1 passed (`npm test` 86.51 s, `npm run test:ac` 456.57 s). The run on main after the merge 130 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/70; heads `d9a187d` and `2167e7c` (merged); merge commit `ac60eea`; runs `38688750993`, `38689826957`, `38884149605` and `38946070446` (PR) and `39348576898` (main).
+
 ### 2026-10-15 · Phase 1 · Contracts: Gate error markers in 5.7, stage 7 in 4.5 (PR #88, issue #87)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/87-contracts-gate-error-markers`, created by the integrator from `62f40a3` after the merge of #80; `lead-55` opened the session. The integrator's planning session for the merge.

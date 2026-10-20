@@ -3,7 +3,7 @@
 // real GitHub in fixture-repo.fixture.test.js.
 
 import { afterEach, describe, expect, test } from 'vitest'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
@@ -22,7 +22,7 @@ import { createFakeGitHub, httpError, rawResult } from './fake-github.js'
 import { FIXTURE_REPOS, RESET_SHA, SANDBOX, fixtureRepo } from './fixture-repos.js'
 import { inspectFixtureRepo, withFixtureRepo } from './fixture-repo.js'
 import { BUILD_REPO, guardExecutor, refusalOf } from './guard.js'
-import { acquireLock } from './lock.js'
+import { acquireLock, processStart } from './lock.js'
 import { RESET_ATTEMPTS, resetFixtureRepo } from './reset.js'
 import { TEAM_SIZES, teamMembers } from './team.js'
 
@@ -183,6 +183,112 @@ describe('1.3d/driver: the lock per repository', () => {
     )
     const release = await acquireLock('hackwin-fixture-c', { dir, timeoutMs: 1000 })
     release()
+  })
+
+  test('a lock left by a dead process of this machine under another host name is taken over', async () => {
+    // #94: on macOS the host name changes with the network, and a lock of the old name stayed
+    // held, so every scenario on that repository waited its full timeout.
+    const dir = tempDir()
+    const gone = spawnSync(process.execPath, ['-e', '0']).pid
+    mkdirSync(join(dir, 'hackwin-fixture-private.lock'))
+    writeFileSync(
+      join(dir, 'hackwin-fixture-private.lock', 'holder.json'),
+      JSON.stringify({
+        pid: gone,
+        host: `${hostname()}-before-the-network-changed`,
+        cwd: '/gone',
+        since: '2026-10-16T18:59:17.891Z',
+      }),
+    )
+    const release = await acquireLock('hackwin-fixture-private', { dir, timeoutMs: 1000 })
+    release()
+  })
+
+  test('a lock whose process id now belongs to a process that started later is taken over', async () => {
+    const dir = tempDir()
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    })
+    try {
+      const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+      mkdirSync(join(dir, 'hackwin-fixture-a.lock'))
+      writeFileSync(
+        join(dir, 'hackwin-fixture-a.lock', 'holder.json'),
+        JSON.stringify({
+          pid: child.pid,
+          host: hostname(),
+          cwd: '/an-hour-ago',
+          since: hourAgo,
+          started: hourAgo,
+        }),
+      )
+      const release = await acquireLock('hackwin-fixture-a', { dir, timeoutMs: 1000 })
+      release()
+    } finally {
+      child.kill()
+    }
+  })
+
+  test('a holder records its start as ps reads it, and a live holder whose start came from ps is kept', async () => {
+    // Both sides of the comparison come from ps, the wall clock: process.uptime() may not count
+    // the time a Mac sleeps (the Lead's review of PR #110).
+    const dir = tempDir()
+    const release = await acquireLock('hackwin-fixture-c', { dir, timeoutMs: 1000 })
+    const own = JSON.parse(readFileSync(join(dir, 'hackwin-fixture-c.lock', 'holder.json'), 'utf8'))
+    release()
+    const ps = processStart(process.pid)
+    expect(ps).not.toBeNull()
+    expect(Math.abs(Date.parse(own.started) - /** @type {number} */ (ps))).toBeLessThan(2000)
+
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    })
+    try {
+      const started = processStart(/** @type {number} */ (child.pid))
+      expect(started).not.toBeNull()
+      mkdirSync(join(dir, 'hackwin-fixture-c.lock'))
+      writeFileSync(
+        join(dir, 'hackwin-fixture-c.lock', 'holder.json'),
+        JSON.stringify({
+          pid: child.pid,
+          host: hostname(),
+          cwd: '/live',
+          since: new Date().toISOString(),
+          started: new Date(/** @type {number} */ (started)).toISOString(),
+        }),
+      )
+      await expect(
+        acquireLock('hackwin-fixture-c', { dir, timeoutMs: 300, pollMs: 50 }),
+      ).rejects.toThrow(new RegExp(`still locked .* by process ${child.pid} `))
+    } finally {
+      child.kill()
+    }
+  })
+
+  test('a lock whose live process started when its holder file says is kept', async () => {
+    const dir = tempDir()
+    const before = new Date().toISOString()
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    })
+    try {
+      mkdirSync(join(dir, 'hackwin-fixture-b.lock'))
+      writeFileSync(
+        join(dir, 'hackwin-fixture-b.lock', 'holder.json'),
+        JSON.stringify({
+          pid: child.pid,
+          host: `${hostname()}-another-name`,
+          cwd: '/live',
+          since: new Date().toISOString(),
+          started: before,
+        }),
+      )
+      await expect(
+        acquireLock('hackwin-fixture-b', { dir, timeoutMs: 300, pollMs: 50 }),
+      ).rejects.toThrow(new RegExp(`still locked .* by process ${child.pid} `))
+    } finally {
+      child.kill()
+    }
   })
 })
 
@@ -467,6 +573,69 @@ describe('1.3d/driver: the guard lets a call through only for the fixture reposi
       /writes only to its fixture repository/,
     )
     expect(refusalOf(['api', '--method', 'POST', 'user/repos'], {}, repo)).toMatch(/writes only/)
+  })
+
+  test('the residual forms of the review of PR #108 are refused (#94)', () => {
+    const mutation = 'query=mutation { unpinIssue(input: {issueId: "I_1"}) { clientMutationId } }'
+    expect(refusalOf(['api', 'graphql', '-f', mutation], {}, repo)).toMatch(/names no repository/)
+    expect(refusalOf(['api', 'graphql', '-f', mutation], { env }, repo)).toBeNull()
+    const build = /not Bartek201301\/HackWin: the build repository/
+    expect(
+      refusalOf(
+        [
+          'api',
+          'graphql',
+          '-f',
+          'query=query($o: String!, $r: String!) { repository(owner: $o, name: $r) { id } }',
+          '-F',
+          'repoOwner=Bartek201301',
+          '-F',
+          'repoName=HackWin',
+        ],
+        { env },
+        repo,
+      ),
+    ).toMatch(build)
+    expect(
+      refusalOf(
+        ['api', 'graphql', '-f', 'query=query($r: String!) { x }', '-F', 'r=Bartek201301/HackWin'],
+        { env },
+        repo,
+      ),
+    ).toMatch(build)
+    // The check named hackwin, or a fixture name that starts with the build repository's, is no
+    // build repository.
+    expect(
+      refusalOf(
+        [
+          'api',
+          'graphql',
+          '-f',
+          'query=query { x }',
+          '-F',
+          'owner=Bartek201301',
+          '-F',
+          'name=hackwin-fixture-a',
+          '-F',
+          'context=hackwin',
+        ],
+        { env },
+        repo,
+      ),
+    ).toBeNull()
+    expect(
+      refusalOf(
+        ['api', 'graphql', '-f', 'query=query { x }', '-F', 'r=Bartek201301/hackwin-fixture-a'],
+        { env },
+        repo,
+      ),
+    ).toBeNull()
+    expect(refusalOf(['api', '-XPOST', 'user/repos'], {}, repo)).toMatch(/writes only/)
+    expect(refusalOf(['api', '--method=POST', 'user/repos'], {}, repo)).toMatch(/writes only/)
+    expect(refusalOf(['api', '--method=GET', 'user'], {}, repo)).toBeNull()
+    expect(refusalOf(['repo', 'create', 'new-repo'], { env }, repo)).toMatch(/created or forked/)
+    expect(refusalOf(['repo', 'fork', repo], { env }, repo)).toMatch(/created or forked/)
+    expect(refusalOf(['gist', 'create', 'notes.txt'], { env }, repo)).toMatch(/gists/)
   })
 
   test('a guard for a repository that is no fixture repository lets nothing through', () => {

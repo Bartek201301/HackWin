@@ -56,6 +56,10 @@ export function refusalOf(args, call, repo) {
   if (args[0] === 'repo' && ['delete', 'archive', 'rename'].includes(args[1])) {
     return 'no repository is ever deleted, archived or renamed by tests'
   }
+  if (args[0] === 'repo' && ['create', 'fork'].includes(args[1])) {
+    return 'no repository is ever created or forked by tests'
+  }
+  if (args[0] === 'gist') return 'a scenario never touches gists'
   if (!FIXTURE_REPOS.some((info) => same(info.repo, repo))) {
     return `${repo} is not a fixture repository, so the guard lets no call through`
   }
@@ -81,6 +85,10 @@ export function refusalOf(args, call, repo) {
     } else if (path === 'graphql') {
       const graphRepo = graphqlRepository(args)
       if (graphRepo !== null && !same(graphRepo, repo)) return other(graphRepo)
+      if (namesBuildRepo(args)) return other(BUILD_REPO)
+      // A mutation may name its target only by node id, which the guard cannot resolve; it runs
+      // only from a client scoped to the fixture repository.
+      if (graphqlMutation(args) && ghRepo === null) return unresolved
     } else if (methodOf(args) !== 'GET') {
       return `a scenario writes only to its fixture repository, not to ${path || 'this endpoint'}`
     }
@@ -149,6 +157,8 @@ function isFlagValue(args, index) {
 function methodOf(args) {
   const index = args.findIndex((arg) => arg === '--method' || arg === '-X')
   if (index !== -1) return String(args[index + 1]).toUpperCase()
+  const joined = args.find((arg) => /^(--method=|-X=?)./.test(arg))
+  if (joined !== undefined) return joined.replace(/^(--method=|-X=?)/, '').toUpperCase()
   const writes = /^(-f|-F|--field|--raw-field|--input)$/
   return args.some((arg) => writes.test(arg)) ? 'POST' : 'GET'
 }
@@ -184,12 +194,11 @@ function repositoryArgument(args) {
 }
 
 /**
- * The repository a `gh api graphql` call names through its `owner` and `name` fields, or in the
- * query as `repository(owner: "...", name: "...")`; null when it names none.
+ * The fields of a `gh api graphql` call, `-f`/`-F`/`--field`/`--raw-field`, by key.
  * @param {string[]} args
- * @returns {string | null}
+ * @returns {Record<string, string>}
  */
-function graphqlRepository(args) {
+function graphqlFields(args) {
   /** @type {Record<string, string>} */
   const fields = {}
   for (let index = 1; index < args.length; index += 1) {
@@ -197,6 +206,45 @@ function graphqlRepository(args) {
     const [key, ...rest] = args[index].split('=')
     fields[key] = rest.join('=')
   }
+  return fields
+}
+
+/**
+ * True when the query of a `gh api graphql` call is a mutation.
+ * @param {string[]} args
+ */
+function graphqlMutation(args) {
+  return /^\s*mutation\b/.test(graphqlFields(args).query ?? '')
+}
+
+/**
+ * True when the fields of a `gh api graphql` call name the build repository under other variable
+ * names than `owner` and `name`: an owner-like field equal to its owner together with a name-like
+ * field equal to its name, or `owner/name` as a whole word in any value. A value that is only the
+ * name, such as the check `hackwin`, does not count.
+ * @param {string[]} args
+ */
+function namesBuildRepo(args) {
+  const [owner, name] = BUILD_REPO.toLowerCase().split('/')
+  const entries = Object.entries(graphqlFields(args)).map(([key, value]) => [
+    key.toLowerCase(),
+    value.toLowerCase(),
+  ])
+  const whole = new RegExp(`(^|[^\\w-])${owner}/${name}(?![\\w-])`)
+  if (entries.some(([, value]) => whole.test(value))) return true
+  const ownerNamed = entries.some(([key, value]) => /owner|login|org/.test(key) && value === owner)
+  const nameNamed = entries.some(([key, value]) => /name|repo/.test(key) && value === name)
+  return ownerNamed && nameNamed
+}
+
+/**
+ * The repository a `gh api graphql` call names through its `owner` and `name` fields, or in the
+ * query as `repository(owner: "...", name: "...")`; null when it names none.
+ * @param {string[]} args
+ * @returns {string | null}
+ */
+function graphqlRepository(args) {
+  const fields = graphqlFields(args)
   if (fields.owner !== undefined && fields.name !== undefined) {
     return `${fields.owner}/${fields.name}`
   }
