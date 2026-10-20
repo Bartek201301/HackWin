@@ -45,11 +45,15 @@ const HACKWIN_HOOKS = Object.fromEntries(
 )
 
 /**
- * Whether Claude Code's deny rules refuse a Bash command, by the matching that
- * docs/verification.md row 2 quotes from the permissions documentation: the command is split
- * into subcommands at `&&`, `||`, `;`, `|`, `&` and newlines, and a rule `Bash(<pattern>)`
- * refuses a subcommand that the pattern matches as a whole, `*` standing for any text.
- * @param {string[]} rules
+ * Whether Claude Code's deny rules refuse a Bash command, by only the matching that the
+ * permissions documentation shows (https://code.claude.com/docs/en/permissions, "Wildcard
+ * patterns" and "Compound commands", read 2026-10-20): the command is split into subcommands at
+ * `&&`, `||`, `;`, `|`, `&` and newlines, and a rule `Bash(<pattern>)` refuses a subcommand that
+ * the pattern matches as a whole. A `*` stands for some text, one character or more: the page
+ * does not say whether it matches empty text (docs/verification.md, question 8), so this test
+ * does not count on it. The one documented exception: a trailing ` *` that is the rule's only
+ * wildcard also matches the bare command (`Bash(ls *)` matches `ls`).
+ * @param {readonly string[]} rules
  * @param {string} command
  */
 function deniedBy(rules, command) {
@@ -58,8 +62,9 @@ function deniedBy(rules, command) {
     const pattern = /^Bash\((.*)\)$/.exec(rule)?.[1]
     if (pattern === undefined) return false
     const source = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const regex = new RegExp(`^${source.join('.*')}$`)
-    return subcommands.some((part) => regex.test(part))
+    const regex = new RegExp(`^${source.join('.+')}$`)
+    const bare = pattern.endsWith(' *') && source.length === 2 ? pattern.slice(0, -2) : null
+    return subcommands.some((part) => regex.test(part) || part === bare)
   })
 }
 
@@ -187,6 +192,7 @@ describe('AC63/deny: the generated settings deny a merge and a push to main', ()
     const settings = merged(null)
     expect(MERGE_RULES).toEqual([
       'Bash(gh pr merge *)',
+      'Bash(gh api *pulls/*/merge)',
       'Bash(gh api *pulls/*/merge*)',
       'Bash(gh api *mergePullRequest*)',
     ])
@@ -216,6 +222,11 @@ describe('AC63/deny: the generated settings deny a merge and a push to main', ()
       'git push origin +main',
       'git push origin HEAD:refs/heads/main',
       'git push --all origin',
+      'git push --all',
+      'git push origin --all',
+      'git push origin --branches --force',
+      'git push --mirror',
+      'git push backup --mirror',
     ]) {
       expect(deniedBy(rules, command), command).not.toEqual([])
     }
@@ -234,5 +245,25 @@ describe('AC63/deny: the generated settings deny a merge and a push to main', ()
     const rules = denyRules({ defaultBranch: 'trunk' })
     expect(deniedBy(rules, 'git push origin trunk')).not.toEqual([])
     expect(deniedBy(rules, 'git push origin main')).toEqual([])
+  })
+})
+
+describe('1.4g/regenerate: the deny rules that setup --regenerate writes', () => {
+  test('a merge through gh api that ends right at merge is denied without a * that matches empty text', () => {
+    const rules = merged(null).permissions.deny
+    for (const command of [
+      'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge',
+      'gh api --method PUT repos/acme/app/pulls/14/merge',
+      'gh api repos/acme/app/pulls/14/merge -X PUT -f merge_method=merge',
+      'gh api -X PUT "repos/acme/app/pulls/14/merge"',
+    ]) {
+      expect(deniedBy(rules, command), command).not.toEqual([])
+    }
+    // The rules of the release before: only a * that matches empty text would deny the first form.
+    const before = rules.filter((rule) => rule !== 'Bash(gh api *pulls/*/merge)')
+    expect(deniedBy(before, 'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge')).toEqual([])
+    expect(deniedBy(rules, 'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge')).toEqual([
+      'Bash(gh api *pulls/*/merge)',
+    ])
   })
 })

@@ -9,11 +9,13 @@ import {
   TEMPLATE_CHECK_WORKFLOW,
   TEMPLATE_CHECK_WORKFLOW_PATH,
   languageName,
+  planBlockFiles,
   planProjectFiles,
   renderAgentsBlock,
   renderHackwinConfig,
   renderOwners,
   withBlock,
+  withCliVersion,
 } from '../../src/generate/index.js'
 import { nodeProjectFiles, teamConfig } from '../harness/index.js'
 
@@ -203,5 +205,69 @@ describe('1.4d/config-files: hackwin.yml and owners.yml', () => {
     const text = renderHackwinConfig(/** @type {any} */ (team.hackwin))
     expect(text).toContain(`check: ${team.hackwin.commands.check}\n`)
     expect(parse(text).commands.check).toBe(team.hackwin.commands.check)
+  })
+})
+
+describe('1.4g/regenerate: what setup --regenerate rewrites in the kept files', () => {
+  test("only the files with HackWin's block that exist are planned, and only their block changes", () => {
+    const agents = `# Ours\n\n${HTML_MARKERS.begin}\nold rules\n${HTML_MARKERS.end}\n\nOurs too.\n`
+    const files = {
+      'AGENTS.md': agents,
+      '.gitignore': 'node_modules/\n',
+      '.env.example': 'API_URL=\n',
+      'docs/hackwin/prd.md': '# Our PRD\n',
+      [TEMPLATE_CHECK_WORKFLOW_PATH]: TEMPLATE_CHECK_WORKFLOW,
+    }
+    const changes = planBlockFiles((path) => files[path] ?? null, INPUT)
+    expect(changes.map((change) => change.path)).toEqual(['AGENTS.md', '.gitignore'])
+    expect(changes[0]).toEqual({
+      path: 'AGENTS.md',
+      action: 'write',
+      content: `# Ours\n\n${renderAgentsBlock(INPUT)}\n\nOurs too.\n`,
+    })
+    expect(changes[1].content).toMatch(
+      /^node_modules\/\n\n# hackwin:begin\n[\s\S]*# hackwin:end\n$/,
+    )
+  })
+
+  test('a current block is kept, and a write through a link is refused', () => {
+    const current = Object.fromEntries(
+      planProjectFiles(() => null, INPUT).map((change) => [change.path, change.content ?? null]),
+    )
+    const kept = planBlockFiles((path) => current[path] ?? null, INPUT)
+    expect(kept.length).toBeGreaterThan(0)
+    expect(kept.every((change) => change.action === 'keep')).toBe(true)
+    const linkOf = (/** @type {string} */ path) =>
+      path === 'AGENTS.md' ? { path, target: '../rules.md', resolved: null } : null
+    expect(() =>
+      planBlockFiles((path) => (path === 'AGENTS.md' ? '# Ours\n' : null), INPUT, linkOf),
+    ).toThrow('hackwin writes AGENTS.md, but AGENTS.md is a symbolic link to ../rules.md')
+  })
+
+  test('cli_version changes in place, in its quotes, and every other character stays', () => {
+    const plain = '# Ours\nschema: 1\ncli_version: 0.1.0 # pinned\nproject:\n  language: en\n'
+    expect(withCliVersion(plain, '0.1.1-pre.2')).toBe(
+      '# Ours\nschema: 1\ncli_version: 0.1.1-pre.2 # pinned\nproject:\n  language: en\n',
+    )
+    expect(withCliVersion('cli_version: "0.1.0"\r\nschema: 1\r\n', '0.1.1')).toBe(
+      'cli_version: "0.1.1"\r\nschema: 1\r\n',
+    )
+    expect(withCliVersion("cli_version: '0.1.0'\n", '0.1.1')).toBe("cli_version: '0.1.1'\n")
+    const team = teamConfig(3)
+    const rendered = renderHackwinConfig(/** @type {any} */ (team.hackwin))
+    expect(parseHackwinConfig(withCliVersion(rendered, '0.1.9')).cli_version).toBe('0.1.9')
+  })
+
+  test('a hackwin.yml without a cli_version written as one value is a ConfigError on cli_version', () => {
+    for (const text of [
+      'schema: 1\n',
+      'cli_version: [0.1.0]\n',
+      'cli_version: |\n  0.1.0\n',
+      ': [\n',
+    ]) {
+      expect(() => withCliVersion(text, '0.1.1'), text).toThrow(
+        expect.objectContaining({ kind: 'config', key: 'cli_version' }),
+      )
+    }
   })
 })

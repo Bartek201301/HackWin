@@ -35,6 +35,7 @@ import { linkError } from './links.js'
  * @property {string} path
  * @property {(existing: string | null, input: ProjectInput, link: Link | null) => ProjectFileChange} plan
  *   `link` is the symlink on the way to the file, or null.
+ * @property {boolean} [block] True for a file that holds HackWin's block.
  */
 
 /**
@@ -94,6 +95,7 @@ export function languageName(language) {
 function blockFile(path, markers, render) {
   return {
     path,
+    block: true,
     plan(existing, input) {
       const content = withBlock(existing, { ...render(input), markers, path })
       return content === existing ? { path, action: 'keep' } : { path, action: 'write', content }
@@ -137,6 +139,7 @@ function claudeFile() {
   })
   return {
     path: spec.path,
+    block: true,
     plan: (existing, input, link) =>
       link?.path === spec.path && link.resolved === 'AGENTS.md'
         ? { path: spec.path, action: 'keep' }
@@ -215,6 +218,28 @@ export function planProjectFiles(read, input, linkOf = () => null) {
     const change = spec.plan(read(spec.path), input, link)
     if (change.action !== 'keep' && link !== null) throw linkError(spec.path, link)
     return change
+  })
+}
+
+/**
+ * What `setup --regenerate` does with the files of PROJECT_FILES that hold HackWin's block: in each
+ * one that exists, the block is replaced, or added when the file has none (6.5). A missing file
+ * stays missing, and the documents, the research files and the template's CI workflow are not
+ * touched: only the block is HackWin's.
+ * @param {(path: string) => string | null} read The text of a file of the checkout, or null.
+ * @param {ProjectInput} input
+ * @param {(path: string) => Link | null} [linkOf] The symlink on the way to a file, or null.
+ * @returns {ProjectFileChange[]} One change for each block file that exists.
+ */
+export function planBlockFiles(read, input, linkOf = () => null) {
+  return PROJECT_FILES.flatMap((spec) => {
+    if (!spec.block) return []
+    const existing = read(spec.path)
+    if (existing === null) return []
+    const link = linkOf(spec.path)
+    const change = spec.plan(existing, input, link)
+    if (change.action !== 'keep' && link !== null) throw linkError(spec.path, link)
+    return [change]
   })
 }
 

@@ -7,9 +7,11 @@
 // invitations, branch rules, push protection, `join` for the Lead's machine and the summary;
 // after a failure there, `setup --resume` runs them again. A second `setup` on a configured
 // repository exits 2: configuration changes go through a pull request by the Lead.
+// `setup --regenerate` (regenerate.js) installs a bug fix release of the same phase in the
+// worktree of a task of the shared role (20.6).
 
 import { parseHackwinConfig, parseOwners, validateConfig } from '../../core/config/index.js'
-import { NotBuiltError, PreconditionError, runIn } from '../../core/runtime/index.js'
+import { PreconditionError, UsageError, runIn } from '../../core/runtime/index.js'
 import { renderHackwinConfig, renderOwners } from '../../generate/index.js'
 import { bootstrap } from './bootstrap.js'
 import { checkLaterAnswers, finishSetup, resumeSetup } from './finish.js'
@@ -17,6 +19,7 @@ import { askOwnership, ownersUnchanged, proposeOwners } from './ownership.js'
 import { checkPreconditions } from './preconditions.js'
 import { askProject, reportVisibility } from './project.js'
 import { openQuestions } from './questions.js'
+import { regenerate } from './regenerate.js'
 import { askStack, detectStack } from './stack.js'
 import { askTeam, checkLogins } from './team.js'
 
@@ -24,9 +27,6 @@ import { askTeam, checkLogins } from './team.js'
 /** @import { Git } from '../../core/git/index.js' */
 /** @import { HackwinConfig } from '../../core/config/index.js' */
 /** @import { Questions } from './questions.js' */
-
-/** The module of this command, for the flag that is not built yet. */
-const MODULE = 'src/commands/setup/index.js'
 
 /** `tasks` of hackwin.yml with the default of 6.3. */
 const TASK_DEFAULTS = Object.freeze({ max_files: 10 })
@@ -53,7 +53,13 @@ const RESOLVER_PHASE_1 = Object.freeze({ enabled: false, model: null, max_turns:
  */
 export async function run(ctx) {
   if (ctx.flags.regenerate) {
-    throw new NotBuiltError('setup --regenerate', MODULE, 'setup --regenerate is not built yet')
+    if (ctx.flags.resume || ctx.flags.answers !== undefined) {
+      throw new UsageError(
+        'setup --regenerate takes neither --resume nor --answers: it asks no questions',
+        { resolve: runIn('hackwin setup --regenerate', ctx.repoRoot) },
+      )
+    }
+    return regenerate(ctx)
   }
   const resume = ctx.flags.resume === true
   if (ctx.config && !resume) throw configured(ctx)
