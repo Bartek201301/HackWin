@@ -156,10 +156,13 @@ Waves: 1 is 1.1, 1.2 and the foundation 1.3a to 1.3d; 2 is 1.3e and the lanes; 3
 5. **Step 1.8**, human: release 0.1.0 with the results of `docs/verification.md` and checklist 20.5.
 6. **Manual check per release**, human, for 0.1.0 and every bug fix release. Automated tests never start a real Claude Code session (section 9, decision 9), so each release is checked once in a real Claude Code session with default permissions, and once with bypass permissions on:
    - an edit outside the role scope is blocked before the file changes;
-   - `gh pr merge`, a merge through `gh api` and a push to main are refused;
+   - `gh pr merge`, a merge through `gh api` and a push to main are refused. Try these forms exactly, because `docs/verification.md` (section 4, question 8) leaves open whether a `*` at the end of a deny pattern matches empty text (the Lead's review of PR #95):
+     - `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/merge`, with nothing after `merge`;
+     - `git push origin --all`;
    - after an edit only that file is formatted;
    - the session start summary appears;
-   - `/take`, `/ship`, `/status` and `/gate` behave as in the terminal.
+   - `/take`, `/ship`, `/status` and `/gate` behave as in the terminal. `/status` runs HackWin's `status`, because a project skill named `status` replaces Claude Code's own `/status` (the Lead's review of PR #58);
+   - the hooks block while `hackwin` is on Claude Code's `PATH`. Without it every hook exits 127, which Claude Code treats as not blocking; this is a known gap (the Lead's review of PR #58).
    These are AC14, AC55, AC58 and AC63. The result goes into `docs/test-log.md`.
 
 ## 7. Working on a task
