@@ -78,6 +78,23 @@ describe('1.3a/git: git helpers on a temporary repository', () => {
     expect(repo.git(repo.origin, 'rev-parse', 'task/1-push').trim()).toBe(head)
   })
 
+  test('a push into the origin starts no background git maintenance, whose repack could delete loose objects while a clone copies them (#129)', async () => {
+    expect(await git.configGet('maintenance.auto')).toBe('false')
+    commit(repo.clone, { 'traced.txt': 'traced\n' }, 'traced change')
+    const trace = join(repo.dir, 'trace2.json')
+    const traced = createGit({ cwd: repo.clone, env: { ...repo.env, GIT_TRACE2_EVENT: trace } })
+    await traced.push({ refspecs: ['HEAD:refs/heads/main'] })
+
+    const commands = readFileSync(trace, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.event === 'cmd_name')
+      .map((event) => event.name)
+    expect(commands).toContain('receive-pack')
+    expect(commands.filter((name) => name === 'maintenance' || name === 'gc')).toEqual([])
+  })
+
   test('showFile reads a file at a ref, null for a missing file, and throws for a missing ref', async () => {
     expect(await git.showFile('HEAD', 'README.md')).toBe('readme\n')
     expect(await git.showFile('origin/main', 'README.md')).toBe('readme\n')

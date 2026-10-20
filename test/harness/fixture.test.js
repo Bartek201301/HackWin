@@ -38,6 +38,20 @@ function withoutGitVariables(env) {
 }
 
 /**
+ * The name of every git command that a trace2 event file records, children included.
+ * @param {string} file A file written through GIT_TRACE2_EVENT.
+ * @returns {string[]}
+ */
+function tracedCommands(file) {
+  return readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .filter((event) => event.event === 'cmd_name')
+    .map((event) => event.name)
+}
+
+/**
  * The size, time and inode of the user's own git and gh configuration files. Only stat: the gh
  * files may hold a credential, and nothing here reads them.
  */
@@ -220,6 +234,24 @@ describe('1.3d/fixture: offline fixtures', () => {
       GIT_CONFIG_NOSYSTEM: '1',
     })
     expect(env.GIT_DIR).toBeUndefined()
+  })
+
+  test('a push into the origin starts no background git maintenance, whose repack could delete loose objects while a clone copies them (#129)', async () => {
+    const fixture = await createFixture()
+    expect(await fixture.git.configGet('maintenance.auto')).toBe('false')
+
+    await fixture.commit('Traced change', { files: { 'traced.txt': 'traced\n' } })
+    const trace = join(fixture.dir, 'trace2.json')
+    const traced = createGit({
+      cwd: fixture.main,
+      env: { ...fixture.env, GIT_TRACE2_EVENT: trace },
+    })
+    await traced.push({ refspecs: ['HEAD:refs/heads/main'] })
+
+    const commands = tracedCommands(trace)
+    expect(commands).toContain('receive-pack')
+    expect(commands.filter((name) => name === 'maintenance' || name === 'gc')).toEqual([])
+    fixture.cleanup()
   })
 })
 

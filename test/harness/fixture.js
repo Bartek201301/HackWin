@@ -88,6 +88,11 @@ export function isolatedEnv(home, base = process.env) {
 /**
  * Write the global git config of an isolated HOME: the fixture identity, `main` as the initial
  * branch, no signing. No hooks path, so no global hook runs.
+ *
+ * No automatic maintenance either. After every push, `receive-pack` starts `git maintenance run
+ * --auto --detach` in the origin without waiting for it. Since git 2.54 its default `geometric`
+ * strategy repacks as soon as `objects/17` holds two loose objects, and deletes the loose objects
+ * it packed, so a local clone that copies them one by one can fail (#129).
  * @param {string} home
  * @param {string} [extra] More lines of git config.
  */
@@ -95,7 +100,7 @@ export function writeGitConfig(home, extra = '') {
   mkdirSync(join(home, '.config', 'gh'), { recursive: true })
   writeFileSync(
     join(home, '.gitconfig'),
-    `[user]\n\tname = ${FIXTURE_IDENTITY.name}\n\temail = ${FIXTURE_IDENTITY.email}\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n${extra}`,
+    `[user]\n\tname = ${FIXTURE_IDENTITY.name}\n\temail = ${FIXTURE_IDENTITY.email}\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n[maintenance]\n\tauto = false\n${extra}`,
   )
 }
 
