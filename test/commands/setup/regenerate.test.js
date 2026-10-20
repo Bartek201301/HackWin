@@ -16,7 +16,13 @@ import {
   staleGeneratedFiles,
   writeGeneratedFiles,
 } from '../../../src/generate/index.js'
-import { accounts, hackwinObject, ownersObject, yaml } from '../../harness/index.js'
+import {
+  accounts,
+  hackwinObject,
+  nodeProjectFiles,
+  ownersObject,
+  yaml,
+} from '../../harness/index.js'
 import { LEAD, createSetupFixture, runHackwin, snapshot, writes } from './setup-fixture.js'
 
 const running = /** @type {semver.SemVer} */ (semver.parse(VERSION))
@@ -104,8 +110,14 @@ function taskBody(role, paths) {
  * @param {string} [options.pinned] `cli_version` on main.
  * @param {string} [options.role] The role of the task.
  * @param {Record<string, string>} [options.branchFiles] A commit of these files on the task branch.
+ * @param {Record<string, string>} [options.mainFiles] More files of the release's commit on main.
  */
-async function createProject({ pinned = LOWER, role = 'shared', branchFiles } = {}) {
+async function createProject({
+  pinned = LOWER,
+  role = 'shared',
+  branchFiles,
+  mainFiles = {},
+} = {}) {
   const setup = await createSetupFixture({
     nodeProject: false,
     config: { hackwin: hackwinText(pinned), owners: ownersObject() },
@@ -125,6 +137,7 @@ async function createProject({ pinned = LOWER, role = 'shared', branchFiles } = 
       '.github/pull_request_template.md': /** @type {string} */ (
         current['.github/pull_request_template.md']
       ),
+      ...mainFiles,
     },
   })
   const github = createGitHub({ executor: fake.as(LEAD), repo: fake.state.repo })
@@ -212,13 +225,42 @@ describe('1.4g/regenerate: setup --regenerate in a task worktree of the shared r
     expect(settings.permissions.deny.slice(-ADDED_RULES.length)).toEqual(ADDED_RULES)
     // Files that hold no block, or do not exist, stay as they are: no document is created.
     expect(existsSync(join(worktree.path, '.github/ISSUE_TEMPLATE/hackwin-task.md'))).toBe(false)
-    expect(existsSync(join(worktree.path, 'docs/hackwin/prd.md'))).toBe(false)
+    expect(existsSync(join(worktree.path, 'docs/hackwin/documents.md'))).toBe(false)
     expect(existsSync(join(worktree.path, '.env.example'))).toBe(false)
 
     // Nothing else changed: the main checkout, origin's main and GitHub.
     expect(snapshot(fixture.main)).toEqual(mainFiles)
     expect(await fixture.git.revParse('origin/main')).toBe(mainBefore)
     expect(writes(fake).filter((call) => !call.endpoint.endsWith('/issues'))).toEqual([])
+  })
+
+  test('with the documents of the Release 1 template it creates, changes and deletes no file under docs/hackwin/', async () => {
+    const template = nodeProjectFiles()
+    const documents = Object.fromEntries(
+      Object.entries(template).filter(([path]) => path.startsWith('docs/hackwin/')),
+    )
+    expect(Object.keys(documents).sort()).toEqual(
+      ['before-the-event', 'design', 'epics', 'manual-workflow', 'non-code', 'prd', 'spec'].map(
+        (name) => `docs/hackwin/${name}.md`,
+      ),
+    )
+    const project = await createProject({ mainFiles: documents })
+    const { worktree } = project
+    /** @param {Record<string, string>} files */
+    const underDocs = (files) =>
+      Object.fromEntries(Object.entries(files).filter(([path]) => path.startsWith('docs/')))
+    const before = underDocs(snapshot(worktree.path))
+
+    const result = await regenerate(project)
+    expect(result.code).toBe(0)
+    const changed = await changedBy(worktree.git, await worktree.git.revParse('HEAD'))
+    expect(changed.length).toBeGreaterThan(0)
+    expect(changed.filter((path) => path.startsWith('docs/'))).toEqual([])
+    expect(underDocs(snapshot(worktree.path))).toEqual(before)
+    expect(existsSync(join(worktree.path, 'docs/hackwin/documents.md'))).toBe(false)
+    for (const [path, content] of Object.entries(documents)) {
+      expect(readFileSync(join(worktree.path, path), 'utf8'), path).toBe(content)
+    }
   })
 
   test('a second run finds nothing to change and makes no commit', async () => {
