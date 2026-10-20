@@ -1,6 +1,6 @@
 {
   "name": "hackwin",
-  "version": "0.1.0-pre.0",
+  "version": "0.1.0-pre.1",
   "description": "Workflow and CLI for hackathon teams of 2 to 4 people who each run their own coding agent sessions on one GitHub repository",
   "license": "MIT",
   "type": "module",
