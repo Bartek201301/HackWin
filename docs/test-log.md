@@ -17,6 +17,30 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Step 1.6f, status: a closed status issue counts only when the issue itself carries the label (PR #120, issue #115)
+
+- Setup: a lane C session in worktree `task/115-status-closed-issue-label`, created by the integrator from `943722e`, started by `lead-55`. The integrator opened #115 from #28's finding on `hackwin-fixture-b`. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - #28 observed that after the harness reset, `GET issues?state=closed&labels=gate-status` still returned the old closed status issue for minutes, while `GET issues/16` showed it with no labels. `status` then showed the previous run's Gate.
+  - `closedStatusIssue` in `src/commands/status/read.js` now reads at most three listed candidates by number, newest edit first, and keeps the first whose own issue carries `gate-status`.
+  - Four new tests in `1.6f/states` serve the closed listing from a second fake that still has the label; three of them failed against the old `read.js`. One commit, `aae3de7`; PR #120 opened at 11:44:28 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 2 files inside issue #115's paths; no secret pattern; no dash; no conflict with `943722e`.
+    - The first step 6 started at 11:48:38 UTC. The laptop slept from 11:49:58 to 12:17:38 UTC (`pmset -g log`: clamshell sleep on battery, then a thermal emergency sleep), and the run failed 23 tests, all by timeouts. As the Lead had said, a run across a sleep does not count.
+    - The rerun from 12:18:52 to 12:20:51 UTC, with no sleep, passed: `npm test` 977 of 977, and `npm run test:ac -- 1.6f/states` 7.
+    - The integrator's turn then ended on "API Error: Can't reach the API server (ENOTFOUND)" during steps 7 to 9, and the laptop slept until 16:05 UTC. On resuming, main was still `943722e`, so the passed step 6 stood. The merge was pinned to the head SHA at 16:07:17 UTC.
+  - The run on main after the merge, `39454624675`, succeeded.
+- Problems:
+  - From the PR:
+    - no live check;
+    - the fix relies on the read by number being fresh, which was observed once;
+    - if the three newest candidates have all lost the label, an older one that still has it is not found;
+    - the open lookup `findStatusIssue` still trusts the filter alone.
+  - From the PR's workflow notes: during `npm test` the load average went from about 14 to 69.9, with other sessions on the machine.
+  - The sleep and the lost API connection, above.
+- Measured: PR open 4 h 22 min 49 s (11:44:28 to 16:07:17 UTC), most of it while the laptop slept; 1 commit, 1 PR run (148 s), 0 conflicts; local merge test `npm test` 114.58 s; the run on main after the merge 138 s.
+- Evidence: issue #115; PR https://github.com/Bartek201301/HackWin/pull/120; head `aae3de7`; merge commit `db08d79`; runs `39417117215` (PR) and `39454624675` (main).
+
 ### 2026-10-20 · Phase 1 · Fix of a red main: the offline Gates of the release scenarios keep the laptop awake through a stand-in (PR #117, issue #116)
 
 - Setup: the integrator made this fix itself, at the Lead's request and before any other merge, in its own worktree `task/116-release-stub-keep-awake`, created from `d7a7c54`. `lead-55` reviewed it and sent the merge. The same request had the integrator open #115 (lane C) for #28's finding.
