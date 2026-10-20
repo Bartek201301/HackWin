@@ -27,6 +27,15 @@ const TEMPLATE = nodeProjectFiles()
 /** The template files that the Node fixture's project changed. */
 const CHANGED_IN_FIXTURE = ['.gitignore', TEMPLATE_CHECK_WORKFLOW_PATH]
 
+/** The guide to the documents, which Release 1 did not have (plan section 9, decision 12). */
+const GUIDE = 'docs/hackwin/documents.md'
+
+/** The template file whose text changed since Release 1: it names the six documents. */
+const MANUAL_WORKFLOW = 'docs/hackwin/manual-workflow.md'
+
+/** The documents that the guide covers, in its order. */
+const DOCUMENTS = ['prd.md', 'spec.md', 'architecture.md', 'design.md', 'epics.md', 'non-code.md']
+
 /**
  * @param {Record<string, string>} files
  * @param {typeof INPUT} [input]
@@ -74,23 +83,31 @@ describe('1.4d/blocks: HackWin block in a team file', () => {
 })
 
 describe('1.4d/files: the files of the template', () => {
-  test('1.4d/files: the texts are those of Release 1 (the template in the Node fixture)', () => {
+  test('1.4d/files: the texts that did not change are those of Release 1 (the template in the Node fixture)', () => {
     const empty = plan({})
     for (const spec of PROJECT_FILES) {
       const path = spec.path
       if (path === TEMPLATE_CHECK_WORKFLOW_PATH || path === 'AGENTS.md') continue
-      if (CHANGED_IN_FIXTURE.includes(path)) continue
+      if (CHANGED_IN_FIXTURE.includes(path) || path === GUIDE || path === MANUAL_WORKFLOW) continue
       expect(empty[path], path).toEqual({ path, action: 'write', content: TEMPLATE[path] })
     }
+    // The manual workflow differs only in its steps on the documents and the foundation task.
+    const workflow = /** @type {string} */ (empty[MANUAL_WORKFLOW].content)
+    const steps = /^(1\. \*\*Documents\.\*\*|2\. \*\*The foundation task\.\*\*) /
+    /** @param {string} text */
+    const others = (text) => text.split('\n').filter((line) => !steps.test(line))
+    expect(others(workflow)).toEqual(others(TEMPLATE[MANUAL_WORKFLOW]))
+    expect(workflow).not.toBe(TEMPLATE[MANUAL_WORKFLOW])
   })
 
-  test('1.4d/files: on the template, only the AGENTS.md block changes', () => {
+  test('1.4d/files: on the template, the AGENTS.md block changes, documents.md is added and every other file is kept', () => {
     const changes = plan(TEMPLATE)
     expect(
       Object.values(changes)
         .filter((change) => change.action !== 'keep')
         .map((change) => change.path),
-    ).toEqual(['AGENTS.md'])
+    ).toEqual(['AGENTS.md', GUIDE])
+    expect(changes[GUIDE]).toEqual(plan({})[GUIDE])
     expect(changes[TEMPLATE_CHECK_WORKFLOW_PATH].notice).toContain('was changed by the team')
   })
 
@@ -108,9 +125,10 @@ describe('1.4d/files: the files of the template', () => {
     })
   })
 
-  test('1.4d/files: an existing document, research file or .env.example is kept as it is', () => {
+  test('1.4d/files: an existing guide, research file or .env.example is kept as it is', () => {
     const files = {
-      'docs/hackwin/spec.md': 'ours\n',
+      [GUIDE]: 'ours\n',
+      [MANUAL_WORKFLOW]: 'ours\n',
       '.claude/agents/research.md': 'ours\n',
       '.env.example': 'API_KEY=\n',
     }
@@ -141,6 +159,89 @@ describe('1.4d/files: the files of the template', () => {
     )
     expect(block).toContain("Only the Lead's planning session works in the main checkout.")
     expect(languageName('not a language')).toBe('not a language')
+  })
+})
+
+/**
+ * The parts of the guide to the documents: the text under each level 2 heading that names a file,
+ * by that file. The example of `epics.md` holds a level 2 heading of its own and stays in its part.
+ * @param {string} guide
+ * @returns {Record<string, string>}
+ */
+function guideParts(guide) {
+  /** @type {Record<string, string>} */
+  const parts = {}
+  for (const part of guide.split(/^## (?=`)/m).slice(1)) {
+    parts[/** @type {string} */ (/^`([^`]+)`/.exec(part)?.[1])] = part
+  }
+  return parts
+}
+
+describe('1.4l/documents: one guide to six documents instead of the skeletons', () => {
+  const empty = plan({})
+  const guide = /** @type {string} */ (empty[GUIDE]?.content)
+  const parts = guideParts(guide ?? '')
+
+  test('1.4l/documents: on an empty repository, documents.md, before-the-event.md and manual-workflow.md are the only files planned under docs/hackwin/', () => {
+    const planned = Object.keys(empty).filter((path) => path.startsWith('docs/'))
+    expect(planned.sort()).toEqual(['docs/hackwin/before-the-event.md', GUIDE, MANUAL_WORKFLOW])
+    for (const path of planned) expect(empty[path].action, path).toBe('write')
+    expect(guide).toContain(
+      '`setup` creates only this guide: the Lead or the planning session creates each document when they start writing it.',
+    )
+  })
+
+  test('1.4l/documents: documents.md says of each of the six documents what it holds, why it matters, who writes it, when, and suggested headings', () => {
+    expect(Object.keys(parts)).toEqual(DOCUMENTS)
+    for (const name of DOCUMENTS) {
+      for (const label of [
+        '**What it holds.** ',
+        '**Why it matters.** ',
+        '**Who writes it.** The Lead',
+        '**When.** ',
+        '**Suggested headings.**',
+      ]) {
+        expect(parts[name], `${name}: ${label}`).toContain(label)
+      }
+    }
+  })
+
+  test('1.4l/documents: architecture.md holds what design.md held, and design.md is the visual design', () => {
+    expect(parts['architecture.md']).toContain(
+      'the architecture, the directory layout and ownership, and the contracts and mocks',
+    )
+    expect(parts['design.md']).toContain(
+      'the colors, the fonts, the style of components, the tone of the text, and reference images or links',
+    )
+    expect(parts['design.md']).toContain(
+      'The visual tokens (colors, fonts, sizes, spacing) go into shared code in the foundation task, so that every role uses the same ones.',
+    )
+    expect(parts['design.md']).toContain('A project without a user interface skips this file.')
+  })
+
+  test('1.4l/documents: what the skeletons said stays: the owner, the detailed points of contact, the format of epics.md and keys only in non-code.md', () => {
+    expect(guide).toContain('**The Lead owns every document.**')
+    expect(guide).toContain(
+      'The points of contact must be detailed**: types, API, database schema and acceptance criteria.',
+    )
+    expect(parts['spec.md']).toContain(
+      'The points of contact between the roles, in detail: types, API, database schema and acceptance criteria.',
+    )
+    expect(parts['spec.md']).toContain('Parallel work depends on it.')
+    expect(parts['epics.md']).toContain(
+      'One level 2 heading per epic, then a line `Role: <ownership role>`, then free text.',
+    )
+    expect(parts['epics.md']).toContain('## Epic name\nRole: workbench\n')
+    expect(parts['epics.md']).toContain('Only the next wave becomes task issues')
+    expect(parts['non-code.md']).toContain(
+      'Name keys only: secret values go into `.env.local`, never into this file.',
+    )
+  })
+
+  test('1.4l/documents: the manual workflow names the six documents and documents.md', () => {
+    const workflow = /** @type {string} */ (empty[MANUAL_WORKFLOW].content)
+    const step = workflow.split('\n').find((line) => line.startsWith('1. **Documents.**')) ?? ''
+    for (const name of [...DOCUMENTS, 'documents.md']) expect(step).toContain(`\`${name}\``)
   })
 })
 
@@ -228,6 +329,13 @@ describe('1.4g/regenerate: what setup --regenerate rewrites in the kept files', 
     expect(changes[1].content).toMatch(
       /^node_modules\/\n\n# hackwin:begin\n[\s\S]*# hackwin:end\n$/,
     )
+  })
+
+  test('no file under docs/hackwin/ is planned, on the Release 1 template or without documents', () => {
+    for (const files of [TEMPLATE, {}]) {
+      const changes = planBlockFiles((path) => files[path] ?? null, INPUT)
+      expect(changes.filter((change) => change.path.startsWith('docs/'))).toEqual([])
+    }
   })
 
   test('a current block is kept, and a write through a link is refused', () => {
