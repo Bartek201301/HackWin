@@ -17,6 +17,19 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Step 1.4k, PreToolUse: the gh api merge that ends at merge, and git push --all (PR #100, issue #97)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/97-pretooluse-gh-api-merge`, created by the integrator from `238d709` after the merge of #95; `lead-55` opened the session for the night, beside the sessions of #28, #29 and #96. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `1c8cac3`; PR #100 opened at 01:51:20 UTC.
+  - `lead-55` sent `merge #100` with the head SHA by SendMessage, to merge after #99. Its review:
+    - one test file with four new AC63/deny cases: `gh api -X PUT .../pulls/14/merge` with nothing after it, and `git push origin --all`, `--branches` and `--mirror`;
+    - no change in `src`, because the hook already refused them; the session showed that the tests fail with the hook's patterns weakened.
+  - Merged with the procedure of the plan, section 8, after #99. Steps 1 to 5 passed: 1 file inside issue #97's paths; no secret pattern; no conflict with `cac9df8`. Step 6 waited for the load to fall below 15 and started at 3.06 with 2 vitest processes: `npm test` passed 943 of 943, and `npm run test:ac` passed AC63/deny (32). Main had not moved, and the merge was pinned to the head SHA.
+- Problems: the PR's "Workflow notes" say "None".
+- Measured: PR open 10 min 28 s (01:51:20 to 02:01:48 UTC); 1 commit, 1 PR run (144 s), 0 conflicts; local merge test `npm test` 186.22 s; the run on main after the merge 144 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/100; head `1c8cac3`; merge commit `e779d88`; runs `39355728937` (PR) and `39356679641` (main).
+
 ### 2026-10-20 · Phase 1 · Plan 6: the manual check names the undocumented forms; AGENTS.md on Markdown-only tasks (PR #99, issue #98)
 
 - Setup: the integrator did this integrator task itself, at the Lead's request ("#98 is yours"), in its own worktree `task/98-plan-manual-check`, created from `238d709`. It opened the pull request for `lead-55` to review, and merged it only on `merge #99`.
