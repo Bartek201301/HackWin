@@ -2,9 +2,10 @@
 // the guard, the reset and withFixtureRepo, all against the fake GitHub. The same driver runs on
 // real GitHub in fixture-repo.fixture.test.js.
 
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -171,6 +172,52 @@ describe('1.3d/driver: the lock per repository', () => {
     releaseB()
     expect(existsSync(join(dir, 'hackwin-fixture-a.lock'))).toBe(false)
     release()
+  })
+
+  test('a first round slower than the timeout reports the wait before it fails (#119)', async () => {
+    // Run 39415738340: under load on node 24 the ps calls of the first round took longer than
+    // timeoutMs, and acquireLock threw "still locked" without calling onWait. Here ps answers
+    // only after 500 ms, longer than the whole timeout.
+    const real = (process.env.PATH ?? '')
+      .split(':')
+      .map((entry) => join(entry, 'ps'))
+      .find((file) => existsSync(file))
+    if (!real) throw new Error('no ps on PATH')
+    const started = processStart(process.ppid)
+    expect(started).not.toBeNull()
+    const slow = tempDir()
+    writeFileSync(join(slow, 'ps'), `#!/bin/sh\nsleep 0.5\nexec '${real}' "$@"\n`)
+    chmodSync(join(slow, 'ps'), 0o755)
+
+    const dir = tempDir()
+    mkdirSync(join(dir, 'hackwin-fixture-b.lock'))
+    const holder = {
+      pid: process.ppid,
+      host: hostname(),
+      cwd: '/elsewhere',
+      since: '2026-10-20T11:00:00Z',
+      started: new Date(/** @type {number} */ (started)).toISOString(),
+    }
+    writeFileSync(join(dir, 'hackwin-fixture-b.lock', 'holder.json'), JSON.stringify(holder))
+    vi.stubEnv('PATH', `${slow}:${process.env.PATH}`)
+    try {
+      /** @type {unknown[]} */
+      const waits = []
+      const begin = Date.now()
+      await expect(
+        acquireLock('hackwin-fixture-b', {
+          dir,
+          timeoutMs: 300,
+          pollMs: 50,
+          onWait: (who) => waits.push(who),
+        }),
+      ).rejects.toThrow(new RegExp(`still locked .* by process ${process.ppid} `))
+      expect(waits).toEqual([holder])
+      // ps was slow indeed: ownStart() and the check of the holder each waited for it.
+      expect(Date.now() - begin).toBeGreaterThanOrEqual(1000)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   test('a lock whose holder process is gone is taken over', async () => {
