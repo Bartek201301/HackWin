@@ -71,6 +71,75 @@ describe('1.3a/git: git helpers on a temporary repository', () => {
     expect(error.exitCode).toBe(3)
   })
 
+  test('two fetches in one clone right after origin moved both succeed, as the Gate and a command of the Lead run them (#136)', async () => {
+    // Run 39494892687: right after a merge, the Gate and a test fetched in the same checkout,
+    // and the fetch that updated refs/remotes/origin/main second failed.
+    const other = join(repo.dir, 'other')
+    repo.git(repo.dir, 'clone', '--quiet', repo.origin, other)
+    const second = createGit({ cwd: repo.clone, env: repo.env })
+    for (let round = 1; round <= 5; round++) {
+      commit(other, { 'round.txt': `${round}\n` }, `round ${round}`)
+      repo.git(other, 'push', '--quiet', 'origin', 'main')
+      await Promise.all([git.fetch(), second.fetch()])
+      expect(await git.revParse('origin/main')).toBe(
+        repo.git(repo.origin, 'rev-parse', 'main').trim(),
+      )
+    }
+  })
+
+  test('fetch tries again only when another process updated the same ref, in the words of git 2.53 and 2.55 (#136)', async () => {
+    const real = (repo.env.PATH ?? '')
+      .split(':')
+      .map((entry) => join(entry, 'git'))
+      .find((file) => existsSync(file))
+    if (!real) throw new Error('no git on PATH')
+    const bin = join(repo.dir, 'bin')
+    const count = join(repo.dir, 'fetches')
+    /**
+     * A fetch with a git on PATH whose first `failures` fetches fail with `message`.
+     * @param {string} message
+     * @param {number} failures
+     */
+    async function fetchFailing(message, failures) {
+      repo.write(count, '0\n')
+      repo.write(
+        join(bin, 'git'),
+        `#!/bin/sh\nfor arg in "$@"; do\n  if [ "$arg" = fetch ]; then\n    n=$(($(cat '${count}') + 1))\n    echo $n > '${count}'\n    if [ $n -le ${failures} ]; then echo "${message}" >&2; exit 1; fi\n  fi\ndone\nexec '${real}' "$@"\n`,
+      )
+      chmodSync(join(bin, 'git'), 0o755)
+      const env = { ...repo.env, PATH: `${bin}:${repo.env.PATH}` }
+      const error = await createGit({ cwd: repo.clone, env })
+        .fetch()
+        .then(
+          () => null,
+          (e) => e,
+        )
+      return { error, tries: Number(readFileSync(count, 'utf8')) }
+    }
+
+    const races = [
+      // git 2.53, and git 2.55 when the ref backend gives no details.
+      'error: fetching ref refs/remotes/origin/main failed: incorrect old value provided',
+      // git 2.55, files and reftable backends.
+      "error: cannot lock ref 'refs/remotes/origin/main': is at ac63d60ea7e4b2711edd1484c77877ebf0388bbf but expected 6f1ad2f4d6917a687d56de561e7ad38888a165d2",
+    ]
+    for (const message of races) {
+      expect(await fetchFailing(message, 1)).toEqual({ error: null, tries: 2 })
+      const always = await fetchFailing(message, 99)
+      expect(always.tries).toBe(3)
+      expect(always.error).toBeInstanceOf(RemoteError)
+      expect(always.error.message).toContain(message)
+    }
+    for (const message of [
+      "fatal: 'nowhere' does not appear to be a git repository",
+      "error: cannot lock ref 'refs/remotes/origin/a': 'refs/remotes/origin/a/b' exists; cannot create 'refs/remotes/origin/a'",
+    ]) {
+      const other = await fetchFailing(message, 99)
+      expect(other.tries).toBe(1)
+      expect(other.error).toBeInstanceOf(RemoteError)
+    }
+  })
+
   test('push sends a branch to the remote', async () => {
     repo.git(repo.clone, 'checkout', '--quiet', '-b', 'task/1-push')
     const head = commit(repo.clone, { 'p.txt': 'p\n' }, 'push me')
