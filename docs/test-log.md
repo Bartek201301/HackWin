@@ -17,6 +17,35 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Fix of a red main: the offline Gates of the release scenarios keep the laptop awake through a stand-in (PR #117, issue #116)
+
+- Setup: the integrator made this fix itself, at the Lead's request and before any other merge, in its own worktree `task/116-release-stub-keep-awake`, created from `d7a7c54`. `lead-55` reviewed it and sent the merge. The same request had the integrator open #115 (lane C) for #28's finding.
+- What happened:
+  - Run `39409976798` on main after the merge of PR #107 failed on `node 24`, as that entry says. The Lead asked for a deterministic fix rather than a filter of the warning line, and no diagnostic rerun. The integrator opened #116 at 10:49:02 UTC.
+  - The Gate starts its keep awake with `process.env`, not with the scene's environment (`src/commands/gate/gate.js:182`). So `release.test.js` now puts stand-ins first on `PATH` with `vi.stubEnv` for the file. The stand-ins, `stubKeepAwake` in `scene.js`, are a `caffeinate` and a `systemd-inhibit` that note their arguments, run while the watched process lives, and exit 0 on TERM.
+  - The two exact comparisons of the Gate's stderr stay exact. A new test, `1.7d/keep-awake`, checks that `startKeepAwake` starts the stand-in, which stays active and ends on `stop()` without `onLost`.
+  - The other offline tests that run the Gate through `main` (lane C's `gate.test.js`) compare its stderr with `toContain`, so the extra line cannot fail them.
+  - **The race, shown on macOS.** A `caffeinate` that printed "Access denied" and exited 1 was put first on `PATH`.
+    - `startKeepAwake` returned after 5 ms, and `onLost` came after 11 ms.
+    - A copy of main's test file with a 300 ms pause failed with the extra warning line, and the same copy of the fixed file passed.
+    - Without the pause, main's copy passed once.
+  - A hand test of the `systemd-inhibit` stand-in on macOS was refused by the session's safety check, because the command passed an `sh -c` script. CI on Linux ran it instead: `1.7d/keep-awake` passed on `node 22` and `node 24`.
+  - One commit, `95a9a1b`; PR #117 opened at 11:11:16 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 2 files inside issue #116's path; no secret pattern; no dash; no conflict with `d7a7c54`.
+    - Step 6, with the PR merged into `d7a7c54`, which the branch already held: `npm test` passed 973 of 973 at a load average of 9.55, with 5 vitest processes of other sessions. `HACKWIN_TEST_PRERELEASE=1 npm run test:ac -- AC77 1.7d/keep-awake` passed AC77 10 and 1.7d/keep-awake 1, from 11:17:44 to 11:23:22 UTC, live on `hackwin-fixture-c`.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39414626318`, succeeded.
+- Problems:
+  - The race reached main because the 8 Node jobs of PR #107's 4 runs had passed it; no PR check caught it.
+  - Before the PR, the first `npm test` failed one lane A test by its 30 s timeout: `setup/finish.test.js`, "1.4f/invitations: in a terminal ...". The load average was 14.91, with 13 vitest processes of other sessions. The rerun passed.
+  - The Lead's review note: the `systemd-inhibit` stand-in runs its child in the foreground, so its TERM trap waits for that child. The integrator's reading, not observed on Linux: `stop()` signals the whole process group, the child included, so the stand-in does not linger after `stop()`. Without `stop()`, it lives until the watched process ends, as the real command does.
+- Measured:
+  - From the failed run on main to the green one: 40 min (10:46:11 to 11:26:09 UTC). PR open 12 min 20 s (11:11:16 to 11:23:36 UTC).
+  - 1 commit, 1 PR run (151 s), 0 conflicts.
+  - Local merge test: `npm test` 157.67 s and `test:ac` 337.97 s. The run on main after the merge took 150 s.
+- Evidence: issue #116; PR https://github.com/Bartek201301/HackWin/pull/117; head `95a9a1b`; merge commit `943722e`; runs `39413170481` (PR), `39409976798` (main, failed before) and `39414626318` (main, green).
+
 ### 2026-10-20 · Phase 1 · Integration 1.7d: the version rule and a bug fix release, live with the first pre-releases (PR #107, issue #29)
 
 - Setup: a builder session in worktree `task/29-integration-version-release`, role integrator. Its live scenarios ran on `hackwin-fixture-c` as the Lead only, with no builder token. `lead-55` reviewed the PR, with a review subagent, and sent the merge.
