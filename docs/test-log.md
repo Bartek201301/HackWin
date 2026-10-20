@@ -17,6 +17,36 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Incident and fix: a live scenario wrote to the build repository; the harness guard (PR #108, issue #106)
+
+- Setup: the integrator did this task itself, at the Lead's request and as a priority before any more live runs, in its own worktree `task/106-harness-guard-fixture-only`, created from `e589df5`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - **The incident.** At 02:01 and 02:08 UTC a live AC14 scenario of #28 created four issues in the build repository `Bartek201301/HackWin`: #102 to #105, "Counter reset", each with a `# hackwin:task` block of role `counter`.
+    - The scenario had made its client with `createGitHub({ executor })` and no repository, so the client set no `GH_REPO`, and gh filled `repos/{owner}/{repo}` from the git remote of its worktree.
+    - The guard in `test/harness/guard.js` let it through: it refused another repository only when `GH_REPO` or an explicit `repos/<owner>/<name>` named one.
+    - `lead-55` found it and told #28 and #29 to hold all live runs.
+  - **Containment.** The integrator closed #102 to #105 as not planned, each with a one-line comment, and deleted nothing. Since 01:50 UTC there was no other issue, no pull request but #100 and #101, no new label, and no branch but `main` and `log/next`.
+  - **The fix.** The integrator found four more gaps of the same kind:
+    - subcommands such as `gh issue create` without `-R` or `GH_REPO`;
+    - `-R`/`--repo`, which the guard never read;
+    - full `https://api.github.com/repos/...` URLs;
+    - GraphQL `owner` and `name` fields.
+    
+    The guard now lets a call through only when the repository it acts on is known to be the fixture repository, refuses a write outside `repos/` other than `graphql`, never lets a call reach `Bartek201301/HackWin` (`BUILD_REPO`), and lets nothing through for a repository that is not a fixture repository. Contracts 6.4 records the rule.
+  - Seven new offline tests under 1.3d/driver reproduce the incident, including the same client the scenario used; six of them fail against the old guard. A live run of the setup scenarios through the new guard on `hackwin-fixture-a` and `hackwin-fixture-private` passed 26 of 26, with no refusal.
+  - One commit, `9ccd512`; PR #108 opened at 02:30:46 UTC. `lead-55` reviewed the diff and sent `merge #108` with the head SHA by SendMessage.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 3 files inside issue #106's paths; no secret pattern; no dash; no conflict with `e589df5`. Step 6, with the PR merged into `e589df5` at a load average of 1.83 and no other vitest process: `npm test` passed 950 of 950, and `npm run test:ac` passed 1.3d/driver (27). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge, `lead-55` was told that #28 and #29 may run live again once they merge `origin/main`.
+- Problems:
+  - The guard's rule for another repository relied on `GH_REPO` being set; a client without a repository bypassed it, and four issues reached the build repository before anyone noticed.
+  - Residual gaps from the Lead's review, kept for a later change:
+    - a GraphQL mutation by node id, or with variables not named `owner` and `name`, passes (the reset needs `unpinIssue` by id);
+    - `-XPOST` or `--method=POST` written as one argument reads as GET when no field is given, outside `repos/`;
+    - `gh repo create <name>` and `gh gist create` pass when `GH_REPO` is the fixture repository.
+  - `npx prettier` ran once before `npm ci` in the worktree and fetched a separate Prettier (3.9.10); the files were formatted again with the project's 3.9.9, which left them unchanged.
+- Measured: from the first issue of the incident (02:01:26 UTC) to the merge of the fix (02:36:49 UTC), 35 min 23 s. PR open 6 min 3 s (02:30:46 to 02:36:49 UTC); 1 commit, 1 PR run (141 s), 0 conflicts; local merge test `npm test` 165.00 s; the run on main after the merge 146 s.
+- Evidence: issues #102 to #105 (closed); issue #106; PR https://github.com/Bartek201301/HackWin/pull/108; head `9ccd512`; merge commit `dec9eaa`; runs `39359319496` (PR) and `39359868013` (main).
+
 ### 2026-10-20 · Phase 1 · Verification row 2: the deny patterns of PR #95 (PR #101, issue #96)
 
 - Setup: one builder session of lane B (Claude Code) in the worktree `task/96-verification-deny-patterns`, created by the integrator from `238d709` after the merge of #95; `lead-55` opened the session for the night. The integrator's planning session for the merge.
