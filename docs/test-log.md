@@ -17,6 +17,38 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Integration 1.7b: enforcement across the layers (PR #118, issue #27)
+
+- Setup: a builder session in worktree `task/27-integration-enforcement-layers`, created by the integrator from `531b782`, role integrator. Its live scenarios ran on `hackwin-fixture-private` and on a public fixture, as the Lead and as builder1, with the builder token that the human set for that session. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - The scenarios check enforcement at each layer: AC47, AC54, AC63 (its deny part against a model of the documented matching), AC70 (against the fake GitHub), AC80 (the team's own push protection pattern), and an outsider who is builder1 under a team of 1 (`1.7b/outsider`).
+  - Commits: `f94b35a` (the scenarios) and `4295a01`, the Lead's review:
+    - the bypassable rule set is removed in a `finally`;
+    - the Gates stop on every path;
+    - a null push protection setting refuses;
+    - the status code and `protectionAfter` are asserted.
+    
+    Plus two merges of main. PR #118 opened at 11:23:12 UTC.
+  - Merged last of wave 3, after #109, with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 7 files inside issue #27's path; no secret pattern, and no Keychain or token read in the added lines; no dash; no conflict with `0891f8f`.
+    - Step 6 merged the PR into `0891f8f` (`05ea45a`). `npm test` passed 1002 of 1002, from 16:38:50 to 16:40:38 UTC.
+    - The live part needs the builder token. As for #114, the human ran the one-line command with `!` in the integrator's terminal, with the output to a file. `npm run test:ac -- AC47 AC54 AC63 AC70 AC80 1.7b/outsider` ran from 17:07:08 to 17:16:08 UTC and passed AC47 4, AC54 10, AC63 39, AC70 2, AC80 12 and 1.7b/outsider 1. This time AC80 included lane A's `setup.fixture.test.js` on `hackwin-fixture-a`, which the PR's own run had left out while #26 held that fixture. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39464644320`, succeeded. With it, all four integration tasks of wave 3 (#26 to #29) are on main.
+- Problems, from the PR's workflow notes:
+  - `GitHub.run` throws on any non-zero exit, so a live test that needs GitHub's refusal as a result has to call the guarded executor. That cost one live run, about 5 minutes.
+  - `npm run test:ac -- AC80` also selects lane A's live AC80 tests, one of them on `hackwin-fixture-a`.
+  - The public scenario moved from `hackwin-fixture-c` (locked by #29) to `hackwin-fixture-b`, and its final run waited about 8 minutes for #28's lock there.
+  - The laptop slept from about 12:07 to 12:17 UTC during a live run. setup's rule set call timed out across the sleep, and the rerun failed in a network outage. The rerun at 16:08 UTC passed; no code changed for these.
+  - One assertion expected the plural wording of CI's scope failure and failed once.
+  - Remaining, in the PR:
+    - the deny part of AC63 in a real Claude Code session stays with the manual check;
+    - AC70 runs offline only;
+    - no second live builder;
+    - a fixture keeps what a scenario left until the next reset.
+- Measured: PR open 5 h 53 min 19 s (11:23:12 to 17:16:31 UTC), most of it in the queue behind #120, #121, #114 and #109 and the sleep of the laptop; 2 commits and 2 merges of main, 2 PR runs (151 s, 140 s), 0 conflicts. Local merge test: `npm test` 105.78 s, `test:ac` 539.64 s. The run on main after the merge took 160 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/118; head `9403154`; merge commit `b9ea356`; runs `39414583358` and `39416707577` (PR) and `39464644320` (main).
+
 ### 2026-10-20 · Phase 1 · Integration 1.7c: terminal and wrapper parity, solo mode and the command set (PR #109, issue #28)
 
 - Setup: a builder session in worktree `task/28-integration-parity-solo`, role integrator. Its live scenarios ran on `hackwin-fixture-b` as the Lead only. `lead-55` reviewed the PR and sent the merge.
