@@ -2,6 +2,7 @@
 // call without a helper here uses Git#run.
 
 import { resolve as resolvePath } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { GitError, PreconditionError, RemoteError } from '../runtime/errors.js'
 import { exec } from '../runtime/exec.js'
 
@@ -12,6 +13,22 @@ export const MERGE_TREE_MIN_VERSION = Object.freeze({ major: 2, minor: 38, patch
 
 /** Where hooks are looked up when member hooks are switched off: no hook exists there. */
 const NO_HOOKS_PATH = '/dev/null'
+
+/**
+ * Git's words when a fetch read a ref and another process changed it before the fetch wrote it,
+ * the check of `REF_TRANSACTION_ERROR_INCORRECT_OLD_VALUE` (refs.c): `fetching ref <ref> failed:
+ * incorrect old value provided` in git 2.53, and in 2.55 when the ref backend gives no details;
+ * `cannot lock ref '<ref>': is at <oid> but expected <oid>` in git 2.55, from the files and the
+ * reftable backend. Other `cannot lock ref` failures, such as a name conflict, are not races.
+ */
+const REF_RACE = [
+  /fetching ref \S+ failed: incorrect old value provided/,
+  /cannot lock ref '[^']+': is at [0-9a-f]+ but expected [0-9a-f]+/,
+]
+
+/** How many times `fetch` tries when it lost a REF_RACE, and the wait before the second try. */
+const FETCH_TRIES = 3
+const FETCH_RETRY_WAIT_MS = 100
 
 /**
  * @typedef {object} GitOptions
@@ -233,6 +250,10 @@ export class Git {
 
   /**
    * Fetch from a remote. Throws RemoteError when the fetch fails (exit 3).
+   *
+   * A fetch that git refused because another process in the same clone updated the same ref at
+   * the same moment (REF_RACE) is made again, up to FETCH_TRIES tries: the Gate fetches in the
+   * main checkout while the Lead's commands and sessions fetch in the same clone (#136).
    * @param {object} [options]
    * @param {string} [options.remote]
    * @param {string[]} [options.refspecs] Default: the remote's configured refspecs.
@@ -241,11 +262,16 @@ export class Git {
    */
   async fetch({ remote = 'origin', refspecs = [], prune = false } = {}) {
     const args = ['fetch', '--quiet', ...(prune ? ['--prune'] : []), remote, ...refspecs]
-    const result = await this.run(args, { allowFailure: true })
-    if (result.code !== 0) {
-      throw new RemoteError(`git fetch ${remote} failed${describeFailure(result)}`, {
-        tail: result.tail,
-      })
+    for (let tries = 1; ; tries++) {
+      const result = await this.run(args, { allowFailure: true })
+      if (result.code === 0) return
+      const raced = result.tail.some((line) => REF_RACE.some((words) => words.test(line)))
+      if (result.timedOut || !raced || tries === FETCH_TRIES) {
+        throw new RemoteError(`git fetch ${remote} failed${describeFailure(result)}`, {
+          tail: result.tail,
+        })
+      }
+      await sleep(FETCH_RETRY_WAIT_MS * tries)
     }
   }
 
