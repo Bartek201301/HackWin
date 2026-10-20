@@ -17,6 +17,28 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Harness lock: onWait comes before the timeout, and ps time does not count against it (PR #121, issue #119)
+
+- Setup: the integrator made this fix itself, at the Lead's request, in its own worktree `task/119-lock-wait-before-timeout`, created from `943722e`; PR #109 (#28) waited for it. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - **The failure.** In run `39415738340` of PR #109 (head `3a4fcb8`), `node 24` failed "1.3d/driver: the lock per repository > a second session waits while the first holds the lock ...": 401 ms against `timeoutMs: 300`, and "still locked" without any `onWait`. #28's reading matched the code of PR #110:
+    - the deadline was set before `ownStart()` ran `ps`;
+    - `isAbandoned` asked `ps` for every live holder;
+    - the deadline was checked before `onWait`.
+  - **The fix.** The deadline starts after `ownStart()`, and `onWait` is called once before the first deadline check. `isAbandoned` asks `ps` only for a holder that records `started`. The doc comment of `onWait`, which said "Called once when the lock is taken", now says when it is called.
+  - **The test.** A new test puts a `ps` that answers after 500 ms first on `PATH`. It failed against main's `lock.js` as in CI (`expected [] to deeply equal [ {...} ]`) and passes with the fix. The other lock tests were read for the same race; only the `onWait` assertion of the first test had it.
+  - One commit, `4468cfa`; PR #121 opened at 11:45:15 UTC. `npm test` passed 974 of 974 at a load average of 41.21 with 16 vitest processes of other sessions; `1.3d/driver` passed 33 of 33.
+  - Merged after #120 with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed against `db08d79`: 2 files inside issue #119's path; no secret pattern; no dash; no conflict.
+    - Step 6, with the PR merged into `db08d79`, from 16:07:35 to 16:11:14 UTC, at a load average of 5.09 at the start and no other vitest process: `npm test` passed 978 of 978, and `npm run test:ac -- 1.3d/driver` passed 33.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39455230931`, succeeded.
+- Problems:
+  - The race came with PR #110, whose own runs and merge test passed; it first failed in another PR's run.
+  - Remaining, in the PR: `isAbandoned` returns at `process.kill` for every error, so a process id reused by another user's process (EPERM) keeps a stale lock; a live holder without `started` keeps the lock while its process id lives.
+- Measured: PR open 4 h 26 min 10 s (11:45:15 to 16:11:25 UTC), most of it while the laptop slept (below); 1 commit, 1 PR run (154 s), 0 conflicts; local merge test `npm test` 206.89 s; the run on main after the merge 152 s.
+- Evidence: issue #119; PR https://github.com/Bartek201301/HackWin/pull/121; head `4468cfa`; merge commit `5b6f533`; runs `39415738340` (PR #109, failed), `39417212286` (PR) and `39455230931` (main).
+
 ### 2026-10-20 · Phase 1 · Step 1.6f, status: a closed status issue counts only when the issue itself carries the label (PR #120, issue #115)
 
 - Setup: a lane C session in worktree `task/115-status-closed-issue-label`, created by the integrator from `943722e`, started by `lead-55`. The integrator opened #115 from #28's finding on `hackwin-fixture-b`. `lead-55` reviewed the PR and sent the merge.
