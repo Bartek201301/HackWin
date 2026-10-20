@@ -83,13 +83,18 @@ describe('AC55: the PreToolUse hook in a Claude Code session', () => {
   })
 })
 
-describe('AC63/deny: the PreToolUse hook refuses a merge through gh pr merge and gh api', () => {
+describe('AC63/deny: the PreToolUse hook refuses a merge through gh pr merge and gh api, and a push of every branch', () => {
   test.each([
     ['gh pr merge', 'gh pr merge 14 --merge'],
     ['gh pr merge with flags first', 'gh pr merge --squash --auto 14'],
     [
       'the REST merge endpoint',
       'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge -f merge_method=merge',
+    ],
+    // The form of the deny rule `Bash(gh api *pulls/*/merge)`.
+    [
+      'the REST merge endpoint with nothing after merge',
+      'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge',
     ],
     [
       'the GraphQL mutation',
@@ -125,6 +130,16 @@ describe('AC63/deny: the PreToolUse hook refuses a merge through gh pr merge and
     const result = await run(bashCall(task.path, command))
     expect(denial(result)).toContain('rule: E3: no agent session merges; only the Gate does')
   })
+
+  test.each([['git push origin --all'], ['git push origin --branches'], ['git push --mirror']])(
+    '%s, a push of every branch, is refused',
+    async (command) => {
+      const { task, run } = await builderScene()
+      const reason = denial(await run(bashCall(task.path, command)))
+      expect(reason).toContain('rule: E2: no direct push to main')
+      expect(reason).toContain(`- ${command} in ${task.path}`)
+    },
+  )
 
   test('reading a pull request and naming a merge inside text are not refused', async () => {
     const { task, run } = await builderScene()
