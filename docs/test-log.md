@@ -17,6 +17,28 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Contracts 6.2: which build a live scenario installs, and HACKWIN_TEST_PRERELEASE (PR #126, issue #125)
+
+- Setup: the integrator made this task itself, at the Lead's request after the merge of PR #107, in its own worktree `task/125-contracts-prerelease-build`, created from `6a71272`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - #107 added `HACKWIN_TEST_PRERELEASE`, which the contracts did not list. Section 6.2 now has one bullet on how each live scenario picks the build it installs:
+    - AC77 reads `HACKWIN_TEST_PRERELEASE`;
+    - AC66 and 1.7a check the asset URL of the pinned version first;
+    - 1.7b needs the same release without a check of its own;
+    - the fixtures' CI installs `cli_version` as 10.2 says.
+    
+    It also says what a version bump on main means for these scenarios, and records build 1 from `531b782`. Each statement was checked against the code, and the PR names the file and line for each.
+  - In the same round the integrator opened two tracking issues that the Lead asked for, not started: #123 (integrator: a diff range that is not an object scans nothing) and #124 (lane B: the `|&` separator in verification row 2).
+  - One commit, `b626847`; PR #126 opened at 17:27:52 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 1 file inside issue #125's path; no secret pattern; no dash; no conflict with `6a71272`.
+    - Step 6, with the PR merged into `6a71272` at a load average of 1.43 with no other vitest process: `npm test` passed 1002 of 1002. No `npm run test:ac`, because the task's only criterion is an inspection.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39467098605`, succeeded.
+- Problems: none.
+- Measured: PR open 5 min 24 s (17:27:52 to 17:33:16 UTC); 1 commit, 1 PR run (173 s), 0 conflicts; local merge test `npm test` 103.67 s; the run on main after the merge 160 s.
+- Evidence: issue #125; PR https://github.com/Bartek201301/HackWin/pull/126; head `b626847`; merge commit `fcb569a`; runs `39466296069` (PR) and `39467098605` (main).
+
 ### 2026-10-20 · Phase 1 · Integration 1.7b: enforcement across the layers (PR #118, issue #27)
 
 - Setup: a builder session in worktree `task/27-integration-enforcement-layers`, created by the integrator from `531b782`, role integrator. Its live scenarios ran on `hackwin-fixture-private` and on a public fixture, as the Lead and as builder1, with the builder token that the human stored once in the macOS Keychain; `lead-55`'s start command for the session read it from there without printing it (`lead-55`, at the merge of #122). `lead-55` reviewed the PR and sent the merge.
