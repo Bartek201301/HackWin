@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig } from '../../../src/core/config/index.js'
 import { ownersFromTree, proposeHolders } from '../../../src/commands/setup/ownership.js'
 import { detectStack } from '../../../src/commands/setup/stack.js'
-import { accounts, nodeProjectFiles } from '../../harness/index.js'
+import { accounts, nodeProjectFiles, rawResult } from '../../harness/index.js'
 import {
   LEAD,
   createSetupFixture,
@@ -247,6 +247,8 @@ describe('1.4d/ownership: the proposal of step 4', () => {
       '2026-10-24T09:00:00+02:00',
       '2026-10-25T15:00:00+02:00',
       '',
+      '', // answer language of join: the project language
+      '', // explanation style of join: concise
     ]
     const result = await runSetup(fixture, fake, { tty: true, input })
     expect(result.stderr).not.toContain('hackwin setup:')
@@ -366,13 +368,11 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
     expect(await fixture.git.isClean()).toBe(true)
   })
 
-  test('1.4d/preconditions: setup --resume and --regenerate are not built yet', async () => {
+  test('1.4d/preconditions: setup --regenerate is not built yet', async () => {
     const { fixture, fake } = await createSetupFixture()
-    for (const flag of ['--resume', '--regenerate']) {
-      const result = await runSetup(fixture, fake, { args: [flag] })
-      expect(result.code).toBe(2)
-      expect(result.stderr).toContain(`setup ${flag} is not built yet`)
-    }
+    const result = await runSetup(fixture, fake, { args: ['--regenerate'] })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('setup --regenerate is not built yet')
   })
 
   test('1.4d/preconditions: a private repository is reported and left as it is', async () => {
@@ -382,6 +382,110 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
     const json = JSON.parse(result.stdout)
     expect(json.data.visibility).toBe('private')
     expect(result.stderr).toContain('hackwin-test/app is private; setup does not change that')
+    expect(fake.state.visibility).toBe('private')
+    const changes = writes(fake).filter((call) => call.endpoint === 'repos/{owner}/{repo}')
+    expect(changes.map((call) => Object.keys(call.body))).toEqual([['security_and_analysis']])
+  })
+})
+
+/** An HTTPS URL that git cannot reach: a push to it fails at once and sends nothing. */
+const UNREACHABLE = 'https://127.0.0.1:1/hackwin-test/app.git'
+
+/**
+ * Make git push origin over HTTPS, to UNREACHABLE, while it still fetches from the fixture's bare
+ * origin; and set git's credential helper.
+ * @param {import('../../harness/index.js').Fixture} fixture
+ * @param {string} helper
+ */
+async function httpsPush(fixture, helper) {
+  await fixture.git.run(['config', 'remote.origin.pushurl', UNREACHABLE])
+  await fixture.git.run(['config', 'credential.helper', helper])
+}
+
+/**
+ * Answer `gh api -i user` with the headers GitHub sends, the scopes among them when given.
+ * @param {import('../../harness/index.js').FakeGitHub} fake
+ * @param {string | null} scopes The value of X-Oauth-Scopes, or null for no such header.
+ */
+function serveScopes(fake, scopes) {
+  fake.on('GET user', ({ args, login }) => {
+    const user = { login, id: 1, type: 'User' }
+    if (!args.includes('-i')) return user
+    const headers = ['HTTP/2.0 200 OK', 'Content-Type: application/json; charset=utf-8']
+    if (scopes !== null) headers.push(`X-Oauth-Scopes: ${scopes}`)
+    return rawResult({ stdout: `${headers.join('\r\n')}\r\n\r\n${JSON.stringify(user)}` })
+  })
+}
+
+/** @param {import('../../harness/index.js').FakeGitHub} fake */
+function scopeReads(fake) {
+  return fake.calls.filter((call) => call.args.join(' ') === 'api -i user')
+}
+
+describe('1.4f/preconditions: the workflow scope of the gh login that git pushes with', () => {
+  test('1.4f/preconditions: a gh token without the workflow scope stops setup at step 1 with exit 2 and the fix, before any question or change', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    await httpsPush(fixture, '!gh auth git-credential')
+    serveScopes(fake, 'gist, read:org, repo')
+    const before = snapshot(fixture.main)
+    const head = await fixture.git.revParse('HEAD')
+    // In a terminal without input: setup stops before its first question.
+    const result = await runSetup(fixture, fake, { tty: true, input: [] })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      'gh is logged in without the workflow scope (its scopes: gist, read:org, repo), and git pushes with its token: GitHub refuses a push that creates a workflow file without that scope, and the bootstrap commit creates .github/workflows/hackwin.yml',
+    )
+    expect(result.stderr).toContain(
+      `to resolve: run \`gh auth refresh -s workflow\` in any directory, then run \`hackwin setup\` in ${fixture.main}`,
+    )
+    expect(result.stdout).not.toContain('How many people')
+    expect(snapshot(fixture.main)).toEqual(before)
+    expect(await fixture.git.revParse('HEAD')).toBe(head)
     expect(writes(fake)).toEqual([])
+  })
+
+  test('1.4f/preconditions: with the workflow scope, or where the scopes are unknown (no header, or an empty one), step 1 lets setup go on to its push', async () => {
+    for (const scopes of ['gist, read:org, repo, workflow', null, '', ' ']) {
+      const { fixture, fake } = await createSetupFixture()
+      await httpsPush(fixture, '!/opt/homebrew/bin/gh auth git-credential')
+      serveScopes(fake, scopes)
+      const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+      const name = JSON.stringify(scopes)
+      expect(scopeReads(fake), name).toHaveLength(1)
+      expect(result.stderr, name).not.toContain('gh is logged in without the workflow scope')
+      // Step 9 pushes to the unreachable URL: setup got past step 1.
+      expect(result.code, name).toBe(3)
+      expect(result.stderr, name).toContain(`git push origin`)
+      expect(writes(fake), name).toEqual([])
+    }
+  })
+
+  test('1.4f/preconditions: the check goes by the URL git really pushes to, with insteadOf applied', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    // origin names GitHub over HTTPS, but git fetches from and pushes to the bare origin.
+    const url = 'https://github.com/hackwin-test/app.git'
+    await fixture.git.run(['config', `url.${fixture.origin}.insteadOf`, url])
+    await fixture.git.run(['remote', 'set-url', 'origin', url])
+    await fixture.git.run(['config', 'credential.helper', '!gh auth git-credential'])
+    serveScopes(fake, 'repo')
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(result.code).toBe(0)
+    expect(scopeReads(fake)).toEqual([])
+  })
+
+  test('1.4f/preconditions: where git pushes with another credential, the scopes of gh are not read', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    await httpsPush(fixture, 'osxkeychain')
+    serveScopes(fake, 'repo')
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
+    expect(scopeReads(fake)).toEqual([])
+    expect(result.code).toBe(3)
+    expect(result.stderr).toContain('git push origin')
+
+    const local = await createSetupFixture()
+    serveScopes(local.fake, 'repo')
+    const localRun = await runSetup(local.fixture, local.fake, { answers: teamAnswers(3) })
+    expect(localRun.code).toBe(0)
+    expect(scopeReads(local.fake)).toEqual([])
   })
 })
