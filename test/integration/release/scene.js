@@ -374,6 +374,34 @@ export function installStep(workflow) {
 }
 
 /**
+ * Stand-ins for the commands that keep the laptop awake (src/commands/gate/awake.js), for the
+ * front of PATH while a Gate runs in this process. Each notes its arguments in `started` and runs
+ * while the process it watches lives, as the real command does, or until it is killed, and then
+ * exits 0. It holds no sleep lock and never fails. With the real command, `systemd-inhibit` on a
+ * GitHub runner exits with "Access denied", and the Gate's warning about it races the exact
+ * comparisons of its stderr (#116).
+ * @param {string} dir A directory that does not exist yet.
+ * @returns {{ bin: string, started: string }} `bin` for PATH; `started` the file of the notes.
+ */
+export function stubKeepAwake(dir) {
+  mkdirSync(dir)
+  const started = join(dir, 'started')
+  const note = (/** @type {string} */ name) =>
+    `#!/bin/sh\necho "${name} $*" >> '${started}'\ntrap 'exit 0' TERM\n`
+  // caffeinate -i -w <pid>
+  writeScript(
+    join(dir, 'caffeinate'),
+    `${note('caffeinate')}while [ $# -gt 0 ]; do\n  if [ "$1" = -w ]; then pid=$2; fi\n  shift\ndone\nwhile kill -0 "$pid" 2>/dev/null; do sleep 1; done\n`,
+  )
+  // systemd-inhibit --what=... --who=... --why=... --mode=block <command that watches the pid>
+  writeScript(
+    join(dir, 'systemd-inhibit'),
+    `${note('systemd-inhibit')}while [ $# -gt 0 ] && [ "\${1#--}" != "$1" ]; do shift; done\n"$@"\n`,
+  )
+  return { bin: dir, started }
+}
+
+/**
  * @param {string} file
  * @param {string} text
  */
