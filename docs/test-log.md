@@ -17,6 +17,41 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Integration 1.7c: terminal and wrapper parity, solo mode and the command set (PR #109, issue #28)
+
+- Setup: a builder session in worktree `task/28-integration-parity-solo`, role integrator. Its live scenarios ran on `hackwin-fixture-b` as the Lead only. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - The scenarios compare each command run in a terminal with the same command through its wrapper (AC14), run solo mode (AC66) and the command set (AC67). Hooks are tested by feeding recorded PreToolUse events, for every wrapper line, in the main checkout and in a worktree.
+  - **The incident of #106 started here.** The first two live AC14 runs created #102 to #105 in this repository, at 02:01 and 02:08 UTC, because the scenario's own client had no repository. The session saw it in the run log at about 02:09 UTC and reported it to the Lead. Its own client now names the fixture repository and refuses any call without that `GH_REPO`. Live runs waited for #108.
+  - The first live run after #108 found a bug of the session's gh bridge: without `allowHalfOpen`, a wrapper's first gh call got no answer when real gh took about 0.4 s. An offline test now uses a 0.5 s executor.
+  - A live AC14 after a live AC66 on the same fixture failed at the comparison of `status`, for two causes.
+    - Both calls ran in one clone, so the second showed the digest only since the first; the scenario now starts both from the same record.
+    - GitHub's label filter still returned the old closed status issue after the reset. This became #115 (PR #120).
+  - Commits: `6527631` (the scenarios), `6710243`, `25cab9c`, `aa097f2`, and `6089468` (the Lead's review: hook events for the wrappers, a lint-clean check file, `status`'s stderr compared), with six merges of main. PR #109 opened at 02:32:01 UTC.
+  - Two PR runs failed on races of other tasks, both fixed by the integrator before this merge:
+    - `39410891928` on `a3d0e11`: the keep awake race of `release.test.js` (#116, PR #117);
+    - `39415738340` on `3a4fcb8`: the lock race of `fixture-repo.test.js` (#119, PR #121).
+    
+    The run on the final head, `39456323550`, passed.
+  - Merged after #114 with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 9 files inside issue #28's path; no secret pattern; no dash; no conflict with `3b5aeef`.
+    - Step 6 merged the PR into `3b5aeef`, at a load average of 1.40 with no other vitest process. `npm test` passed 999 of 999. `npm run test:ac -- AC14 AC66 AC67 AC58/wrapper 1.7c/repository` passed AC14 5, AC66 2, AC67 3, AC58/wrapper 1 and 1.7c/repository 3, from 16:29:40 to 16:38:16 UTC, live on `hackwin-fixture-b`. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39459247546`, succeeded.
+- Problems, from the PR's workflow notes:
+  - The incident above cost about 15 minutes, and the bridge bug about 10.
+  - The session's first reading of the incident's log, GitHub's read-after-write lag, was wrong and was corrected in `6710243`.
+  - A scenario that puts its own `gh` first on `PATH` has to name the real gh in the git credential helper (`withRealGhHelper`).
+  - The issue and the plan did not say that the live AC66 needs a pre-release; the session found it in `src/generate/workflow.js`.
+  - The `status` comparison failure cost about 15 minutes.
+  - A clamshell sleep during `npm test` (11:46 to 12:12 local time) cost about 30 minutes; the run after the wake passed.
+  - The Lead's review found that the first version fed no recorded hook events, as the issue asks.
+  - Another session's scenario ran on the same fixture between this session's runs; the lock kept them apart.
+  - `npm test` failed once at a load average of 17 by the timeout of `1.4f/invitations`, as on #116.
+  - The first solo test typed `quit` before the run's digest line.
+- Measured: PR open 14 h 6 min 33 s (02:32:01 to 16:38:34 UTC), with waits for #108, the pre-releases, #117, #121 and #114, and the sleeps of the laptop; 5 commits and 6 merges of main; 6 PR runs, 2 of them failed on other tasks' races; 0 conflicts. Local merge test: `npm test` 116.59 s, `test:ac` 515.82 s. The run on main after the merge took 166 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/109; head `18e8bdc`; merge commit `0891f8f`; runs `39359434761`, `39361632208`, `39408371912`, `39410891928`, `39415738340` and `39456323550` (PR) and `39459247546` (main); incident issues #102 to #105.
+
 ### 2026-10-20 · Phase 1 · Integration 1.7a: from a task written by hand to its merge, and the task link failures (PR #114, issue #26)
 
 - Setup: a builder session in worktree `task/26-integration-take-to-merge`, role integrator. The live scenarios ran on `hackwin-fixture-a` as the Lead and as builder1 (`test-bot-builder`), with the builder token that the human set for that session. `lead-55` reviewed the PR and sent the merge.
