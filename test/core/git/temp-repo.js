@@ -14,9 +14,11 @@ export function createScratch() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hackwin-test-')))
   const home = join(dir, 'home')
   mkdirSync(home)
+  // No automatic maintenance: its detached repack after a push can delete the origin's loose
+  // objects while a local clone copies them (#129, test/harness/fixture.js).
   writeFileSync(
     join(home, '.gitconfig'),
-    '[user]\n\tname = HackWin Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n',
+    '[user]\n\tname = HackWin Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n[maintenance]\n\tauto = false\n',
   )
   /** @type {Record<string, string | undefined>} */
   const env = {}
