@@ -12,6 +12,7 @@ import {
   TEMPLATE_CHECK_WORKFLOW_PATH,
   WORKFLOW_PATH,
   denyRules,
+  planProjectFiles,
   staleGeneratedFiles,
 } from '../../../src/generate/index.js'
 import { COMMANDS } from '../../../src/cli/registry.js'
@@ -347,7 +348,7 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     expect(writes(fake)).toEqual([])
   })
 
-  test('AC6/files: on a repository from the template, setup keeps the team lines, replaces its own blocks and the generated files, and removes the unchanged check.yml', async () => {
+  test('AC6/files: on a repository from the template, setup keeps the team lines and the documents, replaces its own blocks and the generated files, adds documents.md and removes the unchanged check.yml', async () => {
     const template = nodeProjectFiles()
     const ownRule = '- Team rule: every component has a story.\n'
     const changedSkill = `${template['.claude/skills/research/SKILL.md']}\nOur own addition.\n`
@@ -388,7 +389,7 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     expect(agents).not.toContain('Only the Lead merges.')
     expect(agents.match(/hackwin:begin/g)).toHaveLength(1)
 
-    // Files whose block is already HackWin's, the research files and the documents stay.
+    // Files whose block is already HackWin's and the research files stay.
     const unchanged = [
       'CLAUDE.md',
       '.github/pull_request_template.md',
@@ -398,14 +399,34 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
       '.claude/skills/research/SKILL.md',
       '.agents/skills/research/SKILL.md',
       '.claude/agents/research.md',
-      'docs/hackwin/prd.md',
-      'docs/hackwin/manual-workflow.md',
       'owners.yml',
     ]
     for (const path of unchanged) expect(changed.map((file) => file.path)).not.toContain(path)
     expect(read('.claude/skills/research/SKILL.md')).toBe(changedSkill)
-    expect(read('docs/hackwin/prd.md')).toBe(changedPrd)
     expect(read('owners.yml')).toBe(template['owners.yml'])
+
+    // The documents and guides of the template stay byte for byte; the guide to the documents is added.
+    const documents = [
+      'prd',
+      'spec',
+      'design',
+      'epics',
+      'non-code',
+      'before-the-event',
+      'manual-workflow',
+    ].map((name) => `docs/hackwin/${name}.md`)
+    for (const path of documents) {
+      expect(changed.map((file) => file.path)).not.toContain(path)
+      expect(read(path), path).toBe(path === 'docs/hackwin/prd.md' ? changedPrd : template[path])
+    }
+    const guide = 'docs/hackwin/documents.md'
+    expect(template[guide]).toBeUndefined()
+    expect(changed).toContainEqual({ status: 'A', path: guide })
+    expect(read(guide)).toBe(
+      planProjectFiles(() => null, { defaultBranch: 'main', language: 'en' }).find(
+        (change) => change.path === guide,
+      )?.content,
+    )
 
     // The generated files are overwritten; the settings keep the template's rules.
     expect(await staleGeneratedFiles(fixture.main, { version: VERSION })).toEqual([])

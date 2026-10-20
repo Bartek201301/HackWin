@@ -1,11 +1,14 @@
 // The committed files of 6.4 that belong to the team or the Lead, as opposed to the generated
 // files of the manifest: `AGENTS.md`, `CLAUDE.md`, the pull request and task issue templates,
-// `.gitignore` and `.env.example`, the documents under `docs/hackwin/`, the research skill and
+// `.gitignore` and `.env.example`, the guides under `docs/hackwin/`, the research skill and
 // subagent, and the template's own CI workflow. `setup` treats an existing copy as 6.5 says: it
-// adds or replaces only its own block, creates a missing document, keeps the research files, and
+// adds or replaces only its own block, creates a missing guide, keeps the research files, and
 // removes the template's `check.yml` when the team has not changed it. The texts are those of
 // Release 1 (the hackwin-template repository, 20.1), kept under `templates/`; the `hackwin` block
-// of `AGENTS.md` names the commands of Phase 1, which the template's does not (A59).
+// of `AGENTS.md` names the commands of Phase 1, which the template's does not (A59). In place of
+// Release 1's five document skeletons, `setup` creates the guide `documents.md` to six documents,
+// which the Lead creates when writing them, and `manual-workflow.md` names them (plan section 9,
+// decision 12). A project's own documents are never created, changed or removed.
 
 import { readFileSync } from 'node:fs'
 import { HASH_MARKERS, HTML_MARKERS, blockOf, withBlock } from './blocks.js'
@@ -180,8 +183,8 @@ export const PROJECT_FILES = Object.freeze(
       return { block, whole: `${block}\n` }
     }),
     missingFile('.env.example', ''),
-    ...['before-the-event', 'manual-workflow', 'prd', 'spec', 'design', 'epics', 'non-code'].map(
-      (name) => missingFile(`docs/hackwin/${name}.md`, template(`${name}.md`)),
+    ...['before-the-event', 'manual-workflow', 'documents'].map((name) =>
+      missingFile(`docs/hackwin/${name}.md`, template(`${name}.md`)),
     ),
     missingFile('.claude/skills/research/SKILL.md', RESEARCH_SKILL),
     missingFile('.agents/skills/research/SKILL.md', RESEARCH_SKILL),
@@ -224,7 +227,7 @@ export function planProjectFiles(read, input, linkOf = () => null) {
 /**
  * What `setup --regenerate` does with the files of PROJECT_FILES that hold HackWin's block: in each
  * one that exists, the block is replaced, or added when the file has none (6.5). A missing file
- * stays missing, and the documents, the research files and the template's CI workflow are not
+ * stays missing, and the guides, the research files and the template's CI workflow are not
  * touched: only the block is HackWin's.
  * @param {(path: string) => string | null} read The text of a file of the checkout, or null.
  * @param {ProjectInput} input

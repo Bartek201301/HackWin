@@ -1,6 +1,6 @@
 // Generators and templates of every committed file of 6.4: the generated files and their
-// manifest, the Claude Code settings, the files that keep HackWin's own block, the documents and
-// research files of the template, hackwin.yml and owners.yml.
+// manifest, the Claude Code settings, the files that keep HackWin's own block, the guides under
+// docs/hackwin/ and the research files, hackwin.yml and owners.yml.
 
 export { MANIFEST, generatedFiles, writeGeneratedFiles, staleGeneratedFiles } from './manifest.js'
 export { GIT_HOOKS, SHIM_FILES, renderShim, shimPath } from './githooks.js'
