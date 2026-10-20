@@ -90,7 +90,7 @@ export async function acquireLock(name, options = {}) {
     host: hostname(),
     cwd: process.cwd(),
     since: '',
-    started: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    started: ownStart(),
   }
   let waiting = false
   mkdirSync(dir, { recursive: true })
@@ -184,6 +184,18 @@ function isAbandoned(path, holder) {
   }
   const now = processStart(holder.pid)
   return now !== null && startsDiffer(holder, now)
+}
+
+/**
+ * When this process started, as ISO 8601, from the same source as the check of another holder
+ * (`processStart`, the wall clock through `ps`), so that both sides of the comparison agree.
+ * `process.uptime()` runs on a monotonic clock, which on macOS may not advance while the machine
+ * sleeps (the Lead's review of PR #110); it is used only when `ps` cannot be read.
+ * @returns {string}
+ */
+function ownStart() {
+  const start = processStart(process.pid) ?? Date.now() - process.uptime() * 1000
+  return new Date(start).toISOString()
 }
 
 /**

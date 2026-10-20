@@ -22,7 +22,7 @@ import { createFakeGitHub, httpError, rawResult } from './fake-github.js'
 import { FIXTURE_REPOS, RESET_SHA, SANDBOX, fixtureRepo } from './fixture-repos.js'
 import { inspectFixtureRepo, withFixtureRepo } from './fixture-repo.js'
 import { BUILD_REPO, guardExecutor, refusalOf } from './guard.js'
-import { acquireLock } from './lock.js'
+import { acquireLock, processStart } from './lock.js'
 import { RESET_ATTEMPTS, resetFixtureRepo } from './reset.js'
 import { TEAM_SIZES, teamMembers } from './team.js'
 
@@ -224,6 +224,42 @@ describe('1.3d/driver: the lock per repository', () => {
       )
       const release = await acquireLock('hackwin-fixture-a', { dir, timeoutMs: 1000 })
       release()
+    } finally {
+      child.kill()
+    }
+  })
+
+  test('a holder records its start as ps reads it, and a live holder whose start came from ps is kept', async () => {
+    // Both sides of the comparison come from ps, the wall clock: process.uptime() may not count
+    // the time a Mac sleeps (the Lead's review of PR #110).
+    const dir = tempDir()
+    const release = await acquireLock('hackwin-fixture-c', { dir, timeoutMs: 1000 })
+    const own = JSON.parse(readFileSync(join(dir, 'hackwin-fixture-c.lock', 'holder.json'), 'utf8'))
+    release()
+    const ps = processStart(process.pid)
+    expect(ps).not.toBeNull()
+    expect(Math.abs(Date.parse(own.started) - /** @type {number} */ (ps))).toBeLessThan(2000)
+
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+      stdio: 'ignore',
+    })
+    try {
+      const started = processStart(/** @type {number} */ (child.pid))
+      expect(started).not.toBeNull()
+      mkdirSync(join(dir, 'hackwin-fixture-c.lock'))
+      writeFileSync(
+        join(dir, 'hackwin-fixture-c.lock', 'holder.json'),
+        JSON.stringify({
+          pid: child.pid,
+          host: hostname(),
+          cwd: '/live',
+          since: new Date().toISOString(),
+          started: new Date(/** @type {number} */ (started)).toISOString(),
+        }),
+      )
+      await expect(
+        acquireLock('hackwin-fixture-c', { dir, timeoutMs: 300, pollMs: 50 }),
+      ).rejects.toThrow(new RegExp(`still locked .* by process ${child.pid} `))
     } finally {
       child.kill()
     }
