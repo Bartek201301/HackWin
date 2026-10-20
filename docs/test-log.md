@@ -17,6 +17,38 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Step 1.4f, setup: labels, invitations, branch rules, push protection, resume (PR #70, issue #13)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/13-setup-labels-protection`, created by the integrator from `0bf16f6` after the merge of #65; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `9328e18`, then a merge of `origin/main` (`a8ea88b`); PR #70 opened at 05:48:01 UTC on 15 October.
+  - `1b736b7` and `259cb28` made the live test restore the push protection it found, and setup read back push protection and the branch rules once GitHub settles.
+  - The live acceptance tests were blocked until the human added the `workflow` scope to the Lead's gh token on 16 October. After that, the review fixes came in `d9a187d`.
+  - `lead-55` sent `merge #70` for `d9a187d` on 16 October. The integrator's first turn on it ended with "API Error: Can't reach the API server (ENOTFOUND)" before any step ran, and `lead-55` sent it again.
+  - Step 6 ran four times. The live scenarios acted only as the Lead, so they ran in the integrator's shell on `hackwin-fixture-a` and `hackwin-fixture-private`.
+    1. On 16 October on `d9a187d`: `npm test` passed 913 of 913, but AC6 failed. `setup --resume` stopped on "dial tcp 140.82.121.6:443: i/o timeout" during its read back of the branch rules (log `hackwin-fixture-a.failed-2026-10-16T18-02-06.528Z.log`). The integrator stopped and reported. The Lead chose to have the session make a network failure inside the settle wait a missed sample (`2167e7c`).
+    2. On 16 October on `2167e7c`: `npm test` passed 919 of 919, and `npm run test:ac` failed after 7548 s.
+       - AC6 and the public AC80/setup failed on "read: connection reset by peer"; the private AC80/setup timed out after 1800 s (log `hackwin-fixture-a.failed-2026-10-16T18-25-06.061Z.log`).
+       - The integrator's turn ended on "Can't reach the API server (ENOTFOUND)" before it reported. `lead-55` read the output and judged it a network outage.
+    3. On 20 October on `2167e7c`: `npm test` passed 919 of 919, and `npm run test:ac` failed after 2730 s. AC2 and the private AC80/setup waited 1200 s for the lock of `hackwin-fixture-private` and failed. Run 2 had left that lock, held by process 453, which was gone (`ESRCH`).
+       - The harness kept it because the machine's hostname had changed with the network, from `MacBook-Air-Bartus.local` to `macbook-air-bartus.home`, and `isAbandoned` (`test/harness/lock.js:158`) treats another hostname as a live holder before it checks the pid.
+       - The Lead first read it as a reused pid; the integrator's check showed the hostname. The integrator removed the stale lock, as the Lead decided, and opened #94.
+    4. On 20 October on `2167e7c`, with the lock removed, at a load average of 1.03: `npm test` passed 919 of 919, and `npm run test:ac` passed AC1 (3), AC2 (3), AC6 (13), AC70/setup (1) and AC80/setup (6) in 457 s.
+       - The private fixture's reset deleted the 24 labels that run 2 had left, and every scenario passed. No new failed-run log; the lock directory was empty.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed each time: 17 files inside issue #13's paths; no secret pattern; no conflict with `fa2c3fa`. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes", the Lead's reviews and the merge:
+  - The live bootstrap push needs the `workflow` scope, which the Lead's token lacked; it blocked every live acceptance test until the human added it on 16 October.
+  - For the PRD revision (`lead-55`):
+    - each `setup --resume` rewrites both rule sets with setup's own bodies, undoing a later change by the team, and sends the push protection call again;
+    - the read back adds at least 15 s to every setup;
+    - setup needs the `workflow` scope of the token git pushes with.
+  - The harness guard refuses `collaborators/maljul`, reads included, so step 3 uses the collaborator list. It also refuses every `gh auth` command, so step 1 reads the `X-Oauth-Scopes` header.
+  - `join`'s install ran with `process.env`, so the setup tests put their stub `npm` on the test process's `PATH`. That led to #90 (PR #92) and #91 (PR #93).
+  - On 15 October a read of push protection right after setup returned a stale value. The test skipped its restore, and the session set `hackwin-fixture-a` back by hand.
+  - The network failures of 16 October and the fixture lock kept by a changed hostname (#94).
+- Measured: PR open 4 d 18 h 47 min 43 s (05:48:01 UTC on 15 October to 00:35:44 UTC on 20 October), including the missing token scope, two review rounds, two network outages and the stale lock; 7 commits (two merges of `origin/main`), 4 PR runs (104 s, 106 s, 137 s and 127 s), 0 conflicts. Local step 6 runs: 1 failed on 16 October, 2 on `2167e7c` failed, 1 passed (`npm test` 86.51 s, `npm run test:ac` 456.57 s). The run on main after the merge 130 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/70; heads `d9a187d` and `2167e7c` (merged); merge commit `ac60eea`; runs `38688750993`, `38689826957`, `38884149605` and `38946070446` (PR) and `39348576898` (main).
+
 ### 2026-10-15 · Phase 1 · Contracts: Gate error markers in 5.7, stage 7 in 4.5 (PR #88, issue #87)
 
 - Setup: one integrator task session (Claude Code) in the worktree `task/87-contracts-gate-error-markers`, created by the integrator from `62f40a3` after the merge of #80; `lead-55` opened the session. The integrator's planning session for the merge.
