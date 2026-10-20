@@ -113,7 +113,7 @@ export async function regenerate(ctx) {
       input: `${commitMessage(previous, ctx.version)}\n`,
     })
   } catch (error) {
-    await undo(ctx, worktree, changed.length > 0 ? changed : await changedPaths(ctx.git))
+    await undo(ctx, worktree, changed)
     throw error
   }
   const commit = await ctx.git.revParse('HEAD')
@@ -239,15 +239,18 @@ async function changedPaths(git) {
 }
 
 /**
- * Put the files back as HEAD has them: a tracked file from HEAD, a new file removed. A failure
- * to do so is reported, not thrown, so that the error that stopped `--regenerate` is printed.
- * @param {CommandContext} ctx
- * @param {TaskWorktree} worktree
- * @param {string[]} paths
+ * Put the files back as HEAD has them: a tracked file from HEAD, a new file removed. It never
+ * throws: a failure, also of finding the changed files, is a warning, so that the error that
+ * stopped `--regenerate` is the one the runner prints.
+ * @param {Pick<CommandContext, 'git' | 'out'>} ctx
+ * @param {Pick<TaskWorktree, 'path'>} worktree
+ * @param {string[]} known The changed files, when known; otherwise read from `git status`.
+ * @returns {Promise<void>}
  */
-async function undo(ctx, worktree, paths) {
-  if (paths.length === 0) return
+export async function undo(ctx, worktree, known) {
   try {
+    const paths = known.length > 0 ? known : await changedPaths(ctx.git)
+    if (paths.length === 0) return
     await ctx.git.run(['reset', '--quiet', '--', ...paths])
     const listed = await ctx.git.run(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', ...paths])
     const tracked = new Set(listed.stdout.split('\0').filter(Boolean))

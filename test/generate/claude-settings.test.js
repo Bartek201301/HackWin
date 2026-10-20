@@ -45,27 +45,38 @@ const HACKWIN_HOOKS = Object.fromEntries(
 )
 
 /**
- * Whether Claude Code's deny rules refuse a Bash command, by only the matching that the
- * permissions documentation shows (https://code.claude.com/docs/en/permissions, "Wildcard
- * patterns" and "Compound commands", read 2026-10-20): the command is split into subcommands at
- * `&&`, `||`, `;`, `|`, `&` and newlines, and a rule `Bash(<pattern>)` refuses a subcommand that
- * the pattern matches as a whole. A `*` stands for some text, one character or more: the page
- * does not say whether it matches empty text (docs/verification.md, question 8), so this test
- * does not count on it. The one documented exception: a trailing ` *` that is the rule's only
- * wildcard also matches the bare command (`Bash(ls *)` matches `ls`).
+ * Whether Claude Code's deny rules refuse a Bash command, by the matching that the permissions
+ * documentation shows (https://code.claude.com/docs/en/permissions, "Wildcard patterns" and
+ * "Compound commands", read 2026-10-20): the command is split into subcommands at `&&`, `||`,
+ * `;`, `|`, `&` and newlines, and a rule `Bash(<pattern>)` refuses a subcommand that the pattern
+ * matches as a whole. A trailing ` *` that is the rule's only wildcard also matches the bare
+ * command (`Bash(ls *)` matches `ls`). Elsewhere a `*` stands for some text, one character or
+ * more; the page does not say whether it also matches empty text (docs/verification.md,
+ * question 8). So a command that must be denied is checked without that empty match, and one
+ * that must not be denied with it as well (`notDeniedBy`).
  * @param {readonly string[]} rules
  * @param {string} command
+ * @param {{ emptyMatch?: boolean }} [reading] `emptyMatch`: a `*` also matches empty text.
  */
-function deniedBy(rules, command) {
+function deniedBy(rules, command, { emptyMatch = false } = {}) {
   const subcommands = command.split(/&&|\|\||;|\||&|\n/).map((part) => part.trim())
   return rules.filter((rule) => {
     const pattern = /^Bash\((.*)\)$/.exec(rule)?.[1]
     if (pattern === undefined) return false
     const source = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const regex = new RegExp(`^${source.join('.+')}$`)
+    const regex = new RegExp(`^${source.join(emptyMatch ? '.*' : '.+')}$`)
     const bare = pattern.endsWith(' *') && source.length === 2 ? pattern.slice(0, -2) : null
     return subcommands.some((part) => regex.test(part) || part === bare)
   })
+}
+
+/**
+ * True when no rule denies a command, whether or not a `*` matches empty text.
+ * @param {readonly string[]} rules
+ * @param {string} command
+ */
+function notDeniedBy(rules, command) {
+  return [false, true].every((emptyMatch) => deniedBy(rules, command, { emptyMatch }).length === 0)
 }
 
 describe('1.4c/settings: HackWin keeps the existing content of .claude/settings.json', () => {
@@ -237,14 +248,14 @@ describe('AC63/deny: the generated settings deny a merge and a push to main', ()
       'git push origin task/12-main-menu',
       'git push origin main:task/12-counter-step',
     ]) {
-      expect(deniedBy(rules, command), command).toEqual([])
+      expect(notDeniedBy(rules, command), command).toBe(true)
     }
   })
 
   test('the push rules follow the default branch of hackwin.yml', () => {
     const rules = denyRules({ defaultBranch: 'trunk' })
     expect(deniedBy(rules, 'git push origin trunk')).not.toEqual([])
-    expect(deniedBy(rules, 'git push origin main')).toEqual([])
+    expect(notDeniedBy(rules, 'git push origin main')).toBe(true)
   })
 })
 
@@ -259,9 +270,13 @@ describe('1.4g/regenerate: the deny rules that setup --regenerate writes', () =>
     ]) {
       expect(deniedBy(rules, command), command).not.toEqual([])
     }
-    // The rules of the release before: only a * that matches empty text would deny the first form.
+    // The rules of the release before deny the first form only if a * matches empty text.
     const before = rules.filter((rule) => rule !== 'Bash(gh api *pulls/*/merge)')
-    expect(deniedBy(before, 'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge')).toEqual([])
+    const endsAtMerge = 'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge'
+    expect(deniedBy(before, endsAtMerge)).toEqual([])
+    expect(deniedBy(before, endsAtMerge, { emptyMatch: true })).toEqual([
+      'Bash(gh api *pulls/*/merge*)',
+    ])
     expect(deniedBy(rules, 'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge')).toEqual([
       'Bash(gh api *pulls/*/merge)',
     ])

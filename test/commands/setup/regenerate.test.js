@@ -5,6 +5,7 @@ import semver from 'semver'
 import { VERSION } from '../../../src/cli/context.js'
 import { loadProposedConfig } from '../../../src/core/config/index.js'
 import { createGitHub } from '../../../src/core/github/index.js'
+import { undo } from '../../../src/commands/setup/regenerate.js'
 import {
   MANIFEST,
   SETTINGS_PATH,
@@ -305,6 +306,48 @@ describe('1.4g/regenerate: setup --regenerate in a task worktree of the shared r
     expect(await project.worktree.git.revParse('HEAD')).toBe(head)
     expect(await project.worktree.git.isClean()).toBe(true)
     expect(snapshot(project.worktree.path)).toEqual(files)
+  })
+
+  // Root writes a read-only file all the same, so the failure cannot be made there.
+  test.skipIf(process.getuid?.() === 0)(
+    'when a write fails, the error is reported and the files written before it are put back',
+    async () => {
+      const project = await createProject()
+      // The second shim cannot be written; the first one is written before it.
+      chmodSync(join(project.worktree.path, '.githooks/pre-push'), 0o555)
+      const head = await project.worktree.git.revParse('HEAD')
+
+      const result = await regenerate(project)
+      expect(result.code).toBe(2)
+      expect(result.stderr).toContain('EACCES')
+      expect(result.stderr).toContain(
+        `setup --regenerate stopped and put back the files it wrote in ${project.worktree.path}`,
+      )
+      expect(await project.worktree.git.revParse('HEAD')).toBe(head)
+      expect(await project.worktree.git.isClean()).toBe(true)
+      expect(await staleGeneratedFiles(project.worktree.path, { version: LOWER })).toEqual([])
+    },
+  )
+
+  test('a failure while putting the files back is a warning, so the error that stopped it stays the one reported', async () => {
+    /** @type {string[]} */
+    const warnings = []
+    const ctx = {
+      git: {
+        run: async () => {
+          throw new Error('git status failed')
+        },
+      },
+      out: { warn: (/** @type {string} */ text) => warnings.push(text) },
+    }
+    await expect(undo(/** @type {any} */ (ctx), { path: '/repo' }, [])).resolves.toBeUndefined()
+    await expect(
+      undo(/** @type {any} */ (ctx), { path: '/repo' }, ['hackwin.yml']),
+    ).resolves.toBeUndefined()
+    expect(warnings).toEqual([
+      'setup --regenerate could not put back its files in /repo: git status failed; check `git status` there',
+      'setup --regenerate could not put back its files in /repo: git status failed; check `git status` there',
+    ])
   })
 
   test('on a repository that is not configured it exits 2 and names setup', async () => {
