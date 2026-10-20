@@ -17,6 +17,27 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Step 1.4g, setup --regenerate (PR #95, issue #14)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/14-setup-regenerate`, created by the integrator from `8fa4613` after the merges of #70, #92 and #93, once #14's dependencies (#3, #4, #5, #6, #13) were closed; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The first commit, `713ab4a`; PR #95 opened at 01:10:01 UTC.
+  - `lead-55` reviewed it with a review subagent at `713ab4a`, then the fix commit `793977f` itself. Committing in `--regenerate` is right, because of 7.1, step 3 of 20.6, and the clean tree that `ship` needs. No live run was needed.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 10 files inside issue #14's paths; no secret pattern; no conflict with `8fa4613`. Step 6, with the PR merged into `8fa4613` and no other vitest process: `npm test` passed 939 of 939, and `npm run test:ac` passed AC77/regenerate (2) and 1.4g/regenerate (16). Main had not moved, and the merge was pinned to the head SHA.
+  - After the merge:
+    - three follow-up issues from the Lead's review: #96 (lane B: row 2 of `docs/verification.md` lists the deny patterns of PR #95); #97 (lane A: the PreToolUse hook's tests get the `gh api` merge that ends at `merge`, and `git push --all`, `--branches` and `--mirror`); #98 (integrator: the manual check per release names the undocumented forms, and `AGENTS.md` says a Markdown-only task skips the format step);
+    - worktrees for #26, #28 and #29 at `238d709`.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - For PRD revision 4:
+    - the PRD should say that `setup --regenerate` commits;
+    - `mergeClaudeSettings` never removes a HackWin rule that a later release drops;
+    - a CLI older than the branch's `cli_version` but newer than main's lowers the branch's pin without a warning (seen in the code, not tested).
+  - The test matcher of `test/generate/claude-settings.test.js` had used `.*` for `*`, which assumes the undocumented empty match of question 8; that hid the gap in AC63/deny.
+  - A test id is the text before the first colon of the full name, so a `1.4g/...` test inside the `AC63/deny` describe block counted as AC63/deny; the session moved it.
+  - The fixture's `join` turns on the git hooks, and a later commit in the fixture failed with "exec: hackwin: not found", because the fixture's git environment has no `hackwin` on `PATH`. Committing before `join` avoided it.
+- Measured: PR open 24 min 19 s (01:10:01 to 01:34:20 UTC), including the Lead's review and one fix; 2 commits, 2 PR runs (151 s on `713ab4a`, 139 s on `793977f`), 0 conflicts; local merge test `npm test` 163.96 s; the run on main after the merge 149 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/95; head `793977f`; merge commit `238d709`; runs `39351900366` and `39353534892` (PR) and `39354178067` (main).
+
 ### 2026-10-20 · Phase 1 · Step 1.5h, take and ship: project commands with the command's environment (PR #93, issue #91)
 
 - Setup: one builder session of lane B (Claude Code) in the worktree `task/91-take-ship-project-env`, created by the integrator from `fa2c3fa` on 16 October; `lead-55` opened the session. The integrator's planning session for the merge.
