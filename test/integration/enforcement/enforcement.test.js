@@ -65,6 +65,7 @@ describe('AC70: where GitHub accepts the rules for everyone but not the update r
       executor: world.lead,
     })
     expect(status.stderr).not.toContain('hackwin status:')
+    expect(status.code).toBe(0)
     expect(status.stdout.split('\n')).toContain('protection: full')
   }, 120_000)
 })

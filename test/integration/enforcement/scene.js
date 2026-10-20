@@ -277,6 +277,29 @@ export async function startLeadGate({ cwd, env, executor }) {
 }
 
 /**
+ * Stop a Gate on every path of a scenario: type `quit` unless it already ended, and wait until it
+ * stopped, for at most `timeoutMs`. Its own error (a refusal to start included) is no error here.
+ * @param {GateRun} gate
+ * @param {{ timeoutMs: number, log: (line: string) => void }} options
+ * @returns {Promise<boolean>} True when the Gate stopped within the time.
+ */
+export async function stopGate(gate, { timeoutMs, log }) {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer
+  const stopped = await Promise.race([
+    gate.quit().then(
+      () => true,
+      () => true,
+    ),
+    new Promise((resolve) => (timer = setTimeout(() => resolve(false), timeoutMs))),
+  ])
+  clearTimeout(timer)
+  if (!stopped) log(`the Gate did not stop within ${timeoutMs} ms after quit:\n${gate.out}`)
+  else if (gate.ended?.error !== undefined) log(`the Gate ended with an error: ${gate.ended.error}`)
+  return /** @type {boolean} */ (stopped)
+}
+
+/**
  * Wait until the Gate printed its header, or refused to start: `{ started }` or `{ refusal }`.
  * @param {GateRun} gate
  * @param {number} timeoutMs

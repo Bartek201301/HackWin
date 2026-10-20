@@ -263,6 +263,11 @@ describe('AC63: merges under the update restriction', () => {
       expect(gateComment(o.greenRefusedPull, o.greenPull, o.greenSha)).toContain(
         `\`pull_request\` of the rule set \`${BYPASSABLE_RULESET}\``,
       )
+      // The rule set is gone at the end of the scenario: no rule left that the Lead can bypass.
+      expect(o.protectionAfter).toMatchObject({
+        state: 'full-restricted',
+        rules: { updateRestricted: true, bypassable: [] },
+      })
     },
     TIMEOUT_MS,
   )

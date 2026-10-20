@@ -49,6 +49,7 @@ import {
   protectionWhen,
   pullState,
   remoteHead,
+  removeBypassable,
   setPushProtection,
   settledPushProtection,
 } from './live.js'
@@ -66,6 +67,7 @@ import {
   mergeCommands,
   pullBody,
   startLeadGate,
+  stopGate,
   taskBody,
   toolsDir,
   writeFiles,
@@ -79,6 +81,9 @@ export const PUBLIC_REPO = 'hackwin-fixture-b'
 
 /** How long the scenario waits for one result of the Gate. */
 const GATE_PATIENCE_MS = 30 * 60_000
+
+/** How long the scenario waits for a Gate to stop after `quit`. */
+const STOP_PATIENCE_MS = 5 * 60_000
 
 /** The tasks of the scenario: title, role, paths and acceptance test. */
 const TASKS = Object.freeze({
@@ -138,24 +143,57 @@ function worktreeOf(member, issue, title) {
 }
 
 /**
- * The scenario on the public fixture repository.
+ * Delete the rule set BYPASSABLE_RULESET, and wait until GitHub's reads no longer show a rule that
+ * the Lead's account can bypass.
+ * @param {FixtureRepoContext} repo
+ */
+async function deleteBypassable(repo) {
+  const { deleted, failed } = await removeBypassable(repo)
+  if (deleted.length === 0 || failed.length > 0) {
+    throw new Error(
+      `the rule set ${BYPASSABLE_RULESET} was not deleted: deleted ${JSON.stringify(deleted)}, failed ${JSON.stringify(failed.map((entry) => entry.id))}`,
+    )
+  }
+  await protectionWhen(
+    repo,
+    (read) => read.rules.bypassable.length === 0,
+    `the rule set ${BYPASSABLE_RULESET} gone`,
+  )
+}
+
+/**
+ * The scenario on the public fixture repository. It turns push protection off and puts it back
+ * as it found it, because the reset leaves repository settings alone; it does not run where the
+ * setting cannot be read, as `keepingPushProtection` of test/integration/release/live.js.
  * @param {FixtureRepoContext} repo
  */
 export async function publicScenario(repo) {
   /** @type {Record<string, any>} */
   const o = { repo: repo.repo }
   o.pushProtectionBefore = await settledPushProtection(repo)
+  if (o.pushProtectionBefore === null) {
+    throw new Error(
+      `the push protection setting of ${repo.repo} could not be read, so it could not be put back after the scenario; the scenario did not run`,
+    )
+  }
   repo.log(`push protection before the scenario: ${o.pushProtectionBefore}`)
+  /** @type {{ error: unknown } | null} */
+  let failure = null
   try {
     o.pushProtectionOff = await setPushProtection(repo, 'disabled')
     await scenario(repo, o)
-  } finally {
-    // Always back to the setting the scenario found: the reset leaves repository settings alone.
-    if (o.pushProtectionBefore !== null) {
-      o.pushProtectionAfter = await setPushProtection(repo, o.pushProtectionBefore)
-      repo.log(`push protection after the scenario: ${o.pushProtectionAfter}`)
-    }
+  } catch (error) {
+    failure = { error }
   }
+  try {
+    o.pushProtectionAfter = await setPushProtection(repo, o.pushProtectionBefore)
+    repo.log(`push protection after the scenario: ${o.pushProtectionAfter}`)
+  } catch (error) {
+    // The scenario's own error, when it has one, is the one to report; this one is in the log.
+    repo.log(`push protection could not be put back to ${o.pushProtectionBefore}: ${error}`)
+    if (failure === null) throw error
+  }
+  if (failure !== null) throw failure.error
   return o
 }
 
@@ -268,12 +306,44 @@ async function scenario(repo, o) {
   ).number
   repo.log(`stale: #${o.stalePull} at ${o.staleSha}`)
 
+  // Steps 3 to 5 create a rule set with an admin bypass twice; it goes on every path, so that it
+  // never outlives the scenario on the repository.
+  try {
+    await gateSteps(repo, o, { lead, leadMember, builder, tasks })
+  } finally {
+    await removeBypassable(repo).catch((error) =>
+      repo.log(`the rule sets ${BYPASSABLE_RULESET} could not be listed: ${error}`),
+    )
+  }
+
+  // 6. CI, the pull requests and the status issue.
+  for (const key of ['outside', 'stale', 'secret']) {
+    const checks = await finishedChecks(repo, o[`${key}Sha`])
+    o[`${key}Checks`] = checks
+    o[`${key}Log`] = await checkLog(repo, checks[0])
+  }
+  for (const key of ['outside', 'stale', 'secret', 'green']) {
+    o[`${key}State`] = await pullState(repo, o[`${key}Pull`])
+  }
+  const statusIssues = await patiently(repo, 'the status issue', () =>
+    lead.listIssues({ state: 'open', labels: [STATUS_LABEL] }),
+  )
+  o.statusIssue = statusIssues.length === 1 ? parseStatusBody(statusIssues[0].body) : null
+  o.mainAfter = (await lead.api('repos/{owner}/{repo}/commits/main'))?.sha ?? null
+  o.protectionAfter = await readProtection(lead)
+}
+
+/**
+ * Steps 3 to 5: the Gate refuses to start, then runs: it refuses the green merge while the Lead
+ * can bypass another rule, GitHub refuses the other merges, and after `retry` it merges.
+ * @param {FixtureRepoContext} repo
+ * @param {Record<string, any>} o The observations.
+ * @param {{ lead: import('../../../src/core/github/index.js').GitHub, leadMember: Member, builder: Member, tasks: Record<keyof typeof TASKS, number> }} members
+ */
+async function gateSteps(repo, o, { lead, leadMember, builder, tasks }) {
   // 3. A rule the Lead's account can bypass: the Gate refuses to start.
   const gateOptions = { cwd: leadMember.path, env: leadMember.env, executor: repo.executor('lead') }
-  let extra = await lead.api('repos/{owner}/{repo}/rulesets', {
-    method: 'POST',
-    body: bypassableRuleset(),
-  })
+  await lead.api('repos/{owner}/{repo}/rulesets', { method: 'POST', body: bypassableRuleset() })
   o.bypassableAtStart = (
     await protectionWhen(
       repo,
@@ -282,21 +352,20 @@ async function scenario(repo, o) {
     )
   ).rules
   const refused = await startLeadGate(gateOptions)
-  o.gateRefusal = await gateStart(refused, 5 * 60_000)
-  o.gateRefusalOut = refused.out
-  if ('started' in o.gateRefusal) await refused.quit()
-  await lead.api(`repos/{owner}/{repo}/rulesets/${extra.id}`, { method: 'DELETE' })
-  await protectionWhen(
-    repo,
-    (read) => read.rules.bypassable.length === 0,
-    `the rule set ${BYPASSABLE_RULESET} gone`,
-  )
+  try {
+    o.gateRefusal = await gateStart(refused, 5 * 60_000)
+  } finally {
+    // Stopped on every path, so that no Gate polls the repository after the lock is released.
+    await stopGate(refused, { timeoutMs: STOP_PATIENCE_MS, log: repo.log })
+    o.gateRefusalOut = refused.out
+  }
+  await deleteBypassable(repo)
 
   const gate = await startLeadGate(gateOptions)
   try {
     o.gateStart = await gateStart(gate, 5 * 60_000)
     if (!('started' in o.gateStart)) throw new Error(`the Gate did not start:\n${gate.out}`)
-    extra = await lead.api('repos/{owner}/{repo}/rulesets', {
+    await lead.api('repos/{owner}/{repo}/rulesets', {
       method: 'POST',
       body: bypassableRuleset(),
     })
@@ -378,12 +447,7 @@ async function scenario(repo, o) {
     o.greenRefusedDigest = refusedMerge
     o.greenRefusedPull = await pullState(repo, o.greenPull)
     o.digestBeforeRetry = digestLines(gate.commonDir).length
-    await lead.api(`repos/{owner}/{repo}/rulesets/${extra.id}`, { method: 'DELETE' })
-    await protectionWhen(
-      repo,
-      (read) => read.rules.bypassable.length === 0,
-      `the rule set ${BYPASSABLE_RULESET} gone again`,
-    )
+    await deleteBypassable(repo)
 
     // GitHub refuses builder1's merges of the green pull request, and the Lead's --admin merge of
     // a pull request whose required check failed.
@@ -450,26 +514,10 @@ async function scenario(repo, o) {
     o.secretDigest = await digestOf(gate, o.secretPull, 'failed', { timeoutMs: GATE_PATIENCE_MS })
     o.staleDigest = await digestOf(gate, o.stalePull, 'failed', { timeoutMs: GATE_PATIENCE_MS })
   } finally {
-    await gate.quit().catch((error) => repo.log(`the Gate ended with an error: ${error}`))
+    await stopGate(gate, { timeoutMs: STOP_PATIENCE_MS, log: repo.log })
     o.gateOut = gate.out
     o.notifications = gate.notifications
     o.digest = digestLines(gate.commonDir)
     repo.log(`the Gate printed:\n${gate.out}`)
   }
-
-  // 6. CI, the pull requests and the status issue.
-  for (const key of ['outside', 'stale', 'secret']) {
-    const checks = await finishedChecks(repo, o[`${key}Sha`])
-    o[`${key}Checks`] = checks
-    o[`${key}Log`] = await checkLog(repo, checks[0])
-  }
-  for (const key of ['outside', 'stale', 'secret', 'green']) {
-    o[`${key}State`] = await pullState(repo, o[`${key}Pull`])
-  }
-  const statusIssues = await patiently(repo, 'the status issue', () =>
-    lead.listIssues({ state: 'open', labels: [STATUS_LABEL] }),
-  )
-  o.statusIssue = statusIssues.length === 1 ? parseStatusBody(statusIssues[0].body) : null
-  o.mainAfter = (await lead.api('repos/{owner}/{repo}/commits/main'))?.sha ?? null
-  o.protectionAfter = await readProtection(lead)
 }

@@ -40,6 +40,7 @@ import {
   gateStart,
   pullBody,
   startLeadGate,
+  stopGate,
   taskBody,
   toolsDir,
   writeFiles,
@@ -196,7 +197,7 @@ export async function privateScenario(repo) {
       timeoutMs: GATE_PATIENCE_MS,
     })
   } finally {
-    await gate.quit().catch((error) => repo.log(`the Gate ended with an error: ${error}`))
+    await stopGate(gate, { timeoutMs: 5 * 60_000, log: repo.log })
     o.gateOut = gate.out
     o.notifications = gate.notifications
     o.digest = digestLines(gate.commonDir)

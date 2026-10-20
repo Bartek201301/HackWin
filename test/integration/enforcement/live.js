@@ -61,6 +61,36 @@ export function bypassableRuleset() {
 }
 
 /**
+ * Delete every rule set named BYPASSABLE_RULESET as the Lead, by name, so that also a rule set
+ * whose creation answered nothing readable goes. A failed deletion is logged and given back.
+ * @param {FixtureRepoContext} repo
+ * @returns {Promise<{ deleted: number[], failed: Array<{ id: number, error: unknown }> }>}
+ */
+export async function removeBypassable(repo) {
+  const lead = repo.github('lead')
+  /** @type {{ deleted: number[], failed: Array<{ id: number, error: unknown }> }} */
+  const result = { deleted: [], failed: [] }
+  const rulesets = await patiently(repo, 'the rule sets', () =>
+    lead.apiPages('repos/{owner}/{repo}/rulesets'),
+  )
+  for (const ruleset of rulesets.filter((entry) => entry.name === BYPASSABLE_RULESET)) {
+    try {
+      await patiently(repo, `the deletion of rule set ${ruleset.id}`, () =>
+        lead.api(`repos/{owner}/{repo}/rulesets/${ruleset.id}`, { method: 'DELETE' }),
+      )
+      result.deleted.push(ruleset.id)
+    } catch (error) {
+      repo.log(`the rule set ${BYPASSABLE_RULESET} (${ruleset.id}) could not be deleted: ${error}`)
+      result.failed.push({ id: ruleset.id, error })
+    }
+  }
+  repo.log(
+    `rule sets ${BYPASSABLE_RULESET}: deleted ${JSON.stringify(result.deleted)}, failed ${JSON.stringify(result.failed.map((entry) => entry.id))}`,
+  )
+  return result
+}
+
+/**
  * @typedef {object} Member
  * @property {string} account `lead` or `builder1`.
  * @property {string} path The main checkout of the member's clone.
