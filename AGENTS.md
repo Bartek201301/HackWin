@@ -25,7 +25,7 @@ Use English for code, comments, commits, issues and pull requests. Answer the hu
 
 ## Checks
 
-- Format only the files you changed: `npm run format -- <files>`.
+- Format only the files you changed: `npm run format -- <files>`. A task that changes only Markdown skips this step: `.prettierignore` excludes `*.md`, so the command changes nothing.
 - Before you open a pull request, run the full test suite, `npm test`, and the task's acceptance tests, `npm run test:ac -- <ids>`, on the commit you push. Both must pass.
 - A task whose acceptance criteria are all inspections has no test ids. It runs `npm test` only and skips `npm run test:ac`, which fails without an id, and its pull request says so.
 - Chain these commands with `&&`, never with `;`.
