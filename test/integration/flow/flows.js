@@ -247,7 +247,6 @@ export async function takeToMerge(world, seen = {}) {
 
   // Before the merge: the invalid task and the dependent are refused, and status lists both.
   seen.invalidTake = await builder.run(['take', String(filter)])
-  seen.filterAfter = await issueView(github, filter)
   seen.filterWorktreeExists = existsSync(seen.filterWorktree)
   seen.blockedTake = await builder.run(['take', String(undo)])
   seen.status = await builder.run(['status'])
@@ -346,7 +345,14 @@ export async function takeToMerge(world, seen = {}) {
     seen.gateOut = gate.out
   }
 
-  // AC33: nothing reaches main but the Gate's merges.
+  // AC65: the invalid task, read again minutes after take refused it on GitHub, so that a change
+  // that take made would show even through a lagging read.
+  seen.filterAfter = await issueView(github, filter)
+
+  // AC33: nothing reaches main but the Gate's merges. main is read before and after the pushes
+  // straight to main, which must leave it where the Gate's last merge put it.
+  await lead.git().fetch({ prune: true })
+  seen.mainBeforePushes = await lead.git().revParse('refs/remotes/origin/main')
   seen.pushes = {
     builder: await pushToMain(world, builder),
     lead: await pushToMain(world, lead),
@@ -354,14 +360,20 @@ export async function takeToMerge(world, seen = {}) {
   await lead.git().fetch({ prune: true })
   seen.main = await lead.git().revParse('refs/remotes/origin/main')
   seen.history = await firstParentHistory(lead.git(), 'refs/remotes/origin/main')
+  // The two pull requests of this run. A fixture repository keeps the closed pull requests of
+  // earlier runs, which count for nothing here.
+  const ours = [seen.pull.number, seen.undoPull.number]
   seen.merges = (
     await world.eventually(
       () => github.listPullRequests({ state: 'closed' }),
-      (pulls) => pulls.filter((pull) => pull.merged).length >= 2,
-      'the merged pull requests',
+      (pulls) =>
+        ours.every((number) =>
+          pulls.some((pull) => pull.number === number && pull.merged && pull.mergeCommitSha),
+        ),
+      `the merges of #${ours.join(' and #')}`,
     )
   )
-    .filter((pull) => pull.merged)
+    .filter((pull) => ours.includes(pull.number) && pull.merged)
     .map((pull) => ({ number: pull.number, mergeCommitSha: pull.mergeCommitSha }))
   return seen
 }

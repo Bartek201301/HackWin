@@ -449,7 +449,9 @@ export async function startLeadGate({
     },
 
     /**
-     * Wait until a run of the pull request ended with `result`: its digest line is written.
+     * Wait until a run of the pull request ended with `result`: its digest line is written and
+     * the state file holds the result. The Gate saves the state file after the digest line, so a
+     * test that reads the state right after the line could read the run before its end.
      * With a manual clock, the clock moves on by 30 seconds whenever the run waits, as stage 8
      * does between two looks at the checks.
      * @param {number} pr
@@ -460,13 +462,28 @@ export async function startLeadGate({
       return until(
         () => {
           const found = handle.digest().find((line) => line?.pr === pr && line.result === result)
+          const saved = found && handle.savedResult(pr) === result
           if (!found && clock.advance && !intaking) clock.advance(30_000)
-          if (ended && !found) throw new Error(`the Gate stopped:\n${out}`)
-          return found
+          if (ended && !saved) throw new Error(`the Gate stopped:\n${out}`)
+          return saved ? found : null
         },
-        `the digest line of #${pr} with the result ${result}`,
+        `the digest line and the state of #${pr} with the result ${result}`,
         { timeoutMs, everyMs: clock.advance ? 50 : 1000, detail },
       )
+    },
+
+    /**
+     * The result of the pull request in the state file, or null while the file or its record is
+     * missing or is being replaced.
+     * @param {number} pr
+     * @returns {string | null}
+     */
+    savedResult(pr) {
+      try {
+        return handle.state().prs?.[String(pr)]?.result ?? null
+      } catch {
+        return null
+      }
     },
 
     /** Type `quit` and wait until the Gate stopped; its result, or its error thrown. */

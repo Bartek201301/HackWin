@@ -52,12 +52,15 @@ export function expectTakenAndMerged(seen, { live }) {
   expect(ship.stdout).toContain(`PR #${pull.number} opened at ${seen.head}. Do not merge. Stop.`)
   expect(seen.afterShip.labels).toEqual(['in-review', 'role:counter'])
   expect(seen.ci.passed).toBe(true)
-  expect(seen.ci.text).toContain(
-    `hackwin CI passed for pull request #${pull.number} at ${seen.head}`,
+  const lines = ciLines(seen.ci.text)
+  expect(lines).toContain(
+    `step 1, configuration: hackwin.yml and owners.yml of origin/main apply; checked with hackwin ${VERSION}`,
   )
-  expect(seen.ci.text).toContain(`checked with hackwin ${VERSION}`)
+  expect(lines).toContain(`hackwin CI passed for pull request #${pull.number} at ${seen.head}`)
   // On GitHub the workflow installs the version that setup pinned, a pre-release, by URL.
-  if (live) expect(seen.ci.text).toContain(`pins ${VERSION}; installing hackwin ${VERSION}`)
+  if (live) {
+    expect(lines).toContain(`hackwin.yml on main pins ${VERSION}; installing hackwin ${VERSION}`)
+  }
 
   expect(seen.merged).toMatchObject({ pr: pull.number, result: 'merged', author: BUILDER1 })
   expect(seen.gateRecord).toMatchObject({ head_sha: seen.head, result: 'merged' })
@@ -163,8 +166,9 @@ export function expectOnlyMerges(seen, { live }) {
     }
   }
 
+  // The pushes straight to main left it at the Gate's last merge.
+  expect(seen.main, 'main after the pushes straight to main').toBe(seen.mainBeforePushes)
   const shas = seen.history.map((/** @type {{ sha: string }} */ commit) => commit.sha)
-  expect(shas[0]).toBe(seen.main)
   const at = shas.indexOf(seen.bootstrap)
   expect(at, 'the bootstrap commit is on the first parent history of main').toBeGreaterThan(0)
   const after = seen.history.slice(0, at)
@@ -197,11 +201,11 @@ export function expectTaskLinkFailure(seen, key) {
   const ci = seen.ci[key]
   expect(ci.passed).toBe(false)
   expect(ci.head).toBe(pull.head)
-  expect(ci.text).toContain(
-    'step 1, configuration: hackwin.yml and owners.yml of origin/main apply',
+  const lines = ciLines(ci.text)
+  expect(lines).toContain(
+    `step 1, configuration: hackwin.yml and owners.yml of origin/main apply; checked with hackwin ${VERSION}`,
   )
-  expect(ci.text).toContain('hackwin internal ci: blocked: step 2, task link')
-  expect(ci.text).toContain(ciReason(seen, key))
+  for (const expected of ciFailure(seen, key)) expect(lines).toContain(expected)
 
   const { line, record, comments, view } = seen.gate[key]
   expect(line).toMatchObject({ pr: pull.number, result: 'failed', stage: 'task-link' })
@@ -217,23 +221,52 @@ export function expectTaskLinkFailure(seen, key) {
 }
 
 /**
- * What CI prints about the task link of each pull request of `taskLinkFailures`.
+ * The lines of what CI printed, each without the time that a log of GitHub Actions puts first and
+ * without the indent of the runner's error lines (contracts 3.3), so that a test compares whole
+ * lines.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function ciLines(text) {
+  return text.split(/\r?\n/).map((line) => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, '').trim())
+}
+
+/**
+ * The lines with which CI fails each pull request of `taskLinkFailures` at step 2: the message
+ * of its reason (`checkTaskLinkStep` in src/internal/ci/index.js), the rule, and the issue it
+ * names with what is wrong with it. Each reason has a message of its own, so a pull request that
+ * fails for another reason does not match.
  * @param {Record<string, any>} seen
  * @param {keyof typeof LINK_REASONS} key
+ * @returns {string[]}
  */
-function ciReason(seen, key) {
+function ciFailure(seen, key) {
   const { sort, done, note } = seen.numbers
+  const failed = (/** @type {string} */ message) =>
+    `hackwin internal ci: blocked: step 2, task link: ${message}`
+  const E11 = 'rule: E11: one issue, one pull request; the pull request names a valid open task'
   switch (key) {
     case 'invalid':
-      return `#${sort}`
+      return [
+        failed(`issue #${sort} is not a task with a valid data block`),
+        E11,
+        `- issue #${sort}: paths[0] (src/features/greeting/**) lies in the role greeting, not in the task's role todos`,
+      ]
     case 'closed':
-      return `#${done}`
-    case 'notTask':
-      return `#${note}`
+      return [failed(`issue #${done} is not an open issue`), E11, `- issue #${done}`]
     case 'none':
-      return 'Closes #'
+      return [failed('the body has no line `Closes #<N>` that names the task'), E11]
+    case 'notTask':
+      return [
+        failed(`issue #${note} is not a task with a valid data block`),
+        E11,
+        `- issue #${note}: no # hackwin:task block`,
+      ]
     case 'spike':
-      return 'spike/'
+      return [
+        failed(`${seen.pulls.spike.branch} is a spike/ branch, which is never merged`),
+        'rule: E16: spike/ branches are never merged',
+      ]
   }
 }
 
@@ -251,11 +284,16 @@ export function expectWrapperEditFails(seen) {
   const ci = seen.wrapperCi
   expect(ci.passed).toBe(false)
   expect(ci.head).toBe(seen.wrapperHead)
-  expect(ci.text).toContain(
+  const lines = ciLines(ci.text)
+  expect(lines).toContain(
     `step 2, task link: ${pull.headRef} closes task #${wrapper}, an open task with a valid data block`,
   )
-  expect(ci.text).toContain(`step 3, scope check: 2 changed files inside the roles of ${LEAD}`)
-  expect(ci.text).toContain('hackwin internal ci: blocked: step 6, generated files:')
-  expect(ci.text).toContain('rule: E19: generated wrappers and hook shims are not edited by hand')
-  expect(ci.text).toContain(`${seen.wrapperFile}: its content differs from what hackwin`)
+  expect(lines).toContain(`step 3, scope check: 2 changed files inside the roles of ${LEAD}`)
+  expect(lines).toContain(
+    `hackwin internal ci: blocked: step 6, generated files: 1 generated file of the branch differs from the output of hackwin ${VERSION}`,
+  )
+  expect(lines).toContain('rule: E19: generated wrappers and hook shims are not edited by hand')
+  expect(lines).toContain(
+    `- ${seen.wrapperFile}: its content differs from what hackwin ${VERSION} generates`,
+  )
 }

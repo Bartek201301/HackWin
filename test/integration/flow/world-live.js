@@ -170,12 +170,20 @@ export async function createLiveWorld(repo) {
       // As a person sees the new issue in the list of open issues before anyone acts on it. On
       // 20 October 2026 a `status` 6 s after the issue was created did not list it, while a read
       // of the issue by its number found it at once; the open issue list that `status` reads
-      // (src/commands/status/read.js) is assumed to have lagged.
-      await world.eventually(
+      // (src/commands/status/read.js) is assumed to have lagged. A lag longer than the wait stops
+      // the scenario here, so that it is not blamed on a command that reads the list later.
+      const listed = (/** @type {import('../../../src/core/github/index.js').Issue[]} */ open) =>
+        open.some((read) => read.number === issue.number)
+      const open = await world.eventually(
         () => github.listIssues({ state: 'open' }),
-        (open) => open.some((read) => read.number === issue.number),
+        listed,
         `the new issue #${issue.number} in the list of open issues`,
       )
+      if (!listed(open)) {
+        throw new Error(
+          `GitHub's list of open issues did not show the new issue #${issue.number} within ${EVENTUALLY_MS} ms of its creation; the list lagged longer than the scenario waits, so a command that reads the list, such as status, would miss the issue`,
+        )
+      }
       return issue.number
     },
 
