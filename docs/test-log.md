@@ -17,6 +17,24 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Plan section 9, decision 12: the documents guide, and design.md as the visual design (PR #134, issue #133)
+
+- Setup: the human made a product decision in the Lead's chat on 20 October 2026, and `lead-55` sent it to the integrator. The integrator recorded it in the plan in its own worktree `task/133-plan-documents-decision`, created from `682d424`, and opened lane A's task for it. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - The decision: `setup` stops creating the skeletons `prd.md`, `spec.md`, `design.md`, `epics.md` and `non-code.md` under `docs/hackwin/`, and creates one guide, `docs/hackwin/documents.md`, to six documents instead. The new `architecture.md` takes over what `design.md` held, and `design.md` becomes the visual design. Existing files in `docs/hackwin/` are never deleted, renamed or rewritten.
+  - The integrator opened lane A's task #132 (1.4l) at 20:23:54 UTC, with its worktree `task/132-setup-documents-guide` from `682d424`, and the integrator's #133 for the plan. `lead-55` opened the builder session for #132.
+  - #132 adds two points that the decision did not state, and `lead-55` agreed to both at the merge: the guide keeps what the skeletons say today (the owners, the detailed points of contact in `spec.md`, the format of `epics.md`, keys only in `non-code.md`), and `setup --regenerate` keeps its rule and creates no document, `documents.md` included.
+  - Checked for #132: `src/generate/project-files.js:183` is the only place that creates the skeletons, and no code reads them. `test/harness/node-project.yml` stays as it is: it must reproduce the tree of the fixture repositories' reset commit (1.3d/node-project), so it holds the Release 1 documents and stands for an existing project.
+  - `README.md` line 57 stays: it lists what the template repository `Bartek201301/hackwin-template` gives, and that repository still holds the five skeletons (read with `gh api`). `lead-55` agreed; line 75, the Phase 2 `plan` row, goes to the next README revision.
+  - One commit, `1376b14`, adds row 12 to plan section 9; PR #134 opened at 20:27:24 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 1 file inside issue #133's path; no secret pattern; no dash; no conflict with `682d424`.
+    - Step 6, with the PR merged into `682d424` at a load average of 3.11 with no other vitest process: `npm test` passed 1004 of 1004. No `npm run test:ac`, because the task's only criterion is an inspection.
+    - Main had not moved, and the merge was pinned to the head SHA.
+- Problems: none.
+- Measured: PR open 5 min 53 s (20:27:24 to 20:33:17 UTC); 1 commit, 1 PR run (161 s), 0 conflicts; local merge test `npm test` 133.14 s.
+- Evidence: issues #132 and #133; PR https://github.com/Bartek201301/HackWin/pull/134; head `1376b14`; merge commit `b659682`; run `39492124445` (PR).
+
 ### 2026-10-20 · Phase 1 · Harness: no background git maintenance in the offline fixtures (PR #131, issue #129)
 
 - Setup: the integrator did this task itself, at the Lead's request after the red run on main after #128, in its own worktree `task/129-fixtures-no-maintenance`, created from `a3d1bc7`. `lead-55` reviewed it and sent the merge.
