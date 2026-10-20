@@ -17,6 +17,28 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Harness: the lock taken over whatever the hostname, and the guard's residual gaps (PR #110, issue #94)
+
+- Setup: the integrator did this task itself, at the Lead's request, while PR #107 (#29) and PR #109 (#28) waited for the pre-releases, in its own worktree `task/94-harness-lock-takeover`, created from `dec9eaa`. A scope change on #94 folded in the three residual gaps of the guard from the Lead's review of PR #108. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - The first commit, `b740450`; PR #110 opened at 03:08:00 UTC.
+    - The lock no longer looks at the host name, because the locks live in this clone's git common directory, so the process id decides.
+    - A holder records its process start, and a live process id whose start differs by more than 5 s counts as reused. Holder files without a start keep the pid-only check, which kept the existing test valid: it writes a live holder with a `since` before that process started.
+    - The guard reads `-XPOST` and `--method=POST` as one argument, refuses `gh repo create`, `gh repo fork` and every `gh gist` command, runs a GraphQL mutation only with `GH_REPO` set to the fixture repository, and refuses GraphQL fields that name the build repository under any variable name.
+  - The Lead's review: the holder recorded its start from `process.uptime()`, a monotonic clock that on macOS may not count sleep, while the check reads the wall clock through `ps`. On a Mac that sleeps, another session could then take over a live lock. `8ad2a76` records the holder's start through `ps` too, with `process.uptime()` only as a fallback, and adds a test for a live holder whose start came from `ps`.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 3 files inside issue #94's path; no secret pattern; no dash; no conflict with `dec9eaa`. Step 6, with the PR merged into `dec9eaa` at a load average of 1.39 and no other vitest process: `npm test` passed 955 of 955, and `npm run test:ac` passed 1.3d/driver (32). Main had not moved, and the merge was pinned to the head SHA.
+  - Before the review round, a live run of AC2 on `hackwin-fixture-private` through the new lock and guard passed 3 of 3, and left the lock directory empty.
+- Problems, from the PR and the Lead's review:
+  - Against main's `lock.js` and `guard.js`, three of the four new tests of the first round failed. The fourth, a live holder that is kept, passed on both by design.
+  - The integrator did not verify how `process.uptime()` behaves across a sleep; it took the Lead's fix.
+  - The Lead first read that `EPERM` falls through to the start check; it does not. `isAbandoned` returns at `process.kill` for every error, so a process id reused by another user's process still keeps a stale lock. This goes under "Remaining limitations" when the file is next touched.
+  - Remaining, in the PR:
+    - a GraphQL mutation by node id still passes under `GH_REPO`;
+    - without `ps`, a live process id keeps the lock;
+    - a process id reused within 5 s counts as the same process.
+- Measured: PR open 10 min 23 s (03:08:00 to 03:18:23 UTC), including the Lead's review and one fix; 2 commits, 2 PR runs (142 s on `b740450`, 135 s on `8ad2a76`), 0 conflicts; local merge test `npm test` 163.82 s; the run on main after the merge 145 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/110; head `8ad2a76`; merge commit `ba5fd99`; runs `39362674569` and `39363071747` (PR) and `39363588551` (main).
+
 ### 2026-10-20 · Phase 1 · Incident and fix: a live scenario wrote to the build repository; the harness guard (PR #108, issue #106)
 
 - Setup: the integrator did this task itself, at the Lead's request and as a priority before any more live runs, in its own worktree `task/106-harness-guard-fixture-only`, created from `e589df5`. `lead-55` reviewed it and sent the merge.
