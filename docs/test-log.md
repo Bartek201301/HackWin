@@ -17,6 +17,18 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Step 1.4j, join: the install runs with the command's environment (PR #92, issue #90)
+
+- Setup: one builder session of lane A (Claude Code) in the worktree `task/90-join-install-env`, created by the integrator from `fa2c3fa` on 16 October; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The issue came from the Lead's review of PR #70: `join`'s `runInstall` (`src/commands/join/checks.js:155`) passed no `env`. The integrator searched every caller of `src/core/project` and found the same in `take` and `ship`, which became #91.
+  - One commit, `c3f205b`; PR #92 opened at 18:17:02 UTC on 16 October.
+  - `lead-55` sent `merge #92` with the head SHA by SendMessage, to merge after #70, because setup's step 14 calls `join`. Its review: 2 files, one line in `checks.js` plus the 1.4j/install-env test.
+  - Merged with the procedure of the plan, section 8, after #70. Steps 1 to 5 passed: 2 files inside issue #90's paths; no secret pattern; no conflict with `ac60eea`. Step 6, with the PR merged into `ac60eea` and no other vitest process: `npm test` passed 920 of 920, and `npm run test:ac` passed 1.4j/install-env (1). Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes": `gh issue view 90 --comments` printed nothing for an issue without comments, so the session checked again with `gh api .../issues/90/comments`. No network timeouts during the task.
+- Measured: PR open 3 d 6 h 24 min 43 s (18:17:02 UTC on 16 October to 00:41:45 UTC on 20 October), mostly waiting for #70; 1 commit, 1 PR run (125 s), 0 conflicts; local merge test `npm test` 175.10 s; the run on main after the merge 137 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/92; head `c3f205b`; merge commit `c19a2b0`; runs `38946139732` (PR) and `39349162604` (main).
+
 ### 2026-10-20 · Phase 1 · Step 1.4f, setup: labels, invitations, branch rules, push protection, resume (PR #70, issue #13)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/13-setup-labels-protection`, created by the integrator from `0bf16f6` after the merge of #65; `lead-55` opened the session. The integrator's planning session for the merge.
