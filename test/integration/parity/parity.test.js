@@ -10,9 +10,13 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COMMANDS } from '../../../src/cli/registry.js'
 import { gateFiles } from '../../../src/commands/gate/state.js'
-import { STATUS_LABEL } from '../../../src/commands/gate/status-issue.js'
+import {
+  STATUS_LABEL,
+  STATUS_TITLE,
+  formatStatusBody,
+} from '../../../src/commands/gate/status-issue.js'
 import { exec } from '../../../src/core/runtime/index.js'
-import { expectParity, runParity } from './flows.js'
+import { MODES, expectParity, runParity } from './flows.js'
 import { wrapperCommandLineOf, writeTask } from './world.js'
 import { createOfflineWorld } from './world-offline.js'
 
@@ -46,15 +50,60 @@ async function configured() {
   return scene
 }
 
+/**
+ * The closed status issue that the Gate of an earlier run left, with one digest line, as on a
+ * fixture repository after its reset: the reset closes it, and GitHub's list of the issues with
+ * the label `gate-status` still showed it after the label was deleted and created again (20
+ * October 2026). `status` reads a closed status issue when no open one exists.
+ * @param {import('./world.js').World} world
+ */
+async function leaveGateStatus(world) {
+  const time = '2026-10-20T09:34:28.793Z'
+  const { body } = formatStatusBody({
+    heartbeat_at: time,
+    stopped_at: time,
+    starts: 1,
+    gate_id: null,
+    protection: 'full-restricted',
+    update_restricted: true,
+    queue: [],
+    attention: [],
+    digest: [
+      {
+        time,
+        pr: 15,
+        author: world.login,
+        result: 'merged',
+        stage: 'after-merge',
+        duration: '19s',
+        note: 'merge commit 11301c23c194',
+      },
+    ],
+  })
+  const issue = await world.github.createIssue({
+    title: STATUS_TITLE,
+    body,
+    labels: [STATUS_LABEL],
+  })
+  await world.github.updateIssue(issue.number, { state: 'closed', stateReason: 'not_planned' })
+}
+
 describe('AC14: terminal and Claude Code parity', () => {
   test(
     'AC14: on one fixture, take, ship and status from a terminal and through the Claude Code wrappers give the same labels, branch, pull request body and exit code',
     async () => {
       const { world } = await configured()
+      await leaveGateStatus(world)
 
       const run = await runParity(world)
 
       expectParity(world, run)
+      // Both calls of `status` showed the earlier Gate's digest line in full.
+      for (const mode of MODES) {
+        expect(run.observed[mode].status.stdout).toMatch(
+          new RegExp(`\\ngate digest:\\n {2}\\S+ #15 ${world.login} merged stage=after-merge `),
+        )
+      }
       // The wrappers' child processes reached GitHub through the bridge, as the Lead.
       expect(world.bridgeCalls.length).toBeGreaterThan(0)
       expect(world.bridgeCalls.every((call) => call.code === 0)).toBe(true)

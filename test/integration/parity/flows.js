@@ -4,17 +4,19 @@
 //   the same title and role and disjoint paths. One goes through `take`, `ship` and `status` from
 //   a terminal, the other through the Claude Code wrappers, one step after the other, so that
 //   both meet the same state. Both get the same labels, branch, pull request body and exit code,
-//   up to their issue number; `status` prints the same lines both ways on the same state and
-//   changes no label. By design `take` differs in one thing: from a terminal it starts the agent
-//   in the worktree, through the wrapper it prints the prompt file and the command that starts
-//   the agent in a new terminal (the scope change on #28; `docs/verification.md`, row 4).
+//   up to their issue number; `status` prints the same lines both ways on the same state, the
+//   clone's record of the last `status` call included, and changes no label. By design `take`
+//   differs in one thing: from a terminal it starts the agent in the worktree, through the
+//   wrapper it prints the prompt file and the command that starts the agent in a new terminal
+//   (the scope change on #28; `docs/verification.md`, row 4).
 // - The solo flow (AC66): with one member, `setup`, a task written by hand, `take`, `ship`, a
 //   merge by the Gate and `status` complete.
 
 import { expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { STATUS_LABEL } from '../../../src/commands/gate/status-issue.js'
-import { promptPath } from '../../../src/core/state/index.js'
+import { promptPath, readLastStatus, statePaths } from '../../../src/core/state/index.js'
 import { branchName, slugOf } from '../../../src/core/tasks/index.js'
 import { taskWorktreePath } from '../../../src/core/worktrees/index.js'
 import { commitWork, labelsOf, pullOf, startGate, until, writeTask } from './world.js'
@@ -103,6 +105,25 @@ function snapshot(world, numbers) {
 }
 
 /**
+ * Keep the clone's record of the member's last `status` call, and return a function that puts it
+ * back. `status` writes the record and shows the digest only since the previous call, so two
+ * calls one after the other differ whenever the status issue holds a digest line; the parity flow
+ * gives both the record the first one found. The file is `sessions/status.json` of the clone's
+ * state (`statusFile` in `src/core/state/index.js`); the read back checks that it still is.
+ * @param {string} commonDir
+ */
+async function keepLastStatus(commonDir) {
+  const seen = await readLastStatus(commonDir)
+  const path = join(statePaths(commonDir).sessions, 'status.json')
+  const text = existsSync(path) ? readFileSync(path, 'utf8') : null
+  return async () => {
+    if (text === null) rmSync(path, { force: true })
+    else writeFileSync(path, text)
+    expect(await readLastStatus(commonDir), 'the record of the last status call').toBe(seen)
+  }
+}
+
+/**
  * The parity flow on a configured repository with a solo team, whose member is the Lead of the
  * world. It returns what it observed for the assertions of `expectParity`.
  * @param {World} world
@@ -155,9 +176,13 @@ export async function runParity(world) {
     ...MODES.map((mode) => observed[mode].pull?.number).filter(Boolean),
   ]
   const before = await snapshot(world, numbers)
-  for (const mode of MODES) observed[mode].status = await call(world, mode, 'status', [])
-  const after = await snapshot(world, numbers)
   const commonDir = await world.git().commonDir()
+  const restore = await keepLastStatus(commonDir)
+  for (const mode of MODES) {
+    await restore()
+    observed[mode].status = await call(world, mode, 'status', [])
+  }
+  const after = await snapshot(world, numbers)
   /** @type {Record<Mode, string>} */
   const prompts = {
     terminal: promptPath(commonDir, issues.terminal),
