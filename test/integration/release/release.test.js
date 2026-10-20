@@ -4,14 +4,16 @@
 // build 1 of the scheme of docs/build/contracts.md 6.2: `old` the release the project starts
 // with, `fix` its bug fix release of the same phase, `other` a release of the next phase. The
 // same procedure on a fixture repository, with the GitHub pre-releases installed by URL and the
-// real CI, is in release.fixture.test.js.
+// real CI, is in release.fixture.test.js. The Gates of the scenes keep the laptop awake through
+// stand-ins first on PATH (stubKeepAwake), so that no real command holds a sleep lock or fails.
 
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { release, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readLocal } from '../../../src/core/state/index.js'
+import { keepAwakeCommand, startKeepAwake } from '../../../src/commands/gate/awake.js'
 import { WORKFLOW_PATH, generatedBy } from '../../../src/generate/index.js'
 import { REFUSED } from '../../harness/guard.js'
 import { installOf } from './clis.js'
@@ -25,6 +27,7 @@ import {
   buildClis,
   createScene,
   setupAnswers,
+  stubKeepAwake,
   until,
 } from './scene.js'
 
@@ -41,13 +44,19 @@ const COMMANDS = Object.freeze([['setup'], ['join'], ['take'], ['ship'], ['statu
 let dir
 /** @type {{ old: Cli, fix: Cli, other: Cli }} */
 let clis
+/** @type {{ bin: string, started: string }} */
+let keepAwake
 
 beforeAll(async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), 'hackwin-release-')))
+  // The Gate starts its keep awake with process.env, not with the scene's environment.
+  keepAwake = stubKeepAwake(join(dir, 'keep-awake'))
+  vi.stubEnv('PATH', `${keepAwake.bin}:${process.env.PATH}`)
   clis = await buildClis(dir)
 })
 
 afterAll(() => {
+  vi.unstubAllEnvs()
   if (dir) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -132,6 +141,38 @@ describe('1.7d/clis: the CLIs of the scenarios are this checkout with another ve
       const context = await import(pathToFileURL(join(cli.root, 'src/cli/context.js')).href)
       expect(context.VERSION).toBe(version)
     }
+  })
+})
+
+describe('1.7d/keep-awake: the Gates of the scenes keep the laptop awake through a stand-in', () => {
+  test('1.7d/keep-awake: startKeepAwake starts the stand-in, which runs until stop() ends it', async () => {
+    const command = keepAwakeCommand({
+      pid: process.pid,
+      platform: process.platform,
+      release: release(),
+      env: process.env,
+    })
+    if ('unsupported' in command) throw new Error(`no keep awake here: ${command.unsupported}`)
+    /** @type {string[]} */
+    const lost = []
+    const awake = await startKeepAwake({ pid: process.pid, onLost: (reason) => lost.push(reason) })
+    try {
+      const noted = `${command.file} ${command.args.join(' ')}\n`
+      await until(
+        () =>
+          existsSync(keepAwake.started) && readFileSync(keepAwake.started, 'utf8').includes(noted),
+        'the stand-in keep awake',
+      )
+      // Longer than one round of either stand-in's wait.
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      expect(awake.active).toBe(true)
+      expect(lost).toEqual([])
+    } finally {
+      awake.stop()
+    }
+    expect(awake.active).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(lost).toEqual([])
   })
 })
 
