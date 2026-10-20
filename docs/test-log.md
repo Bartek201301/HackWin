@@ -17,6 +17,21 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Verification row 2: the deny patterns of PR #95 (PR #101, issue #96)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/96-verification-deny-patterns`, created by the integrator from `238d709` after the merge of #95; `lead-55` opened the session for the night. The integrator's planning session for the merge.
+- What happened:
+  - One commit, `338a9e9`; PR #101 opened at 01:51:31 UTC.
+  - `lead-55` sent `merge #101` with the head SHA by SendMessage, to merge after #100. Its review: only `docs/verification.md`. The rule table matches what `src/generate/claude-settings.js` generates since #95, as far as the Lead checked, and question 8 stays open.
+  - Merged with the procedure of the plan, section 8, after #100. Steps 1 to 5 passed: 1 file inside issue #96's paths; no secret pattern; no dash; no conflict with `e779d88`. Step 6 waited for the load to fall below 15 and started at 2.18: `npm test` passed 943 of 943; no `npm run test:ac`, because the task has inspection criteria only. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes" and the Lead's review:
+  - PR #95 has no comments or reviews on GitHub: the Lead's review, which the issue cites, was a message between sessions. The session could read it only through the issue body and the body of PR #95.
+  - `scanDiff(git, range)` of `src/core/secrets` scans an empty diff and reports 0 findings, without an error, when it gets a string range instead of a `DiffRange` object. The Lead checked that all five callers pass objects and that `tsc` would flag a string, so this is hardening only. It is not routed yet.
+  - The permissions page now lists `|&` as a separator, which the bullet of 10 October in row 2 does not. Not routed yet.
+  - The session's `npm test` took 295 s.
+- Measured: PR open 16 min 26 s (01:51:31 to 02:07:57 UTC); 1 commit, 1 PR run (139 s), 0 conflicts; local merge test `npm test` 193.72 s; the run on main after the merge 140 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/101; head `338a9e9`; merge commit `e589df5`; runs `39355745348` (PR) and `39357251294` (main).
+
 ### 2026-10-20 · Phase 1 · Step 1.4k, PreToolUse: the gh api merge that ends at merge, and git push --all (PR #100, issue #97)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/97-pretooluse-gh-api-merge`, created by the integrator from `238d709` after the merge of #95; `lead-55` opened the session for the night, beside the sessions of #28, #29 and #96. The integrator's planning session for the merge.
