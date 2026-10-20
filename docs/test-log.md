@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · The first pre-releases: v0.1.0-pre.1, v0.1.1-pre.1 and v0.2.0-pre.1 (PR #113, issue #112)
+
+- Setup: the human approved the pre-releases on 20 October 2026 in the Lead's chat (plan section 9, decision 5), and `lead-55` sent the integrator the steps. The integrator made the version change itself, in its own worktree `task/112-version-pre-one`, created from `56e1f02`; `lead-55` reviewed it and sent the merge. The packs and installs ran in the integrator's scratch directory, outside the repository.
+- What happened:
+  - `package.json` on main carried `0.1.0-pre.0` (contracts 6.2), so a pack of main would not have been `0.1.0-pre.1`. No issue existed for the change, and the merge procedure needs one, so the integrator opened #112 (role integrator, one inspection). One commit, `8a6a668`, changed `version` in `package.json` and both version fields of `package-lock.json`; PR #113 opened at 09:18:39 UTC.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 2 files inside issue #112's paths; no secret pattern; no conflict with `56e1f02`. Step 6, with the PR merged into `56e1f02` at a load average of 1.84 and no other vitest process: `npm test` passed 955 of 955; no `npm run test:ac`, because the task's only criterion is an inspection. Main had not moved, and the merge was pinned to the head SHA.
+  - The merge commit `531b782` was extracted three times with `git archive`. The first copy was packed as is; in the other two only the `version` line of `package.json` changed, to `0.1.1-pre.1` and `0.2.0-pre.1`. `npm pack` (npm 11.11.0, Node 25.8.1) made three tarballs of 140 files and 297,055 bytes each.
+  - The three releases were created at 09:24:14, 09:24:17 and 09:24:20 UTC with `gh release create --prerelease --latest=false`: tag `v<version>` on `531b782`, the tarball as the only asset. `v0` stays the latest release.
+  - Checks:
+    - Extracted, the three tarballs differ only in line 3 of `package.json`, and their file lists are identical. `bin`, `src`, `LICENSE`, `README.md` and `package.json` of the `0.1.0-pre.1` tarball equal those of the merge commit.
+    - Each asset, installed by the URL form of contracts 6.3 into its own scratch prefix (`npm install -g <URL> --prefix <dir>`), printed its own version with `hackwin --version`: `0.1.0-pre.1`, `0.1.1-pre.1` and `0.2.0-pre.1`. The global npm prefix has no `hackwin`.
+    - Each asset downloaded from its release URL is byte for byte the local pack, and GitHub's digest of each asset is the same sha256.
+  - The worktree of #27, `task/27-integration-enforcement-layers`, was created from `531b782`.
+- Problems: none.
+- Measured: PR open 4 min 45 s (09:18:39 to 09:23:24 UTC); 1 commit, 1 PR run (140 s), 0 conflicts; local merge test `npm test` 89.82 s; the run on main after the merge 139 s.
+- Evidence: issue #112; PR https://github.com/Bartek201301/HackWin/pull/113; head `8a6a668`; merge commit `531b782`; runs `39399743020` (PR) and `39400316490` (main); releases:
+  - https://github.com/Bartek201301/HackWin/releases/tag/v0.1.0-pre.1, asset sha256 `40a9f2eca5b0d6503c14e8a132ca339a42ccb3c23b7f1b54da95bf9adf320944`;
+  - https://github.com/Bartek201301/HackWin/releases/tag/v0.1.1-pre.1, asset sha256 `454cae3945870c1748b9d565127f414b85ba9d4a17260665846c63a76b695a52`;
+  - https://github.com/Bartek201301/HackWin/releases/tag/v0.2.0-pre.1, asset sha256 `d9499d35d6f15d0ee0e0a482f0229afb145a6ef7890c09413e8cdf029df0b808`.
+
 ### 2026-10-20 · Phase 1 · Harness: the lock taken over whatever the hostname, and the guard's residual gaps (PR #110, issue #94)
 
 - Setup: the integrator did this task itself, at the Lead's request, while PR #107 (#29) and PR #109 (#28) waited for the pre-releases, in its own worktree `task/94-harness-lock-takeover`, created from `dec9eaa`. A scope change on #94 folded in the three residual gaps of the guard from the Lead's review of PR #108. `lead-55` reviewed it and sent the merge.
