@@ -33,7 +33,10 @@ export const MODES = /** @type {const} */ (['terminal', 'wrapper'])
 
 /**
  * The task of a mode, and the work its agent commits: inside the task's own paths, with the
- * acceptance test it names.
+ * acceptance test it names. The test is a script that the quick test command, `node`, runs. It
+ * also passes the fixture project's own check (`npm run check` of its workflow `check`): it uses
+ * no global, which the project's eslint does not define for a `.mjs` file, and its name is not
+ * one that `vitest run` collects as a test file, which would fail without a test in it.
  * @param {string} name A directory under `src/features/counter/`.
  */
 export function counterTask(name) {
@@ -43,11 +46,17 @@ export function counterTask(name) {
       title: TITLE,
       role: 'counter',
       paths: [`${dir}/**`],
-      acceptance: [`${dir}/reset.test.mjs`],
+      acceptance: [`${dir}/reset.check.mjs`],
     },
     work: {
       [`${dir}/reset.js`]: 'export const reset = () => 0\n',
-      [`${dir}/reset.test.mjs`]: "console.log('the counter reset passes')\n",
+      [`${dir}/reset.check.mjs`]: [
+        "import assert from 'node:assert/strict'",
+        "import { reset } from './reset.js'",
+        '',
+        'assert.equal(reset(), 0)',
+        '',
+      ].join('\n'),
     },
   }
 }
@@ -247,6 +256,7 @@ export function expectParity(world, run) {
   expect(terminal.status.code, terminal.status.stderr).toBe(0)
   expect(wrapper.status.code, wrapper.status.stderr).toBe(terminal.status.code)
   expect(withoutDurations(wrapper.status.stdout)).toBe(withoutDurations(terminal.status.stdout))
+  expect(withoutDurations(wrapper.status.stderr)).toBe(withoutDurations(terminal.status.stderr))
   expect(after).toEqual(before)
 }
 
