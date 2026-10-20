@@ -17,6 +17,23 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · 1.4l setup: one guide to six documents instead of the skeletons; design.md becomes the visual design (PR #135, issue #132)
+
+- Setup: a builder session of lane A in worktree `task/132-setup-documents-guide`, created by the integrator from `682d424`. `lead-55` opened the session, reviewed the PR and sent the merge.
+- What happened:
+  - The task builds decision 12 of the plan. `setup` no longer creates the five skeletons; it creates `docs/hackwin/documents.md` when it is missing, a guide with one part for each of `prd.md`, `spec.md`, `architecture.md`, `design.md`, `epics.md` and `non-code.md`. `manual-workflow.md` names the six documents and points to the guide. The five templates of the skeletons were removed from `src/generate/templates/`.
+  - The builder added one point that the issue did not list: step 2 of the manual workflow, the foundation task, names the visual tokens. `lead-55` accepted it at the review, because it follows from decision 12.
+  - The PR's tests, by its own account: 1.4l/documents is new; 1.4d/files, AC6/files and 1.4g/regenerate gained cases for the Release 1 template, whose seven files under `docs/hackwin/` stay byte for byte. A new test runs `setup --regenerate` on such a project, and the builder reports that it failed with a mutation that made `planBlockFiles` create `documents.md`.
+  - Two commits, `818bc8e` and a merge of main, `9d7cbb2`, after PR #134; PR #135 opened at 20:40:19 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 12 files inside issue #132's paths; no secret pattern; no dash; no conflict with `b659682`.
+    - Step 6, with the PR merged into `b659682` at a load average of 3.16 with no other vitest process: `npm test` passed 1011 of 1011, and `npm run test:ac -- 1.4l/documents 1.4d/files AC6/files 1.4g/regenerate` passed 1.4l/documents 5, 1.4d/files 5, AC6/files 10 and 1.4g/regenerate 18, all offline. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+- Problems: none.
+- Workflow notes of the PR: "`origin/main` moved during the task (PR #134 added decision 12 to `docs/build/plan.md`); `git merge origin/main` was clean and the decision text matched the issue."
+- Measured: PR open 6 min 28 s (20:40:19 to 20:46:47 UTC); 2 commits, 1 PR run (163 s), 0 conflicts; local merge test `npm test` 127.97 s, `test:ac` 11.45 s.
+- Evidence: issue #132; PR https://github.com/Bartek201301/HackWin/pull/135; head `9d7cbb2`; merge commit `dab4572`; run `39493971679` (PR).
+
 ### 2026-10-20 · Phase 1 · Plan section 9, decision 12: the documents guide, and design.md as the visual design (PR #134, issue #133)
 
 - Setup: the human made a product decision in the Lead's chat on 20 October 2026, and `lead-55` sent it to the integrator. The integrator recorded it in the plan in its own worktree `task/133-plan-documents-decision`, created from `682d424`, and opened lane A's task for it. `lead-55` reviewed the PR and sent the merge.
