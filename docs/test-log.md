@@ -17,6 +17,19 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Plan 6: the manual check names the undocumented forms; AGENTS.md on Markdown-only tasks (PR #99, issue #98)
+
+- Setup: the integrator did this integrator task itself, at the Lead's request ("#98 is yours"), in its own worktree `task/98-plan-manual-check`, created from `238d709`. It opened the pull request for `lead-55` to review, and merged it only on `merge #99`.
+- What happened:
+  - One commit, `333352d`; PR #99 opened at 01:45:00 UTC.
+    - Plan section 6, item 6 names the forms to try exactly, `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/merge` with nothing after `merge` and `git push origin --all`, with the reason (question 8 open). It says `/status` runs HackWin's `status`, and adds a bullet on the hooks needing `hackwin` on Claude Code's `PATH` (exit 127 otherwise, not blocking), a known gap.
+    - `AGENTS.md`: a task that changes only Markdown skips the format step.
+  - `lead-55` reviewed it and sent `merge #99` with the head SHA by SendMessage.
+  - Merged with the procedure of the plan, section 8. Steps 1 to 5 passed: 2 files inside issue #98's paths; no secret pattern; no dash; no conflict with `238d709`. Step 6 waited until the one-minute load average was below 15. Other sessions' suites had raised it to 31.40, with 22 vitest processes. It then ran at 12.31 with 2 vitest processes: `npm test` passed 939 of 939; no `npm run test:ac`, because the task has inspection criteria only. Main had not moved, and the merge was pinned to the head SHA.
+- Problems, from the PR's "Workflow notes": `AGENTS.md` says never to merge one's own pull request; the integrator authored this one and merged it only on the Lead's `merge #99`, as with every pull request.
+- Measured: PR open 10 min 21 s (01:45:00 to 01:55:21 UTC); 1 commit, 1 PR run (99 s), 0 conflicts; local merge test `npm test` 172.70 s, after the wait for the load; the run on main after the merge 142 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/99; head `333352d`; merge commit `cac9df8`; runs `39355156402` (PR) and `39356091147` (main).
+
 ### 2026-10-20 · Phase 1 · Step 1.4g, setup --regenerate (PR #95, issue #14)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/14-setup-regenerate`, created by the integrator from `8fa4613` after the merges of #70, #92 and #93, once #14's dependencies (#3, #4, #5, #6, #13) were closed; `lead-55` opened the session. The integrator's planning session for the merge.
