@@ -7,6 +7,14 @@
 // The deny rules use the patterns of docs/verification.md, row 2: they match the usual
 // spellings of a merge through `gh api`, not every spelling (the gap of 10.6). The PreToolUse
 // hook refuses the same commands, also in bypass permissions mode.
+//
+// Each spelling is matched in a way that Claude Code's permissions documentation shows
+// (https://code.claude.com/docs/en/permissions, "Wildcard patterns", read 2026-10-20): a `*` in
+// the place of some text, and a trailing ` *` that is the rule's only wildcard, which also
+// matches the bare command. The page does not say whether a `*` matches empty text
+// (docs/verification.md, question 8), so a command that ends right where a rule's last literal
+// text ends, such as `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/merge`, has a rule that ends
+// with that text, `Bash(gh api *pulls/*/merge)`, besides the rule for text after it.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -39,12 +47,22 @@ export const ENV_READ_RULES = Object.freeze([
   'Read(./.env.*.local)',
 ])
 
-/** The deny rules for a merge by an agent session (E3, D2): docs/verification.md, row 2. */
+/**
+ * The deny rules for a merge by an agent session (E3, D2): docs/verification.md, row 2. The REST
+ * merge has a rule for the command that ends at `merge` and one for text after it.
+ */
 export const MERGE_RULES = Object.freeze([
   'Bash(gh pr merge *)',
+  'Bash(gh api *pulls/*/merge)',
   'Bash(gh api *pulls/*/merge*)',
   'Bash(gh api *mergePullRequest*)',
 ])
+
+/**
+ * The options of `git push` that push every branch, the default branch among them.
+ * @type {readonly string[]}
+ */
+const ALL_BRANCHES = Object.freeze(['--all', '--branches', '--mirror'])
 
 /**
  * What the settings are rendered from.
@@ -55,7 +73,8 @@ export const MERGE_RULES = Object.freeze([
 /**
  * The deny rules for a push to the default branch (E2, E18): the branch as a refspec of its own,
  * as the destination of `<src>:<dst>`, forced with `+`, or spelled `refs/heads/<branch>`, and a
- * push of every branch.
+ * push of every branch: its option right after `push` (`git push --all`, also bare), at the end
+ * (`git push origin --all`) or in between.
  * @param {string} branch
  * @returns {string[]}
  */
@@ -70,9 +89,9 @@ export function pushRules(branch) {
     `Bash(git push *+${branch} *)`,
     `Bash(git push *refs/heads/${branch})`,
     `Bash(git push *refs/heads/${branch} *)`,
-    'Bash(git push *--all*)',
-    'Bash(git push *--branches*)',
-    'Bash(git push *--mirror*)',
+    ...ALL_BRANCHES.map((option) => `Bash(git push *${option}*)`),
+    ...ALL_BRANCHES.map((option) => `Bash(git push ${option} *)`),
+    ...ALL_BRANCHES.map((option) => `Bash(git push *${option})`),
   ]
 }
 

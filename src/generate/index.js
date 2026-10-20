@@ -41,10 +41,11 @@ export {
   TEMPLATE_CHECK_WORKFLOW,
   TEMPLATE_CHECK_WORKFLOW_PATH,
   languageName,
+  planBlockFiles,
   planProjectFiles,
   renderAgentsBlock,
 } from './project-files.js'
-export { CONFIG_FILES, renderHackwinConfig, renderOwners } from './config-files.js'
+export { CONFIG_FILES, renderHackwinConfig, renderOwners, withCliVersion } from './config-files.js'
 export { linkError, linkOn, refuseLinks } from './links.js'
 
 /** @typedef {import('./manifest.js').GenerateInput} GenerateInput */
