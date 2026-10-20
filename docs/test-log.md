@@ -17,6 +17,18 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Step 1.5h, take and ship: project commands with the command's environment (PR #93, issue #91)
+
+- Setup: one builder session of lane B (Claude Code) in the worktree `task/91-take-ship-project-env`, created by the integrator from `fa2c3fa` on 16 October; `lead-55` opened the session. The integrator's planning session for the merge.
+- What happened:
+  - The issue came from the integrator's search of every caller of `src/core/project` after the Lead's review of PR #70. The wave-3 tasks #26 to #29 now depend on #90 and #91, because their scenarios stub the agent through `ctx.env`.
+  - One commit, `faa2685`; PR #93 opened at 18:18:49 UTC on 16 October.
+  - `lead-55` sent `merge #93` with the head SHA by SendMessage, to merge after #70 and #92. Its review: 5 files. `env: ctx.env` is passed to `runInstall` in `take` and to `formatCheck`, `generatedFileCheck`, `runCheck` and `runAcceptanceTests` in `ship`, plus the 1.5h/project-env tests and a `commands` option in `test/commands/ship/scene.js`.
+  - Merged with the procedure of the plan, section 8, after #92. Steps 1 to 5 passed: 5 files inside issue #91's paths; no secret pattern; no conflict with `c19a2b0`. Step 6, with the PR merged into `c19a2b0` and no other vitest process: `npm test` passed 922 of 922, and `npm run test:ac` passed 1.5h/project-env (2). Main had not moved, and the merge was pinned to the head SHA.
+- Problems: the PR's "Workflow notes" say "none".
+- Measured: PR open 3 d 6 h 28 min 38 s (18:18:49 UTC on 16 October to 00:47:27 UTC on 20 October), mostly waiting for #70; 1 commit, 1 PR run (119 s), 0 conflicts; local merge test `npm test` 170.41 s; the run on main after the merge 143 s.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/93; head `faa2685`; merge commit `8fa4613`; runs `38946375853` (PR) and `39349724334` (main).
+
 ### 2026-10-20 · Phase 1 · Step 1.4j, join: the install runs with the command's environment (PR #92, issue #90)
 
 - Setup: one builder session of lane A (Claude Code) in the worktree `task/90-join-install-env`, created by the integrator from `fa2c3fa` on 16 October; `lead-55` opened the session. The integrator's planning session for the merge.
