@@ -163,7 +163,9 @@ export async function createWorld({
 
   /** @type {BridgeCall[]} */
   const bridgeCalls = []
-  const server = createServer((socket) => {
+  // gh-client.js ends its side once it sent the request; the server's side stays open until the
+  // answer is written, however long the executor takes (allowHalfOpen).
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
     let text = ''
     let answered = false
     socket.setEncoding('utf8')

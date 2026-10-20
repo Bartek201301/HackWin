@@ -20,8 +20,12 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
 })
 
-/** A world on the fixture repository whose executor only records the calls that reach it. */
-async function recordingWorld() {
+/**
+ * A world on the fixture repository whose executor only records the calls that reach it.
+ * @param {{ delayMs?: number }} [options] How long the executor takes to answer, as real
+ *   GitHub does; at once by default.
+ */
+async function recordingWorld({ delayMs = 0 } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hackwin-parity-world-')))
   /** @type {Array<{ args: string[], env: Record<string, string> | undefined }>} */
   const reached = []
@@ -31,6 +35,7 @@ async function recordingWorld() {
     env: isolatedEnv(join(dir, 'home')),
     executor: async (args, call = {}) => {
       reached.push({ args, env: call.env })
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
       return { code: 0, stdout: '{"number":1}', stderr: '' }
     },
     repo: FIXTURE,
@@ -74,8 +79,10 @@ describe('1.7c/repository: the world on a fixture repository calls only that rep
     expect(reached.map((call) => call.env?.GH_REPO)).toEqual([FIXTURE.toUpperCase(), FIXTURE])
   })
 
-  test("1.7c/repository: a wrapper's child process that calls gh without GH_REPO is refused through the bridge, and one that names the fixture repository passes", async () => {
-    const { world, reached } = await recordingWorld()
+  test("1.7c/repository: a wrapper's child process that calls gh without GH_REPO is refused through the bridge, and one that names the fixture repository passes, also when GitHub takes its time", async () => {
+    // Real GitHub answered the Lead's calls in about 0.4 s on hackwin-fixture-b on 20 October
+    // 2026; the bridge waits for the answer however long it takes.
+    const { world, reached } = await recordingWorld({ delayMs: 500 })
 
     const without = await exec('gh', ['api', '--method', 'GET', 'repos/{owner}/{repo}/issues/1'], {
       env: world.wrapperEnv,
