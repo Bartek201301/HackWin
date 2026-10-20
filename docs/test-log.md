@@ -17,6 +17,77 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Git fetch: try again when another process in the same clone updated the ref (PR #137, issue #136)
+
+- Setup: the integrator did this task itself, at the Lead's request after the red run on main after #135, in its own worktree `task/136-fetch-ref-race`, created from `dab4572`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - Issue #136 records the cause of run `39494892687`. Two `git fetch` processes in one clone updated `refs/remotes/origin/main` at once, the test's and the Gate's in the same main checkout, and the one that wrote second failed. The Gate already ran its own fetches one at a time, but not those of another process.
+  - Locally (git 2.53.0), two concurrent fetches in one clone after origin's main moved failed one of the two in 150 of 150 rounds, and a second try succeeded in 50 of 50. The same race exists between the Gate and the Lead's other commands and Claude Code sessions in the same clone. A lost fetch in the Gate's check after a merge raises an attention item and skips the smoke test.
+  - One commit, `f40e98b`; PR #137 opened at 20:59:38 UTC. `Git#fetch` in `src/core/git/index.js` makes up to 3 tries, only for the two wordings of git's incorrect-old-value check. The integrator read them in git's source of v2.53.0 and v2.55.0: `fetching ref <ref> failed: incorrect old value provided` and `cannot lock ref '<ref>': is at <oid> but expected <oid>`. Every other failure throws at once.
+  - At `lead-55`'s review the retry was kept narrow. Issue #136 got its body narrowed to the two wordings and one "Scope change:" comment, because `cannot lock ref` alone also covers name conflicts.
+  - Two new tests in 1.3a/git:
+    - two real fetches in one clone after origin moved, in 5 rounds, both resolve. Against main's `fetch` it failed in 3 of 3 local runs;
+    - a `git` stand-in shows that only the two wordings are tried again, up to 3 times.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 2 files inside issue #136's paths; no secret pattern; no dash; no conflict with `dab4572`.
+    - Step 6, with the PR merged into `dab4572` at a load average of 3.36 with no other vitest process: `npm test` passed 1013 of 1013, and `npm run test:ac -- 1.3a/git` passed 1.3a/git 19. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39497581982`, succeeded on git 2.55.0. Both jobs passed 1012 tests and skipped 1 of 1013, and `test/integration/release/release.test.js`, the file that failed in run `39494892687`, passed 18 of 18.
+- Problems: none in this task. Which fetch of the Gate collided in run `39494892687` is inferred from the timing, not shown by the log. Three tries make the race unlikely, not impossible.
+- Measured: PR open 6 min 18 s (20:59:38 to 21:05:56 UTC); 1 commit, 1 PR run (142 s), 0 conflicts; local merge test `npm test` 148.07 s; the run on main after the merge 153 s.
+- Evidence: issue #136; PR https://github.com/Bartek201301/HackWin/pull/137; head `f40e98b`; merge commit `5edf320`; runs `39496688138` (PR), `39497581982` (main) and `39494892687` (the red run on main after #135).
+
+### 2026-10-20 · Phase 1 · 1.4l setup: one guide to six documents instead of the skeletons; design.md becomes the visual design (PR #135, issue #132)
+
+- Setup: a builder session of lane A in worktree `task/132-setup-documents-guide`, created by the integrator from `682d424`. `lead-55` opened the session, reviewed the PR and sent the merge.
+- What happened:
+  - The task builds decision 12 of the plan. `setup` no longer creates the five skeletons; it creates `docs/hackwin/documents.md` when it is missing, a guide with one part for each of `prd.md`, `spec.md`, `architecture.md`, `design.md`, `epics.md` and `non-code.md`. `manual-workflow.md` names the six documents and points to the guide. The five templates of the skeletons were removed from `src/generate/templates/`.
+  - The builder added one point that the issue did not list: step 2 of the manual workflow, the foundation task, names the visual tokens. `lead-55` accepted it at the review, because it follows from decision 12.
+  - The PR's tests, by its own account: 1.4l/documents is new; 1.4d/files, AC6/files and 1.4g/regenerate gained cases for the Release 1 template, whose seven files under `docs/hackwin/` stay byte for byte. A new test runs `setup --regenerate` on such a project, and the builder reports that it failed with a mutation that made `planBlockFiles` create `documents.md`.
+  - Two commits, `818bc8e` and a merge of main, `9d7cbb2`, after PR #134; PR #135 opened at 20:40:19 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 12 files inside issue #132's paths; no secret pattern; no dash; no conflict with `b659682`.
+    - Step 6, with the PR merged into `b659682` at a load average of 3.16 with no other vitest process: `npm test` passed 1011 of 1011, and `npm run test:ac -- 1.4l/documents 1.4d/files AC6/files 1.4g/regenerate` passed 1.4l/documents 5, 1.4d/files 5, AC6/files 10 and 1.4g/regenerate 18, all offline. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+- Problems: the run on main after the merge, `39494892687`, failed: `node 24` passed, and `node 22` failed one test, AC77 "the pull request of setup --regenerate with the raised cli_version passes CI, ..." in `test/integration/release/release.test.js`. At line 405, right after the Gate's merge, the test's `git fetch origin` in the main checkout failed with "cannot lock ref 'refs/remotes/origin/main': is at ac63d60... but expected 6f1ad2f...", because a fetch of the Gate, which still ran in the same checkout, had updated the ref first. #135 changed no fetch code. Locally, two concurrent `git fetch origin` in one clone after origin's main moved failed one of the two in 150 of 150 rounds, and a second try succeeded in 50 of 50. The same race exists between the Gate and any other `hackwin` command in the Lead's clone; #136 makes `fetch` in `src/core/git` try again. No rerun of the failed run.
+- Workflow notes of the PR: "`origin/main` moved during the task (PR #134 added decision 12 to `docs/build/plan.md`); `git merge origin/main` was clean and the decision text matched the issue."
+- Measured: PR open 6 min 28 s (20:40:19 to 20:46:47 UTC); 2 commits, 1 PR run (163 s), 0 conflicts; local merge test `npm test` 127.97 s, `test:ac` 11.45 s.
+- Evidence: issue #132; PR https://github.com/Bartek201301/HackWin/pull/135; head `9d7cbb2`; merge commit `dab4572`; run `39493971679` (PR).
+
+### 2026-10-20 · Phase 1 · Plan section 9, decision 12: the documents guide, and design.md as the visual design (PR #134, issue #133)
+
+- Setup: the human made a product decision in the Lead's chat on 20 October 2026, and `lead-55` sent it to the integrator. The integrator recorded it in the plan in its own worktree `task/133-plan-documents-decision`, created from `682d424`, and opened lane A's task for it. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - The decision: `setup` stops creating the skeletons `prd.md`, `spec.md`, `design.md`, `epics.md` and `non-code.md` under `docs/hackwin/`, and creates one guide, `docs/hackwin/documents.md`, to six documents instead. The new `architecture.md` takes over what `design.md` held, and `design.md` becomes the visual design. Existing files in `docs/hackwin/` are never deleted, renamed or rewritten.
+  - The integrator opened lane A's task #132 (1.4l) at 20:23:54 UTC, with its worktree `task/132-setup-documents-guide` from `682d424`, and the integrator's #133 for the plan. `lead-55` opened the builder session for #132.
+  - #132 adds two points that the decision did not state, and `lead-55` agreed to both at the merge: the guide keeps what the skeletons say today (the owners, the detailed points of contact in `spec.md`, the format of `epics.md`, keys only in `non-code.md`), and `setup --regenerate` keeps its rule and creates no document, `documents.md` included.
+  - Checked for #132: `src/generate/project-files.js:183` is the only place that creates the skeletons, and no code reads them. `test/harness/node-project.yml` stays as it is: it must reproduce the tree of the fixture repositories' reset commit (1.3d/node-project), so it holds the Release 1 documents and stands for an existing project.
+  - `README.md` line 57 stays: it lists what the template repository `Bartek201301/hackwin-template` gives, and that repository still holds the five skeletons (read with `gh api`). `lead-55` agreed; line 75, the Phase 2 `plan` row, goes to the next README revision.
+  - One commit, `1376b14`, adds row 12 to plan section 9; PR #134 opened at 20:27:24 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 1 file inside issue #133's path; no secret pattern; no dash; no conflict with `682d424`.
+    - Step 6, with the PR merged into `682d424` at a load average of 3.11 with no other vitest process: `npm test` passed 1004 of 1004. No `npm run test:ac`, because the task's only criterion is an inspection.
+    - Main had not moved, and the merge was pinned to the head SHA.
+- Problems: none.
+- Measured: PR open 5 min 53 s (20:27:24 to 20:33:17 UTC); 1 commit, 1 PR run (161 s), 0 conflicts; local merge test `npm test` 133.14 s.
+- Evidence: issues #132 and #133; PR https://github.com/Bartek201301/HackWin/pull/134; head `1376b14`; merge commit `b659682`; run `39492124445` (PR).
+
+### 2026-10-20 · Phase 1 · Harness: no background git maintenance in the offline fixtures (PR #131, issue #129)
+
+- Setup: the integrator did this task itself, at the Lead's request after the red run on main after #128, in its own worktree `task/129-fixtures-no-maintenance`, created from `a3d1bc7`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - Issue #129 records the cause of run `39482411884`. `receive-pack` starts `git maintenance run --auto --detach` after each push. Since git 2.54, its default `geometric` strategy repacks once `objects/17` holds two loose objects and deletes the loose objects it packed. A local clone of the origin that copies them one by one then fails. The integrator checked it in `builtin/gc.c` of git v2.53.0, v2.54.0 and v2.55.0, and reproduced the deletion locally with git 2.53 and `maintenance.strategy = geometric`.
+  - One commit, `259f053`; PR #131 opened at 19:38:20 UTC. The global git configs of the offline fixtures (`writeGitConfig` in `test/harness/fixture.js`) and of `test/core/git/temp-repo.js` set `maintenance.auto = false`.
+  - A new test in 1.3d/fixture and one in 1.3a/git each push a commit into the origin with `GIT_TRACE2_EVENT`. They expect `receive-pack` among the traced commands, and no `maintenance` or `gc`. Against main's helpers, with git 2.53.0, both failed at `maintenance.auto` ("expected null to be 'false'"). Without that line, both failed at the trace ("expected [ 'maintenance' ] to deeply equal []").
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 4 files inside issue #129's paths; no secret pattern; no dash; no conflict with `4f7be75`.
+    - Step 6, with the PR merged into `4f7be75` at a load average of 2.29 with no other vitest process: `npm test` passed 1004 of 1004, and `npm run test:ac -- 1.3d/fixture 1.3a/git` passed 1.3d/fixture 6 and 1.3a/git 17. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39486009013`, succeeded on git 2.55.0. `node 22` and `node 24` each passed 1003 tests and skipped 1 of 1004, as on the PR. The skip is one test in `test/commands/gate/gate.test.js`; #128's run skipped 1 as well. `test/internal/hook/pre-commit.test.js`, the file that failed in run `39482411884`, passed 13 of 13 in both jobs.
+- Problems: none in this task. One green run is not proof that the race is gone; the traced push shows that its cause, the maintenance process, no longer starts.
+- Measured: PR open 6 min 2 s (19:38:20 to 19:44:22 UTC); 1 commit, 1 PR run (159 s), 0 conflicts; local merge test `npm test` 97.39 s; the run on main after the merge 154 s.
+- Evidence: issue #129; PR https://github.com/Bartek201301/HackWin/pull/131; head `259f053`; merge commit `682d424`; runs `39485167215` (PR), `39486009013` (main) and `39482411884` (the red run on main after #128).
+
 ### 2026-10-20 · Phase 1 · Pre-release build 2: v0.1.0-pre.2, v0.1.1-pre.2 and v0.2.0-pre.2 (PR #128, issue #127)
 
 - Setup: the human approved build 2 on 20 October 2026 in the Lead's chat (plan section 9, decision 5), so that the manual check of plan section 6, item 6, runs on a build with everything merged that day, and `lead-55` sent the integrator the steps. The integrator made the version change itself, in its own worktree `task/127-version-pre-two`, created from `fcb569a`; `lead-55` reviewed it and sent the merge. The packs, installs and live runs ran in the integrator's scratch directory and in a worktree detached at the merge commit.
