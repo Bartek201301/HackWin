@@ -33,7 +33,7 @@ beforeAll(async () => {
 afterAll(() => world?.cleanup())
 
 test('AC65: a task issue written by hand from the template is taken by take, shipped by ship and merged by the Gate', () => {
-  expectTakenAndMerged(seen)
+  expectTakenAndMerged(seen, world)
 })
 
 test('AC65: take refuses an issue with an invalid data block with the reason, and status lists it as invalid', () => {

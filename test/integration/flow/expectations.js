@@ -2,6 +2,7 @@
 // tests on a fixture repository call the same ones, so that both check the same claims.
 
 import { expect } from 'vitest'
+import { VERSION } from '../../../src/cli/context.js'
 import { latestGateComment } from '../../../src/commands/gate/comment.js'
 import { accounts } from '../../harness/index.js'
 import { BUILDER1, FLOW_TASKS } from './flows.js'
@@ -21,7 +22,7 @@ export const LINK_REASONS = Object.freeze({
  * AC65, first part: the task written by hand is taken by `take`, shipped and merged by the Gate.
  * @param {Record<string, any>} seen The record of `takeToMerge`.
  */
-export function expectTakenAndMerged(seen) {
+export function expectTakenAndMerged(seen, { live }) {
   const { reset } = seen.numbers
   const { take, ship, pull } = seen
   expect(take.code).toBe(0)
@@ -54,6 +55,9 @@ export function expectTakenAndMerged(seen) {
   expect(seen.ci.text).toContain(
     `hackwin CI passed for pull request #${pull.number} at ${seen.head}`,
   )
+  expect(seen.ci.text).toContain(`checked with hackwin ${VERSION}`)
+  // On GitHub the workflow installs the version that setup pinned, a pre-release, by URL.
+  if (live) expect(seen.ci.text).toContain(`pins ${VERSION}; installing hackwin ${VERSION}`)
 
   expect(seen.merged).toMatchObject({ pr: pull.number, result: 'merged', author: BUILDER1 })
   expect(seen.gateRecord).toMatchObject({ head_sha: seen.head, result: 'merged' })
@@ -152,7 +156,11 @@ export function expectOnlyMerges(seen, { live }) {
     const push = seen.pushes[member]
     expect(push.hook.code, `${member}: git push origin HEAD:refs/heads/main`).not.toBe(0)
     expect(push.hook.stderr).toContain('rule: E2: no direct push to main')
-    if (live) expect(push.noVerify.code, `${member}: git push --no-verify`).not.toBe(0)
+    if (live) {
+      expect(push.noVerify.code, `${member}: git push --no-verify`).not.toBe(0)
+      expect(push.noVerify.stderr).toContain('GH013: Repository rule violations found')
+      expect(push.noVerify.stderr).toContain('Changes must be made through a pull request')
+    }
   }
 
   const shas = seen.history.map((/** @type {{ sha: string }} */ commit) => commit.sha)

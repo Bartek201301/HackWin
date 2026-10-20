@@ -42,7 +42,7 @@ beforeAll(async () => {
 }, TIMEOUT_MS)
 
 test('AC65: on a fixture repository, a task issue written by hand from the template is taken by take, shipped by ship, passes CI and is merged by the Gate', () => {
-  expectTakenAndMerged(seen)
+  expectTakenAndMerged(seen, { live: true })
 })
 
 test('AC65: on a fixture repository, take refuses an issue with an invalid data block with the reason, and status lists it as invalid', () => {

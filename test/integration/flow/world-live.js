@@ -167,11 +167,14 @@ export async function createLiveWorld(repo) {
         labels: task.labels ?? [],
       })
       log(`the Lead wrote task #${issue.number} by hand: ${task.title}`)
-      // As a person sees the new issue on GitHub before anyone takes it.
+      // As a person sees the new issue in the list of open issues before anyone acts on it. On
+      // 20 October 2026 a `status` 6 s after the issue was created did not list it, while a read
+      // of the issue by its number found it at once; the open issue list that `status` reads
+      // (src/commands/status/read.js) is assumed to have lagged.
       await world.eventually(
-        () => github.getIssue(issue.number),
-        (read) => read?.number === issue.number,
-        `the new issue #${issue.number}`,
+        () => github.listIssues({ state: 'open' }),
+        (open) => open.some((read) => read.number === issue.number),
+        `the new issue #${issue.number} in the list of open issues`,
       )
       return issue.number
     },
@@ -198,7 +201,8 @@ export async function createLiveWorld(repo) {
       const head = pull.headSha
       const run = await completedCheck(github, head, log)
       const text = await jobLog(github, run.id, log)
-      log(`CI of #${number} at ${head}: ${run.conclusion}, job ${run.id}`)
+      const lines = text.split('\n').filter((line) => /hackwin|step \d/.test(line))
+      log(`CI of #${number} at ${head}: ${run.conclusion}, job ${run.id}:\n${lines.join('\n')}`)
       return { passed: run.conclusion === 'success', head, text }
     },
 
@@ -214,13 +218,18 @@ export async function createLiveWorld(repo) {
     },
 
     async eventually(read, done, what) {
-      const deadline = Date.now() + EVENTUALLY_MS
-      for (;;) {
+      const start = Date.now()
+      const deadline = start + EVENTUALLY_MS
+      for (let reads = 1; ; reads += 1) {
         /** @type {any} */
         let value
         try {
           value = await read()
-          if (done(value)) return value
+          if (done(value)) {
+            if (reads > 1)
+              log(`${what}: as expected at read ${reads}, after ${Date.now() - start} ms`)
+            return value
+          }
         } catch (error) {
           if (!transient(error) || Date.now() > deadline) throw error
         }
