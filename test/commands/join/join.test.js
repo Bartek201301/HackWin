@@ -764,3 +764,33 @@ describe("1.4i/outsider-task: join's queue holds no issue that an account outsid
     expect(result.stdout).not.toContain(OUTSIDER)
   })
 })
+
+describe("1.4j/install-env: join's install runs with the command's environment, not with the environment of the process", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  test('a variable set only in the environment of the command reaches the install; one set only in process.env does not', async () => {
+    const seen = 'node_modules/.hackwin-install-env'
+    const { fixture, env, answers } = await createJoinFixture({
+      install: `mkdir -p node_modules && printf '%s\\n' "command: \${JOIN_TEST_COMMAND_ONLY-unset}" "process: \${JOIN_TEST_PROCESS_ONLY-unset}" > ${seen}`,
+    })
+    const clone = await fixture.clone('builder1')
+    vi.stubEnv('JOIN_TEST_PROCESS_ONLY', 'from process.env')
+    const commandEnv = { ...env, JOIN_TEST_COMMAND_ONLY: 'from the command' }
+    expect(commandEnv.JOIN_TEST_PROCESS_ONLY).toBeUndefined()
+    expect(process.env.JOIN_TEST_COMMAND_ONLY).toBeUndefined()
+
+    const result = await runJoin(clone.path, {
+      env: commandEnv,
+      fake: createFakeGitHub(),
+      args: ['--answers', answers],
+    })
+
+    expect(result.code).toBe(0)
+    expect(checklist(result.lines)).toContainEqual(expect.stringMatching(/^pass {2}install: /))
+    expect(readFileSync(join(clone.path, seen), 'utf8')).toBe(
+      'command: from the command\nprocess: unset\n',
+    )
+  })
+})
