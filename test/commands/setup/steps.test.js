@@ -368,13 +368,6 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
     expect(await fixture.git.isClean()).toBe(true)
   })
 
-  test('1.4d/preconditions: setup --regenerate is not built yet', async () => {
-    const { fixture, fake } = await createSetupFixture()
-    const result = await runSetup(fixture, fake, { args: ['--regenerate'] })
-    expect(result.code).toBe(2)
-    expect(result.stderr).toContain('setup --regenerate is not built yet')
-  })
-
   test('1.4d/preconditions: a private repository is reported and left as it is', async () => {
     const { fixture, fake } = await createSetupFixture({ visibility: 'private' })
     const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
