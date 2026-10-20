@@ -17,6 +17,36 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Integration 1.7a: from a task written by hand to its merge, and the task link failures (PR #114, issue #26)
+
+- Setup: a builder session in worktree `task/26-integration-take-to-merge`, role integrator. The live scenarios ran on `hackwin-fixture-a` as the Lead and as builder1 (`test-bot-builder`), with the builder token that the human set for that session. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - Two flows, each in two worlds with the same assertions. Offline, in `npm test`, against the fake GitHub with a bare origin. Live, only through `npm run test:ac`, on the fixture, with the real GitHub Actions workflow installing the pinned pre-release by URL.
+    - `takeToMerge` (AC65, AC32, AC33): setup and join; three tasks written by hand; refusals of an invalid and a blocked task; take, a session commit, ship, CI and the Gate's merge of two tasks. A push straight to main is refused by the `pre-push` hook and, on GitHub, also with `--no-verify` (`GH013`).
+    - `taskLinkFailures` (AC71): five pull requests opened by hand that CI and stage 2 of the Gate fail, with the expected reasons, and a hand edit of a generated wrapper that CI fails with E19.
+  - Commits: `98f3a85` (the scenarios), `8634a96` (a wait for the open issue list, after the live lag below), and `4cde7c9` (the Lead's review: exact CI reasons, checks that can fail). Plus two merges of main. PR #114 opened at 10:41:39 UTC.
+  - Merged after #120 and #121 with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 9 files inside issue #26's path; no secret pattern; no dash; no conflict with `5b6f533`.
+    - Step 6 merged the PR into `5b6f533` (`708d04f`). `npm test` passed 989 of 989, from 16:12:06 to 16:15:29 UTC.
+    - **The token step.** The Lead first asked the integrator to read the builder token from the macOS Keychain for the live part. The integrator refused: the human's standing rules say it never reads or sets `HACKWIN_TEST_BUILDER_TOKEN`, and AGENTS.md forbids reading a credential store. The Lead withdrew the request. The human then ran the one-line command with `!` in the integrator's terminal, with the output to a file the integrator read.
+    - `npm run test:ac -- AC65 AC32 AC33 AC71` ran from 16:16:48 to 16:26:59 UTC and passed AC65 6, AC32 5, AC33 2 and AC71 15. `pmset -g log` shows no sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39457592335`, succeeded (138 s).
+- Problems, from the PR's workflow notes:
+  - Main moved to `0.1.0-pre.1` (PR #113) while the task ran, so the branch merged main once more before the live runs; without that merge, setup pinned `0.1.0-pre.0`, which has no release.
+  - A closed laptop lid (clamshell sleep, 09:46 to 10:12 UTC) cut a live run in the middle and cost about 28 minutes. A gh call in flight timed out only after the wake.
+  - GitHub's open issue list lagged a new issue by 4.4 to 8.7 s, which failed one live assertion in the first run; `world-live.js` now waits for the list. That the miss came from this lag is assumed, not observed.
+  - The two live files use the same fixture, so in one `test:ac` run the second waits for the first one's lock: 647 s instead of about 330 s.
+  - One of the session's own edits did not apply because `prettier` had rewrapped the line the edit searched for. An unused import showed it.
+  - Remaining, in the PR:
+    - offline CI runs only `hackwin internal ci`, not the workflow's install step;
+    - the fake GitHub enforces no rule set on a push;
+    - stage 8's handling of a failing CI is not exercised;
+    - the repeated failure attention item is not asserted;
+    - the fixture keeps the last run's state until the next reset.
+- Measured: PR open 5 h 45 min 43 s (10:41:39 to 16:27:22 UTC), most of it waiting for the merges before it and the sleep of the laptop; 3 commits and 2 merges of main, 2 PR runs (124 s, 130 s), 0 conflicts. Local merge test: `npm test` 197.75 s, `test:ac` 611.48 s. In the live take-to-merge runs, CI took 13 to 24 s from the end of `ship` to the completed check run.
+- Evidence: PR https://github.com/Bartek201301/HackWin/pull/114; head `c323efe`; merge commit `3b5aeef`; runs `39409737862` and `39415743874` (PR) and `39457592335` (main); fixture job `118574807990` (CI on fixture PR #22).
+
 ### 2026-10-20 · Phase 1 · Harness lock: onWait comes before the timeout, and ps time does not count against it (PR #121, issue #119)
 
 - Setup: the integrator made this fix itself, at the Lead's request, in its own worktree `task/119-lock-wait-before-timeout`, created from `943722e`; PR #109 (#28) waited for it. `lead-55` reviewed it and sent the merge.
