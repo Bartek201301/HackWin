@@ -286,7 +286,7 @@ async function takeTask(ctx, scope, local, { task, skipped, mode, hooksRepaired 
   const links = linksLine(progress.links)
   if (links) ctx.out.line(links)
 
-  const install = await runInstall({ cwd: checkout.path, config })
+  const install = await runInstall({ cwd: checkout.path, config, env: ctx.env })
   progress.install = install
   if ('skipped' in install) {
     ctx.out.line(install.notice)

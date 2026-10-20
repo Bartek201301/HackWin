@@ -109,6 +109,8 @@ function taskBody({ paths = ['src/features/counter/**'], acceptance_tests = [TES
  * @param {string[]} [options.labels]
  * @param {string} [options.author] The author of the task issue; the Lead by default.
  * @param {string | null} [options.generate]
+ * @param {Record<string, string | null>} [options.commands] Commands of hackwin.yml that replace
+ *   the stand-ins.
  * @param {Parameters<typeof createFakeGitHub>[0]['pulls']} [options.pulls] Pull requests that
  *   exist before ship runs.
  */
@@ -119,6 +121,7 @@ export async function scene({
   labels = ['in-progress', 'role:counter'],
   author,
   generate = null,
+  commands = {},
   pulls = [],
 } = {}) {
   const hackwin = hackwinObject(3)
@@ -130,6 +133,7 @@ export async function scene({
     format: `${NODE} tools/format.mjs`,
     generate: generate === null ? null : `${NODE} ${generate}`,
     lockfile_regen: 'true',
+    ...commands,
   }
   const fixture = await createFixture({
     files: MAIN_FILES,
