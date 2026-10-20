@@ -14,6 +14,7 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createGitHub } from '../../../src/core/github/index.js'
 import { RemoteError } from '../../../src/core/runtime/index.js'
+import { REFUSED } from '../../harness/guard.js'
 import { teamConfig, yaml } from '../../harness/index.js'
 import { runCli, withCli } from './clis.js'
 import { QUICK_COMMANDS } from './scene.js'
@@ -287,22 +288,34 @@ export async function finishedCheck(repo, sha) {
 /**
  * The log of the workflow run of a check run, as `gh run view <id> --log` prints it. gh prints
  * a log only once the whole run is complete, which can be a little after its check run, so a
- * failed call is made again for up to five minutes.
+ * failed call is made again for up to five minutes; a call that fixtureOnly or the harness's
+ * guard refused is not.
  * @param {FixtureRepoContext} repo
  * @param {{ details_url: string }} check
+ * @param {{ patienceMs?: number, againMs?: number }} [options] How long to keep trying, and the
+ *   wait between two calls.
  * @returns {Promise<string>}
  */
-export async function checkLog(repo, check) {
+export async function checkLog(repo, check, { patienceMs = 5 * 60_000, againMs = 15_000 } = {}) {
   const id = /\/actions\/runs\/(\d+)/.exec(check.details_url)?.[1]
   if (!id) throw new Error(`the check run names no workflow run: ${check.details_url}`)
-  const deadline = Date.now() + 5 * 60_000
+  const deadline = Date.now() + patienceMs
   for (;;) {
-    const result = await leadGitHub(repo).run(['run', 'view', id, '--log'])
-    if (result.code === 0) return result.stdout
-    if (Date.now() > deadline) {
-      throw new Error(`gh run view ${id} --log exited ${result.code}: ${result.stderr}`)
+    try {
+      const result = await leadGitHub(repo).run(['run', 'view', id, '--log'])
+      return result.stdout
+    } catch (error) {
+      // GitHub.run throws a RemoteError for every gh call that exits non-zero.
+      if (!(error instanceof RemoteError) || error.message.includes(REFUSED)) throw error
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `gh run view ${id} --log failed for ${patienceMs / 1000} s; the last error: ${error.message}`,
+          { cause: error },
+        )
+      }
+      repo.log(`gh run view ${id} --log failed, again soon: ${error.message}`)
     }
-    await new Promise((resolve) => setTimeout(resolve, 15_000))
+    await new Promise((resolve) => setTimeout(resolve, againMs))
   }
 }
 
@@ -317,7 +330,8 @@ function isTransient(error) {
 
 /**
  * Run `scenario` and put the repository's push protection setting back as it was afterwards:
- * setup enables it (step 13), and the reset leaves repository settings alone.
+ * setup enables it (step 13), and the reset leaves repository settings alone. A setting that
+ * cannot be read could not be put back, so the scenario then does not run.
  * @template T
  * @param {FixtureRepoContext} repo
  * @param {() => Promise<T>} scenario
@@ -325,20 +339,22 @@ function isTransient(error) {
  */
 export async function keepingPushProtection(repo, scenario) {
   const lead = leadGitHub(repo)
-  const read = async () =>
+  const initial =
     (await lead.api('repos/{owner}/{repo}'))?.security_and_analysis?.secret_scanning_push_protection
       ?.status ?? null
-  const initial = await read()
+  if (initial === null) {
+    throw new Error(
+      `the push protection setting of ${repo.repo} could not be read, so it could not be put back after setup; the scenario did not run`,
+    )
+  }
   repo.log(`push protection before the scenario: ${initial}`)
   try {
     return await scenario()
   } finally {
-    if (initial !== null) {
-      await lead.api('repos/{owner}/{repo}', {
-        method: 'PATCH',
-        body: { security_and_analysis: { secret_scanning_push_protection: { status: initial } } },
-      })
-      repo.log(`push protection put back to ${initial}`)
-    }
+    await lead.api('repos/{owner}/{repo}', {
+      method: 'PATCH',
+      body: { security_and_analysis: { secret_scanning_push_protection: { status: initial } } },
+    })
+    repo.log(`push protection put back to ${initial}`)
   }
 }

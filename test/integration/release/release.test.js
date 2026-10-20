@@ -13,8 +13,9 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readLocal } from '../../../src/core/state/index.js'
 import { WORKFLOW_PATH, generatedBy } from '../../../src/generate/index.js'
+import { REFUSED } from '../../harness/guard.js'
 import { installOf } from './clis.js'
-import { OFF_FIXTURE, fixtureOnly, offFixture } from './live.js'
+import { OFF_FIXTURE, checkLog, fixtureOnly, keepingPushProtection, offFixture } from './live.js'
 import {
   BUILDER1,
   LEAD,
@@ -196,6 +197,98 @@ describe('1.7d/live-guard: every gh call of the live scenarios names the fixture
     expect(logged).toHaveLength(1)
     await executor(['api', 'repos/{owner}/{repo}/issues'], ON_FIXTURE)
     expect(ran).toEqual([['api', 'repos/{owner}/{repo}/issues']])
+  })
+})
+
+describe('1.7d/live-helpers: the CI log and the push protection of the live scenarios', () => {
+  const FIXTURE = 'Bartek201301/hackwin-fixture-c'
+  const CHECK = { details_url: `https://github.com/${FIXTURE}/actions/runs/7/job/9` }
+
+  /**
+   * A stand-in for the harness's context of a fixture repository, with the Lead's executor.
+   * @param {(args: string[]) => { code: number, stdout?: string, stderr?: string }} answer
+   */
+  function fixtureContext(answer) {
+    /** @type {string[][]} */
+    const calls = []
+    /** @type {Array<string | undefined>} */
+    const inputs = []
+    /** @type {string[]} */
+    const logged = []
+    const executor = async (
+      /** @type {string[]} */ args,
+      /** @type {{ input?: string }} */ call = {},
+    ) => {
+      calls.push(args)
+      inputs.push(call.input)
+      return { stdout: '', stderr: '', ...answer(args) }
+    }
+    const repo = /** @type {any} */ ({
+      repo: FIXTURE,
+      executor: () => executor,
+      log: (/** @type {string} */ line) => logged.push(line),
+    })
+    return { repo, calls, inputs, logged }
+  }
+
+  test('1.7d/live-helpers: checkLog makes a failed gh run view again until it prints the log', async () => {
+    const { repo, calls, logged } = fixtureContext(() =>
+      calls.length < 3 ? { code: 1, stderr: 'not ready\n' } : { code: 0, stdout: 'the log' },
+    )
+    expect(await checkLog(repo, CHECK, { patienceMs: 60_000, againMs: 1 })).toBe('the log')
+    expect(calls).toEqual(Array(3).fill(['run', 'view', '7', '--log']))
+    expect(logged).toHaveLength(2)
+  })
+
+  test('1.7d/live-helpers: checkLog gives up after its patience and names the last error', async () => {
+    const { repo, calls } = fixtureContext(() => ({ code: 1, stderr: `attempt ${calls.length}\n` }))
+    const failure = await checkLog(repo, CHECK, { patienceMs: 30, againMs: 5 }).catch((e) => e)
+    expect(calls.length).toBeGreaterThan(1)
+    expect(failure.message).toBe(
+      `gh run view 7 --log failed for 0.03 s; the last error: GitHub call failed: gh run view 7 --log: attempt ${calls.length}`,
+    )
+  })
+
+  test('1.7d/live-helpers: checkLog does not make a call again that the harness refused', async () => {
+    const { repo, calls } = fixtureContext(() => ({ code: 1, stderr: `${REFUSED}not here\n` }))
+    await expect(checkLog(repo, CHECK, { patienceMs: 60_000, againMs: 1 })).rejects.toThrow(
+      `${REFUSED}not here`,
+    )
+    expect(calls).toHaveLength(1)
+  })
+
+  test('1.7d/live-helpers: keepingPushProtection runs no scenario when the setting cannot be read', async () => {
+    const { repo, calls } = fixtureContext(() => ({ code: 0, stdout: '{}' }))
+    let ran = false
+    await expect(
+      keepingPushProtection(repo, async () => {
+        ran = true
+      }),
+    ).rejects.toThrow(
+      `the push protection setting of ${FIXTURE} could not be read, so it could not be put back after setup; the scenario did not run`,
+    )
+    expect(ran).toBe(false)
+    expect(calls).toEqual([['api', '--method', 'GET', 'repos/{owner}/{repo}']])
+  })
+
+  test('1.7d/live-helpers: keepingPushProtection puts the setting back after a scenario that failed', async () => {
+    const setting = {
+      security_and_analysis: { secret_scanning_push_protection: { status: 'disabled' } },
+    }
+    const { repo, calls, inputs } = fixtureContext(() => ({
+      code: 0,
+      stdout: JSON.stringify(setting),
+    }))
+    await expect(
+      keepingPushProtection(repo, async () => {
+        throw new Error('setup exited 0')
+      }),
+    ).rejects.toThrow('setup exited 0')
+    expect(calls).toEqual([
+      ['api', '--method', 'GET', 'repos/{owner}/{repo}'],
+      ['api', '--method', 'PATCH', 'repos/{owner}/{repo}', '--input', '-'],
+    ])
+    expect(JSON.parse(String(inputs[1]))).toEqual(setting)
   })
 })
 

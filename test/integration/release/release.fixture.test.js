@@ -240,15 +240,18 @@ describe('AC76: the identity and agent of the Lead, and the install before a man
             a.team.lead = other
             a.team.members[0].github = other
           })
-          const from = repo.calls.length
-          const result = await setupLive(repo, clone, cli, answers)
-          expect(result.code).toBe(2)
-          expect(result.stderr).toContain(
-            `the Lead is ${other}, but gh is logged in as ${repo.logins.lead}: setup must be run by the Lead`,
-          )
-          expect(writeCalls(repo, from)).toEqual([])
-          expect(await remoteMain(clone)).toBe(repo.resetSha)
-          expect(await clone.git.isClean()).toBe(true)
+          // Should setup get past the check, its step 13 would change push protection.
+          await keepingPushProtection(repo, async () => {
+            const from = repo.calls.length
+            const result = await setupLive(repo, clone, cli, answers)
+            expect(result.code).toBe(2)
+            expect(result.stderr).toContain(
+              `the Lead is ${other}, but gh is logged in as ${repo.logins.lead}: setup must be run by the Lead`,
+            )
+            expect(writeCalls(repo, from)).toEqual([])
+            expect(await remoteMain(clone)).toBe(repo.resetSha)
+            expect(await clone.git.isClean()).toBe(true)
+          })
         },
         AS_LEAD,
       )
@@ -267,16 +270,18 @@ describe('AC76: the identity and agent of the Lead, and the install before a man
           const answers = soloAnswers(repo, (a) => {
             a.team.members[0].agent = 'codex'
           })
-          const from = repo.calls.length
-          const result = await setupLive(repo, clone, cli, answers)
-          expect(result.code).toBe(2)
-          expect(result.stderr).toContain('team.members[0].agent is codex')
-          expect(result.stderr).toContain(
-            "the Claude Code deny rule is the only block against a merge by the Lead's own sessions",
-          )
-          expect(result.stderr).toContain('key: team.members[0].agent')
-          expect(writeCalls(repo, from)).toEqual([])
-          expect(await remoteMain(clone)).toBe(repo.resetSha)
+          await keepingPushProtection(repo, async () => {
+            const from = repo.calls.length
+            const result = await setupLive(repo, clone, cli, answers)
+            expect(result.code).toBe(2)
+            expect(result.stderr).toContain('team.members[0].agent is codex')
+            expect(result.stderr).toContain(
+              "the Claude Code deny rule is the only block against a merge by the Lead's own sessions",
+            )
+            expect(result.stderr).toContain('key: team.members[0].agent')
+            expect(writeCalls(repo, from)).toEqual([])
+            expect(await remoteMain(clone)).toBe(repo.resetSha)
+          })
         },
         AS_LEAD,
       )
