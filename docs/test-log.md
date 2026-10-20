@@ -19,7 +19,7 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ### 2026-10-20 · Phase 1 · Integration 1.7b: enforcement across the layers (PR #118, issue #27)
 
-- Setup: a builder session in worktree `task/27-integration-enforcement-layers`, created by the integrator from `531b782`, role integrator. Its live scenarios ran on `hackwin-fixture-private` and on a public fixture, as the Lead and as builder1, with the builder token that the human set for that session. `lead-55` reviewed the PR and sent the merge.
+- Setup: a builder session in worktree `task/27-integration-enforcement-layers`, created by the integrator from `531b782`, role integrator. Its live scenarios ran on `hackwin-fixture-private` and on a public fixture, as the Lead and as builder1, with the builder token that the human stored once in the macOS Keychain; `lead-55`'s start command for the session read it from there without printing it (`lead-55`, at the merge of #122). `lead-55` reviewed the PR and sent the merge.
 - What happened:
   - The scenarios check enforcement at each layer: AC47, AC54, AC63 (its deny part against a model of the documented matching), AC70 (against the fake GitHub), AC80 (the team's own push protection pattern), and an outsider who is builder1 under a team of 1 (`1.7b/outsider`).
   - Commits: `f94b35a` (the scenarios) and `4295a01`, the Lead's review:
@@ -86,7 +86,7 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ### 2026-10-20 · Phase 1 · Integration 1.7a: from a task written by hand to its merge, and the task link failures (PR #114, issue #26)
 
-- Setup: a builder session in worktree `task/26-integration-take-to-merge`, role integrator. The live scenarios ran on `hackwin-fixture-a` as the Lead and as builder1 (`test-bot-builder`), with the builder token that the human set for that session. `lead-55` reviewed the PR and sent the merge.
+- Setup: a builder session in worktree `task/26-integration-take-to-merge`, role integrator. The live scenarios ran on `hackwin-fixture-a` as the Lead and as builder1 (`test-bot-builder`), with the builder token that the human stored once in the macOS Keychain; `lead-55`'s start command for the session read it from there without printing it (`lead-55`, at the merge of #122). `lead-55` reviewed the PR and sent the merge.
 - What happened:
   - Two flows, each in two worlds with the same assertions. Offline, in `npm test`, against the fake GitHub with a bare origin. Live, only through `npm run test:ac`, on the fixture, with the real GitHub Actions workflow installing the pinned pre-release by URL.
     - `takeToMerge` (AC65, AC32, AC33): setup and join; three tasks written by hand; refusals of an invalid and a blocked task; take, a session commit, ship, CI and the Gate's merge of two tasks. A push straight to main is refused by the `pre-push` hook and, on GitHub, also with `--no-verify` (`GH013`).
