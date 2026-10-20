@@ -2,9 +2,11 @@
 // character, only members' issues are tasks, every state says what is true, the BLOCKED notice
 // in any protection state, and the local heartbeat through the runner when GitHub is unreachable.
 // And #79: the team is who `writtenByTeam` of src/core/tasks accepts, `team.lead` included.
+// And #115: a closed status issue counts only when its own issue carries the label `gate-status`.
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { gateFiles, writeHeartbeat } from '../../../src/commands/gate/state.js'
+import { STATUS_LABEL } from '../../../src/commands/gate/status-issue.js'
 import { buildStatus } from '../../../src/commands/status/view.js'
 import { parseHackwinConfig, parseOwners, resolveIdentity } from '../../../src/core/config/index.js'
 import { accounts, createFakeGitHub, createFixture, teamConfig } from '../../harness/index.js'
@@ -53,6 +55,41 @@ async function statusOf(state, options = {}) {
     clock: fixedClock(options.now ?? NOW),
     json: options.json ?? false,
   })
+}
+
+/**
+ * The fake GitHub of `current`, behind an executor whose listing of the closed issues with the
+ * label `gate-status` answers from the earlier state `listed` instead: GitHub's label filter kept
+ * returning an issue for minutes after its label was deleted (#115).
+ * @param {any} current
+ * @param {any} listed
+ */
+function staleClosedListing(current, listed) {
+  const fake = createFakeGitHub(current)
+  const now = fake.as(BUILDER1)
+  const earlier = createFakeGitHub(listed).as(BUILDER1)
+  /** @type {import('../../../src/core/github/index.js').GhExecutor} */
+  const executor = async (args, call) => {
+    const [path = '', query = ''] = (args.find((arg) => arg.includes('/issues?')) ?? '').split('?')
+    const wanted = new URLSearchParams(query)
+    const listing =
+      path.endsWith('/issues') &&
+      wanted.get('state') === 'closed' &&
+      wanted.get('labels') === STATUS_LABEL
+    return listing ? earlier(args, call) : now(args, call)
+  }
+  return { fake, executor }
+}
+
+/**
+ * The numbers of the issues read one by one, in order.
+ * @param {import('../../harness/index.js').FakeGitHub} fake
+ */
+function issuesReadByNumber(fake) {
+  return fake.calls
+    .map((call) => /^repos\/\{owner\}\/\{repo\}\/issues\/(\d+)$/.exec(call.endpoint ?? ''))
+    .filter((match) => match !== null)
+    .map((match) => Number(match[1]))
 }
 
 describe('1.6f/terminal: no text from GitHub puts a control character or a line break into the output', () => {
@@ -398,6 +435,114 @@ describe('1.6f/states: each state says what is true', () => {
     expect(result.lines).toContain('protection: unknown, the status issue holds no readable block')
     expect(result.lines).toContain('gate digest: unknown, the status issue holds no readable block')
     expect(result.out).not.toContain('first start')
+  })
+
+  /**
+   * A closed status issue of the fake's state.
+   * @param {number} number
+   * @param {string} updatedAt
+   * @param {Partial<import('../../../src/commands/gate/status-issue.js').GateStatus> & { heartbeat_at: string }} status
+   */
+  const closedStatus = (number, updatedAt, status) => ({
+    ...statusIssue(number, status),
+    state: 'closed',
+    updatedAt,
+  })
+  /** @param {{ labels: string[] }} issue */
+  const unlabeled = (issue) => ({ ...issue, labels: [] })
+
+  test('a closed issue that the label filter lists but whose own issue has no label is no status issue, as with an empty listing', async () => {
+    const old = closedStatus(7, '2026-10-24T11:59:00Z', {
+      heartbeat_at: '2026-10-24T11:59:00.000Z',
+      digest: [
+        {
+          time: '2026-10-24T11:58:00.000Z',
+          pr: 3,
+          author: BUILDER1,
+          result: 'merged',
+          stage: 'after-merge',
+          duration: '2m10s',
+          note: '',
+        },
+      ],
+    })
+    const { fake, executor } = staleClosedListing({ issues: [unlabeled(old)] }, { issues: [old] })
+    const result = await runStatus({
+      cwd: fixture.main,
+      env: fixture.env,
+      executor,
+      clock: fixedClock(NOW),
+    })
+    expect(result.code).toBe(0)
+    expect(result.lines[0]).toMatch(/^the Gate has not been started/)
+    expect(result.lines).toEqual((await statusOf({ issues: [unlabeled(old)] })).lines)
+    // Nothing else of this state is read by its number: the listing named #7.
+    expect(issuesReadByNumber(fake)).toEqual([7])
+  })
+
+  test('of two listed closed issues, the newer without the label and the older with it, the older is the closed status issue', async () => {
+    const older = closedStatus(7, '2026-10-24T11:59:00Z', {
+      heartbeat_at: '2026-10-24T11:59:00.000Z',
+    })
+    const newer = closedStatus(9, '2026-10-24T11:59:30Z', {
+      heartbeat_at: '2026-10-24T11:00:00.000Z',
+      stopped_at: '2026-10-24T11:00:00.000Z',
+    })
+    const { fake, executor } = staleClosedListing(
+      { issues: [older, unlabeled(newer)] },
+      { issues: [older, newer] },
+    )
+    const result = await runStatus({
+      cwd: fixture.main,
+      env: fixture.env,
+      executor,
+      clock: fixedClock(NOW),
+    })
+    expect(result.lines.slice(0, 2)).toEqual([
+      'gate: running, heartbeat 1m00s ago',
+      'warning: the status issue #7 is closed; a running Gate keeps editing it, but the next start of the Gate creates a new status issue; to keep this one, reopen #7',
+    ])
+    expect(result.lines).toContain('status issue: #7 https://github.com/hackwin-test/app/issues/7')
+    expect(result.out).not.toContain('#9')
+    expect(issuesReadByNumber(fake)).toEqual([9, 7])
+  })
+
+  test('status reads at most three listed closed issues, last edited first', async () => {
+    const listed = [9, 10, 11, 12].map((number) =>
+      closedStatus(number, `2026-10-24T11:${String(number).padStart(2, '0')}:00Z`, {
+        heartbeat_at: '2026-10-24T11:59:00.000Z',
+      }),
+    )
+    // Only the one edited first, #9, still carries the label.
+    const current = listed.map((issue) => (issue.number === 9 ? issue : unlabeled(issue)))
+    const { fake, executor } = staleClosedListing({ issues: current }, { issues: listed })
+    const result = await runStatus({
+      cwd: fixture.main,
+      env: fixture.env,
+      executor,
+      clock: fixedClock(NOW),
+    })
+    expect(result.lines[0]).toMatch(/^the Gate has not been started/)
+    expect(issuesReadByNumber(fake)).toEqual([12, 11, 10])
+  })
+
+  test('with an open status issue, status reads no closed one by its number', async () => {
+    const closed = closedStatus(7, '2026-10-24T11:59:30Z', {
+      heartbeat_at: '2026-10-24T11:59:00.000Z',
+    })
+    const open = statusIssue(8, { heartbeat_at: '2026-10-24T11:59:00.000Z' })
+    const { fake, executor } = staleClosedListing(
+      { issues: [unlabeled(closed), open] },
+      { issues: [closed, open] },
+    )
+    const result = await runStatus({
+      cwd: fixture.main,
+      env: fixture.env,
+      executor,
+      clock: fixedClock(NOW),
+    })
+    expect(issuesReadByNumber(fake)).toEqual([])
+    expect(result.lines).toContain('status issue: #8 https://github.com/hackwin-test/app/issues/8')
   })
 })
 
