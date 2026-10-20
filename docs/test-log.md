@@ -17,6 +17,22 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Harness: no background git maintenance in the offline fixtures (PR #131, issue #129)
+
+- Setup: the integrator did this task itself, at the Lead's request after the red run on main after #128, in its own worktree `task/129-fixtures-no-maintenance`, created from `a3d1bc7`. `lead-55` reviewed it and sent the merge.
+- What happened:
+  - Issue #129 records the cause of run `39482411884`. `receive-pack` starts `git maintenance run --auto --detach` after each push. Since git 2.54, its default `geometric` strategy repacks once `objects/17` holds two loose objects and deletes the loose objects it packed. A local clone of the origin that copies them one by one then fails. The integrator checked it in `builtin/gc.c` of git v2.53.0, v2.54.0 and v2.55.0, and reproduced the deletion locally with git 2.53 and `maintenance.strategy = geometric`.
+  - One commit, `259f053`; PR #131 opened at 19:38:20 UTC. The global git configs of the offline fixtures (`writeGitConfig` in `test/harness/fixture.js`) and of `test/core/git/temp-repo.js` set `maintenance.auto = false`.
+  - A new test in 1.3d/fixture and one in 1.3a/git each push a commit into the origin with `GIT_TRACE2_EVENT`. They expect `receive-pack` among the traced commands, and no `maintenance` or `gc`. Against main's helpers, with git 2.53.0, both failed at `maintenance.auto` ("expected null to be 'false'"). Without that line, both failed at the trace ("expected [ 'maintenance' ] to deeply equal []").
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 4 files inside issue #129's paths; no secret pattern; no dash; no conflict with `4f7be75`.
+    - Step 6, with the PR merged into `4f7be75` at a load average of 2.29 with no other vitest process: `npm test` passed 1004 of 1004, and `npm run test:ac -- 1.3d/fixture 1.3a/git` passed 1.3d/fixture 6 and 1.3a/git 17. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39486009013`, succeeded on git 2.55.0. `node 22` and `node 24` each passed 1003 tests and skipped 1 of 1004, as on the PR. The skip is one test in `test/commands/gate/gate.test.js`; #128's run skipped 1 as well. `test/internal/hook/pre-commit.test.js`, the file that failed in run `39482411884`, passed 13 of 13 in both jobs.
+- Problems: none in this task. One green run is not proof that the race is gone; the traced push shows that its cause, the maintenance process, no longer starts.
+- Measured: PR open 6 min 2 s (19:38:20 to 19:44:22 UTC); 1 commit, 1 PR run (159 s), 0 conflicts; local merge test `npm test` 97.39 s; the run on main after the merge 154 s.
+- Evidence: issue #129; PR https://github.com/Bartek201301/HackWin/pull/131; head `259f053`; merge commit `682d424`; runs `39485167215` (PR), `39486009013` (main) and `39482411884` (the red run on main after #128).
+
 ### 2026-10-20 · Phase 1 · Pre-release build 2: v0.1.0-pre.2, v0.1.1-pre.2 and v0.2.0-pre.2 (PR #128, issue #127)
 
 - Setup: the human approved build 2 on 20 October 2026 in the Lead's chat (plan section 9, decision 5), so that the manual check of plan section 6, item 6, runs on a build with everything merged that day, and `lead-55` sent the integrator the steps. The integrator made the version change itself, in its own worktree `task/127-version-pre-two`, created from `fcb569a`; `lead-55` reviewed it and sent the merge. The packs, installs and live runs ran in the integrator's scratch directory and in a worktree detached at the merge commit.
