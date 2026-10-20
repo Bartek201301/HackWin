@@ -17,6 +17,37 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-20 · Phase 1 · Pre-release build 2: v0.1.0-pre.2, v0.1.1-pre.2 and v0.2.0-pre.2 (PR #128, issue #127)
+
+- Setup: the human approved build 2 on 20 October 2026 in the Lead's chat (plan section 9, decision 5), so that the manual check of plan section 6, item 6, runs on a build with everything merged that day, and `lead-55` sent the integrator the steps. The integrator made the version change itself, in its own worktree `task/127-version-pre-two`, created from `fcb569a`; `lead-55` reviewed it and sent the merge. The packs, installs and live runs ran in the integrator's scratch directory and in a worktree detached at the merge commit.
+- What happened:
+  - `package.json` on main carried `0.1.0-pre.1`, the version of build 1, so the integrator opened #127 (role integrator, one inspection). One commit, `83abc5d`, changed `version` in `package.json` and both version fields of `package-lock.json`; PR #128 opened at 19:14:07 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 2 files inside issue #127's paths; no secret pattern; no dash; no conflict with `fcb569a`.
+    - Step 6, with the PR merged into `fcb569a` at a load average of 1.39 with no other vitest process: `npm test` passed 1002 of 1002. No `npm run test:ac`, because the task's only criterion is an inspection.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The merge commit `a3d1bc7` was extracted three times with `git archive`. The first copy was packed as is; in the other two only the `version` line of `package.json` changed, to `0.1.1-pre.2` and `0.2.0-pre.2`. `npm pack` (npm 11.11.0, Node 25.8.1) made three tarballs of 140 files: 297,313, 297,312 and 297,313 bytes.
+  - The three releases were published at 19:19:43, 19:19:46 and 19:19:48 UTC with `gh release create --prerelease --latest=false` (`createdAt` 19:18:59 UTC, the time of the merge commit): tag `v<version>` on `a3d1bc7`, the tarball as the only asset. `v0` stays the latest release.
+  - Checks of the releases:
+    - Extracted, the three tarballs differ only in line 3 of `package.json`, and their file lists are identical. `bin`, `src`, `LICENSE`, `README.md` and `package.json` of the `0.1.0-pre.2` tarball equal those of the merge commit.
+    - Each asset, installed by the URL form of contracts 6.3 into its own scratch prefix, printed its own version with `hackwin --version`: `0.1.0-pre.2`, `0.1.1-pre.2` and `0.2.0-pre.2`. The global npm prefix has no `hackwin`.
+    - Each asset downloaded from its release URL is byte for byte the local pack, and GitHub's digest of each asset is the same sha256.
+  - Live runs on the merge commit, as the Lead only, without the builder token:
+    - `HACKWIN_TEST_PRERELEASE=2 npm run test:ac -- AC76 AC77` passed AC76 16 and AC77 10, from 19:20:35 to 19:27:23 UTC, with the live scenarios on `hackwin-fixture-c`. Fixture run `39483159047` logged `installing hackwin 0.1.1-pre.2` for the bug fix PR and succeeded; run `39483554125`, on the PR that names a release of another phase, failed, as AC77 expects. The fixture's first run of the session, `39482794758`, failed at `actions/setup-node` with "Dependencies lock file is not found", as build 1's first run `39409185266` did; the scenarios passed.
+    - `npm run test:ac -- AC66` passed AC66 2, the offline test and the live one on `hackwin-fixture-b`, from 19:28:37 to 19:32:14 UTC. Fixture run `39484066438` logged `installing hackwin 0.1.0-pre.2`.
+    - No sleep in either run.
+    - Afterwards, `hackwin-fixture-b` had main at `0d79614` (the scenario's Gate merge), branch `main` only, no open PR and the Gate status issue #111 open. `hackwin-fixture-c` had main at `f642d6e` ("Bootstrap HackWin 0.1.0-pre.2"), issue #35 and PR #36 of the last AC77 scenario open, and its branch `task/35-move-to-the-next`. `withFixtureRepo` resets before a scenario, not after. Both pin `cli_version: 0.1.0-pre.2`.
+- Problems:
+  - The run on main after the merge, `39482411884`, failed: `node 24` passed, and `node 22` failed one test, the CM12 offline test "a newer bug fix release of the same phase warns and continues" in `test/internal/hook/pre-commit.test.js`. Its fixture setup's `git clone` of the offline origin failed with "fatal: failed to copy file to '.../objects/17/0a36...': No such file or directory".
+  - Cause, from git's source and a local reproduction (issue #129): after each push, `receive-pack` starts `git maintenance run --auto --detach` and does not wait for it. The runner has git 2.55.0. Since git 2.54, unscheduled maintenance uses the `geometric` strategy by default, whose repack runs when `objects/17` holds two or more loose objects and deletes the loose objects it packs. A local clone that copies the object files one by one fails when one of them is deleted in between. The version change did not cause it.
+  - Locally, with git 2.53 and `maintenance.strategy = geometric`, the 4 loose objects of a push were gone within 3 seconds; with `maintenance.auto = false` added, no maintenance started and they stayed.
+  - #129 sets `maintenance.auto = false` for the offline fixtures; no rerun of the failed run.
+- Measured: PR open 4 min 53 s (19:14:07 to 19:19:00 UTC); 1 commit, 1 PR run (135 s), 0 conflicts; local merge test `npm test` 105.40 s; live `test:ac` 406.95 s (AC76 and AC77) and 217.09 s (AC66); the run on main after the merge failed after 164 s (19:19:03 to 19:21:47 UTC).
+- Evidence: issue #127; PR https://github.com/Bartek201301/HackWin/pull/128; head `83abc5d`; merge commit `a3d1bc7`; runs `39481710303` (PR) and `39482411884` (main); issue #129; releases:
+  - https://github.com/Bartek201301/HackWin/releases/tag/v0.1.0-pre.2, asset sha256 `2e5e74f3c4f732177417a87f6922bf770c8f04c2a9ca40a5695f577d54837a41`;
+  - https://github.com/Bartek201301/HackWin/releases/tag/v0.1.1-pre.2, asset sha256 `f822e2e05f3d84d77d46641dc89c576c68e8d225023c0e3be23c8f5f47c124f1`;
+  - https://github.com/Bartek201301/HackWin/releases/tag/v0.2.0-pre.2, asset sha256 `e546f7f58f00f86d1201db85d4cc7ede75c0711093e2d51409e1f735aaa75515`.
+
 ### 2026-10-20 · Phase 1 · Contracts 6.2: which build a live scenario installs, and HACKWIN_TEST_PRERELEASE (PR #126, issue #125)
 
 - Setup: the integrator made this task itself, at the Lead's request after the merge of PR #107, in its own worktree `task/125-contracts-prerelease-build`, created from `6a71272`. `lead-55` reviewed it and sent the merge.
