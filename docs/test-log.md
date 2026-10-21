@@ -17,6 +17,41 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Manual check per release on 0.1.0-pre.2: real Claude Code sessions with default and with bypass permissions (plan section 6, item 6)
+
+- Setup:
+  - The Lead's MacBook Air: macOS (Darwin 25.6.0), Node 25.8.1, git 2.53.0, gh 2.88.1, Claude Code 2.1.307 with Opus 5.5. hackwin 0.1.0-pre.2 installed globally from the tarball of the GitHub pre-release `v0.1.0-pre.2` (`/opt/homebrew/bin/hackwin`).
+  - Repository `Bartek201301/hackwin-sandbox`, personal. `hackwin setup` by the Lead: a team of 2, Bartek201301 (Lead, roles `shared` and `greeting`) and test-bot-builder (roles `counter` and `todos`); no smoke test; event 2026-10-20T18:00+02:00 to 2026-10-24T22:00+02:00; no invitation. Bootstrap commit `4c64f3a` on main at 22:32:23 UTC; rule sets `hackwin-branch-rules` and `hackwin-update-restriction` active.
+  - Two task issues written by hand by `lead-55` in the form of the task template, both role `greeting`: #2 (add `shout`) and #3 (add `whisper`).
+  - The Lead typed the slash commands, answered the permission prompts and ran the Gate in a plain terminal. `lead-55` started the other Claude Code sessions in VS Code terminal tabs, each with a first message that held the test steps, and read their transcripts.
+- What happened:
+  - First start without a mode flag. On this Mac `claude` starts in permission mode `auto`: the transcripts record `permissionMode: auto`, and `~/.claude/settings.json` sets no default mode. In that mode, in the main checkout, the session start summary appeared, `/status` ran, `/gate` refused, and `/take 2` created the worktree `2-add-shout-to-greeting`. The task session started with the prompt of `take` did the whole task within 30 s of its start: it committed `48de833` and started `hackwin ship` in the same Bash call. The Lead stopped it with Esc. `ship` had already written its green check record for `48de833` (22:43:24 UTC), before the push.
+  - Default permissions (`claude --permission-mode default`), main checkout:
+    - The session start summary: "HackWin session start for Bartek201301 in /Users/bartus/Desktop/hackwin/hackwin-sandbox. origin/main is at 4c64f3a0adee. No commit reached main since 4c64f3a0adee, ... Recorded 4c64f3a0adee as the main commit this worktree has seen."
+    - `hackwin status` through the Bash tool and `/status` printed the same 12 lines.
+    - `/gate` exited 2: "the Gate starts only in its own terminal, never inside an agent session or a script: open a separate terminal for it; no Gate is running on this machine".
+  - Default permissions, the worktree of #2:
+    - `command -v hackwin && hackwin --version`: `/opt/homebrew/bin/hackwin`, `0.1.0-pre.2`.
+    - An Edit of `src/features/counter/counter.ts` was refused by the PreToolUse hook, before any prompt: "hackwin: blocked: this edit changes a file outside the roles of Bartek201301 (shared, greeting)", rule E1. `git status` was clean.
+    - `gh pr merge 9999 --merge` and `gh api -X PUT repos/Bartek201301/hackwin-sandbox/pulls/9999/merge` were refused by the PreToolUse hook with rule E3, and `git push origin --all` and `git push origin HEAD:main` with rule E2. No permission prompt appeared for any of the four.
+    - Three blank lines were appended to `greeting.test.ts` through Bash, then an Edit added an unformatted one-line function to `greeting.ts`. `git diff` showed the function formatted over 3 lines and the 3 blank lines of the test file unchanged. Both files were then restored.
+    - `/ship` reused the record of the interrupted run ("steps 3 to 9, checks: passed for 48de833... at 2026-10-21T22:43:24.942Z, so they do not run again"), pushed and opened PR #4. The Gate merged it as `ca00baf` at 23:17:57 UTC with the checks `check` and `hackwin` green, and closed #2.
+    - The Lead answered 5 permission prompts in this part: `hackwin status`, `command -v hackwin`, the `printf`, the Edit of `greeting.ts` and the `git checkout`. `/status`, `/gate` and `/ship` asked nothing, because each wrapper allows its own command.
+  - Bypass permissions (`claude --dangerously-skip-permissions`), main checkout:
+    - The session start summary listed the merge of PR #4 (`ca00baff877f`), the two changed files under "In your roles (shared, greeting)", and "The main checkout was fast-forwarded to origin/main."
+    - `/status` showed the Gate running, protection `full-restricted` and the digest line of #4. `/gate` exited 2: "... a Gate is already running on this machine: pid 12959, ...".
+    - `/take 3` removed the worktree of the merged task #2, claimed #3 and created `3-add-whisper-to-greeting`.
+  - Bypass permissions, the worktree of #3: the same refusals (E1 for the Edit, E3 for both merges, E2 for both pushes) and the same formatting result. The session committed `f0e16b9`. `/ship` ran every check (full check 4.5 s, acceptance tests 0.5 s) and opened PR #6. The Gate merged it as `d022398` at 23:23:56 UTC and closed #3.
+  - Coverage: AC55 and AC58 in both modes. AC63, its Claude Code clause: `gh pr merge` refused in both modes. AC14 only for `status`. AC65, its first sentence: two hand-written tasks taken, shipped and merged.
+- Problems:
+  - `claude` starts in auto mode on the Lead's Mac, so a check with default permissions needs `--permission-mode default`. With default permissions every Bash command and edit that no wrapper allows asks for approval. The Lead found that impractical ("absurdalne i nie wydajne": absurd and inefficient). HackWin behaved the same in both modes, because every refusal came from a hook before any prompt. See plan section 6, item 6.
+  - The body of a PR opened by `ship` is the template with an empty "Ownership role:" line and unchecked verification boxes, although `ship` ran those checks and recorded them in its comment on the issue (contracts 5.5). For the next PRD revision.
+  - A task that the Gate merged and closed keeps the label `in-review` (#2 and #3). PRD 8.3 says only "Closed, done". For the next PRD revision.
+  - AC14 here: `take` and `ship` ran only through the wrappers, so only `status` was compared with the terminal.
+  - AC63 names the deny rule. In both modes the PreToolUse hook refused `gh pr merge` first, so this check did not show whether the deny rule alone refuses it.
+- Measured: 2 tasks, 2 PRs, 0 conflicts, 0 Gate restarts. From the `ship` call to the merge: PR #4 65 s (23:16:52 to 23:17:57 UTC), PR #6 59 s (23:22:57 to 23:23:56 UTC). Rule events: E1 2, E3 4, E2 4, all refused. Permission prompts: 5 with default permissions, 0 with bypass.
+- Evidence: hackwin-sandbox commits `4c64f3a` (bootstrap), `ca00baf` (PR #4) and `d022398` (PR #6); PRs #4 and #6; issues #2 and #3; status issue #5. Claude Code transcripts in `~/.claude/projects/`: main checkout `7616706c` (default), `9b097883` (bypass), `3694a9a9` (auto); task worktrees `74de77ed` (default), `5f91b4e9` (bypass), `0a518e7c` (auto).
+
 ### 2026-10-20 · Phase 1 · Git fetch: try again when another process in the same clone updated the ref (PR #137, issue #136)
 
 - Setup: the integrator did this task itself, at the Lead's request after the red run on main after #135, in its own worktree `task/136-fetch-ref-race`, created from `dab4572`. `lead-55` reviewed it and sent the merge.
