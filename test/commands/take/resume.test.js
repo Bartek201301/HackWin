@@ -392,7 +392,7 @@ describe("1.5c/fix: a fix merges the remote branch into local commits, makes a m
       `the worktree of #7 at ${worktree.path} is on task/7-counter-reset, but its pull request #20 comes from task/7-renamed`,
     )
     expect(result.stderr).toContain(
-      `to resolve: run \`git worktree remove ${worktree.path}\` in ${clone.path}`,
+      `to resolve: run \`cd ${clone.path} && git worktree remove ${worktree.path}\``,
     )
     expect(fake.find(7)?.labels.sort()).toEqual(['in-review', 'role:counter'])
     fixture.cleanup()
@@ -893,7 +893,7 @@ describe('1.5f/worktree-state: a worktree of the task in a detached state or swi
       `hackwin take: the worktree of #7 at ${worktree.path} is in a detached state at ${work.slice(0, 12)}, not on the task's branch task/7-counter-reset, so take cannot reuse it`,
     )
     expect(result.stderr).toContain(
-      `to resolve: run \`git switch task/7-counter-reset\` in ${worktree.path}`,
+      `to resolve: run \`cd ${worktree.path} && git switch task/7-counter-reset\``,
     )
     expect(git.calls().length).toBeGreaterThan(0)
     expect(git.calls().filter(isWorktreeAdd)).toEqual([])
@@ -919,7 +919,7 @@ describe('1.5f/worktree-state: a worktree of the task in a detached state or swi
       `the worktree of #7 at ${worktree.path} is in a detached state at ${work.slice(0, 12)}, not on the task's branch task/7-counter-reset`,
     )
     const command = `git switch task/7-counter-reset && git merge --no-edit ${work}`
-    expect(result.stderr).toContain(`to resolve: run \`${command}\` in ${worktree.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${worktree.path} && ${command}\``)
     expect(git.calls().filter(isWorktreeAdd)).toEqual([])
     expect(fake.find(7)?.labels.sort()).toEqual(['ready', 'role:counter'])
     expect(fake.find(7)?.assignees).toEqual([])
@@ -952,7 +952,7 @@ describe('1.5f/worktree-state: a worktree of the task in a detached state or swi
       `hackwin take: the worktree of #7 at ${worktree.path} is switched to the branch experiment, not on the task's branch task/7-counter-reset, so take cannot reuse it`,
     )
     expect(result.stderr).toContain(
-      `to resolve: run \`git switch task/7-counter-reset\` in ${worktree.path}`,
+      `to resolve: run \`cd ${worktree.path} && git switch task/7-counter-reset\``,
     )
     expect(git.calls().length).toBeGreaterThan(0)
     expect(git.calls().filter(isWorktreeAdd)).toEqual([])

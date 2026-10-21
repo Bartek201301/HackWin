@@ -89,7 +89,7 @@ describe('1.5g/outsider-task: take never takes an issue that no member of the te
       expect(result.code, result.stderr).toBe(2)
       expect(result.stderr).toContain(`hackwin take: #30 ${outsiderMessage(OUTSIDER)}`)
       expect(result.stderr).not.toContain('# hackwin:task')
-      expect(result.stderr).toContain(`to resolve: run \`hackwin take\` in ${clone}`)
+      expect(result.stderr).toContain(`to resolve: run \`cd ${clone} && hackwin take\``)
     }
     expect(fake.find(30)).toMatchObject({ labels: ['ready'], assignees: [] })
   })

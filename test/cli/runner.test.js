@@ -163,7 +163,7 @@ describe('1.3a/runner: exit codes, short output and --json', () => {
         'hackwin take: blocked: a file outside your roles',
         '  rule: E1 scope',
         '  - src/x.js: role shared, held by lead',
-        `  to resolve: run \`hackwin take 4\` in ${repo.clone}`,
+        `  to resolve: run \`cd ${repo.clone} && hackwin take 4\``,
         '',
       ].join('\n'),
     )

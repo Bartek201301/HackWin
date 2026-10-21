@@ -260,7 +260,7 @@ describe('AC5: join on a builder account passes every check, activates the hooks
       `      fix: ask the Lead for .env.local, sent over a private channel, and save it as ${envLocal}`,
     )
     expect(missing.stdout).toContain(
-      `join not complete: 1 of 11 checks failed (.env.local); fix them, then run \`hackwin join\` in ${clone.path}`,
+      `join not complete: 1 of 11 checks failed (.env.local); fix them, then run \`cd ${clone.path} && hackwin join\``,
     )
     // The checks after it still ran.
     expect(checklist(missing.lines).at(-1)).toMatch(/^pass {2}queue: /)
@@ -395,7 +395,7 @@ describe('1.4e/checklist: a failed check prints its fix and the others continue'
       '      fix: install Claude Code so that the `claude` command is on the PATH',
     )
     expect(result.stdout).toContain(
-      `join not complete: 2 of 11 checks failed (github, agent); fix them, then run \`hackwin join\` in ${clone.path}`,
+      `join not complete: 2 of 11 checks failed (github, agent); fix them, then run \`cd ${clone.path} && hackwin join\``,
     )
     // The steps after the failures did their work.
     expect(await clone.git.configGet('core.hooksPath')).toBe('.githooks')
@@ -503,7 +503,7 @@ describe('1.4e/settings: the answer language and the explanation style come from
     expect(checklist(without.lines).filter((line) => line.startsWith('fail'))).toEqual([
       'fail  settings: no language and explanation_style: join asks for them in an interactive terminal, or reads them from --answers <file>',
     ])
-    expect(without.stdout).toContain(`      fix: run \`hackwin join\` in ${clone.path}`)
+    expect(without.stdout).toContain(`      fix: run \`cd ${clone.path} && hackwin join\``)
     expect(existsSync(join(clone.path, 'CLAUDE.local.md'))).toBe(false)
 
     expect((await runJoin(clone.path, { env, fake, args: ['--answers', answers] })).code).toBe(0)

@@ -2,7 +2,9 @@
 // so progress lines go to stderr. Every "run this" message names its directory (CM4), and every
 // block names the rule, the objects and how to resolve it (CM5).
 
+import { isAbsolute } from 'node:path'
 import { BlockedError, ConfigError, HackwinError, RemoteError } from './errors.js'
+import { quoteShellArg } from './exec.js'
 
 /** @import { Resolve } from './errors.js' */
 
@@ -48,15 +50,20 @@ export function createOutput({ stdout, stderr, json = false }) {
 }
 
 /**
- * The message that tells a human or an agent to run a command, naming the directory (CM4).
+ * The message that tells a human or an agent to run a command, naming the directory (CM4). For an
+ * absolute directory it is one line that works when pasted as is into a new terminal in any
+ * directory: it changes to the directory, quoted for a POSIX shell, and runs the command there
+ * (#143). Any other place, such as "any directory" or a clone on another machine, cannot be
+ * changed to, so it follows the command as text.
  * @param {string} command
- * @param {string} dir
+ * @param {string} dir An absolute path, "any directory", or a place described in words.
  * @returns {string}
  */
 export function runIn(command, dir) {
   if (!command) throw new TypeError('runIn needs a command')
   if (!dir) throw new TypeError(`runIn needs the directory to run \`${command}\` in (CM4)`)
-  return `run \`${command}\` in ${dir}`
+  if (!isAbsolute(dir)) return `run \`${command}\` in ${dir}`
+  return `run \`cd ${quoteShellArg(dir)} && ${command}\``
 }
 
 /**

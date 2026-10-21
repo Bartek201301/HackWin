@@ -42,7 +42,7 @@ describe('AC12: take exits 1 with a specific reason for each failed check, and 2
       `blocked: #7 cannot be taken: #7 is a task of the role greeting, which ${BUILDER2} holds on main; you hold counter, todos`,
     )
     expect(result.stderr).toContain('rule: take check 1')
-    expect(result.stderr).toContain(`to resolve: run \`hackwin take\` in ${clones.builder1}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${clones.builder1} && hackwin take\``)
   })
 
   test('a dependency is still open', async () => {
@@ -96,7 +96,7 @@ describe('AC12: take exits 1 with a specific reason for each failed check, and 2
       '#7 cannot be taken: you already run 2 tasks: #5, #6; your sessions value in hackwin.yml is 2',
     )
     expect(result.stderr).toContain('rule: take check 5')
-    expect(result.stderr).toMatch(/to resolve: run `hackwin ship` in .*\.worktrees\/5-task-5/)
+    expect(result.stderr).toMatch(/to resolve: run `cd \S*\.worktrees\/5-task-5 && hackwin ship`/)
   })
 
   test('in a clone where join has not completed, take exits 2 and names hackwin join', async () => {
@@ -108,7 +108,7 @@ describe('AC12: take exits 1 with a specific reason for each failed check, and 2
       const result = await take(fixture, fresh.path, fake, BUILDER1, args)
       expect(result.code).toBe(2)
       expect(result.stderr).toContain('`hackwin join` has not completed in this clone')
-      expect(result.stderr).toContain(`to resolve: run \`hackwin join\` in ${fresh.path}`)
+      expect(result.stderr).toContain(`to resolve: run \`cd ${fresh.path} && hackwin join\``)
     }
   })
 

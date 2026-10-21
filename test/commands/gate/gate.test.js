@@ -168,7 +168,7 @@ describe('AC58: the /gate wrapper inside an agent session starts no Gate', () =>
     expect(io.err).toContain(
       'the Gate starts only in its own terminal, never inside an agent session or a script: open a separate terminal for it; no Gate is running on this machine',
     )
-    expect(io.err).toContain(`to resolve: run \`hackwin gate\` in ${fixture.main}`)
+    expect(io.err).toContain(`to resolve: run \`cd ${fixture.main} && hackwin gate\``)
     expect(gateFilesPresent()).toEqual({ lock: false, state: false, heartbeat: false })
   })
 
@@ -204,7 +204,7 @@ describe('AC58: the /gate wrapper inside an agent session starts no Gate', () =>
     const { done } = startMain(fixture, { fake: leadGitHub(), login: LEAD, io })
     expect(await done).toBe(2)
     expect(io.err).toContain('the Gate starts only in its own terminal')
-    expect(io.err).toContain(`to resolve: run \`hackwin gate\` in ${fixture.main}`)
+    expect(io.err).toContain(`to resolve: run \`cd ${fixture.main} && hackwin gate\``)
     expect(gateFilesPresent()).toEqual({ lock: false, state: false, heartbeat: false })
   })
 })
@@ -286,7 +286,7 @@ describe('1.6a/state: the state file survives a restart and counts every start',
       stopped_at: clock.iso(),
     })
     expect(gate.io.out).toContain(
-      `Gate stopped; to start it again, run \`hackwin gate\` in ${fixture.main}`,
+      `Gate stopped; to start it again, run \`cd ${fixture.main} && hackwin gate\``,
     )
   })
 

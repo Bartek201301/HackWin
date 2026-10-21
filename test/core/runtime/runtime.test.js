@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   BlockedError,
@@ -81,7 +81,7 @@ describe('1.3a/runtime: exit codes and error types', () => {
       '  rule: E1 scope',
       '  - a.js',
       '  - b.js',
-      '  to resolve: run `hackwin take 4` in /repo',
+      '  to resolve: run `cd /repo && hackwin take 4`',
     ])
   })
 
@@ -106,14 +106,36 @@ describe('1.3a/runtime: exit codes and error types', () => {
 
 describe('1.3a/runtime: output helpers', () => {
   test('every "run this" message names its directory (CM4)', () => {
-    expect(runIn('hackwin join', '/home/me/repo')).toBe('run `hackwin join` in /home/me/repo')
+    expect(runIn('hackwin join', '/home/me/repo')).toBe('run `cd /home/me/repo && hackwin join`')
+    expect(runIn('hackwin join', '/home/me/my repo')).toBe(
+      "run `cd '/home/me/my repo' && hackwin join`",
+    )
     expect(() => runIn('hackwin join', '')).toThrow(TypeError)
+    expect(() => runIn('', '/home/me/repo')).toThrow(TypeError)
     expect(formatResolve({ command: 'gh auth login', dir: 'any directory' })).toBe(
       'run `gh auth login` in any directory',
     )
+    // A place that is no path on this machine cannot be changed to, so it stays as text.
+    expect(
+      runIn('hackwin join', 'the main checkout of their clone of https://github.com/o/r'),
+    ).toBe('run `hackwin join` in the main checkout of their clone of https://github.com/o/r')
     expect(formatResolve('ask the Lead to add you to hackwin.yml')).toBe(
       'ask the Lead to add you to hackwin.yml',
     )
+  })
+
+  test('the line of runIn, pasted as is into a shell in another directory, runs the command in the named one (#143)', async () => {
+    const scratch = createScratch()
+    cleanups.push(scratch.cleanup)
+    const dir = join(scratch.dir, `a b 'c' "d" $e;f&g|h(i)*j\`k\``)
+    mkdirSync(dir)
+    const line = runIn('pwd -P', dir)
+    expect(line.startsWith('run `cd ')).toBe(true)
+    expect(line.endsWith(' && pwd -P`')).toBe(true)
+    const pasted = line.slice('run `'.length, -1)
+    const result = await execShell(pasted, { cwd: scratch.dir })
+    expect(result.code).toBe(0)
+    expect(result.stdout).toBe(`${dir}\n`)
   })
 
   test('lines go to stdout, or to stderr with --json; warnings go to stderr and are kept', () => {

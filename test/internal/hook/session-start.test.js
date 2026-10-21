@@ -270,19 +270,19 @@ describe('1.4c/session-start: what the summary holds', () => {
     expect(lines).toContainEqual(
       expect.stringMatching(
         new RegExp(
-          `^- and \\d+ more; to see them, run \`git log --first-parent --oneline ${range}\` in ${task.path}$`,
+          `^- and \\d+ more; to see them, run \`cd ${task.path} && git log --first-parent --oneline ${range}\`$`,
         ),
       ),
     )
     expect(lines).toContainEqual(
       expect.stringMatching(
         new RegExp(
-          `^- and \\d+ more files; to see them, run \`git diff --name-status ${range}\` in ${task.path}$`,
+          `^- and \\d+ more files; to see them, run \`cd ${task.path} && git diff --name-status ${range}\`$`,
         ),
       ),
     )
     expect(lines).toContain(
-      `Not every scope change is shown in full here; to read them all, run \`gh issue view 12 --comments\` in ${task.path}.`,
+      `Not every scope change is shown in full here; to read them all, run \`cd ${task.path} && gh issue view 12 --comments\`.`,
     )
     // The newest scope change is kept whole; the oldest gives way.
     expect(lines).toContain('> Scope change: number 30.')
@@ -290,7 +290,7 @@ describe('1.4c/session-start: what the summary holds', () => {
     expect(lines).toContainEqual(
       expect.stringMatching(
         new RegExp(
-          `^- and \\d+ more; to see them, run \`gh pr list --author ${builder1} --state open\` in ${task.path}$`,
+          `^- and \\d+ more; to see them, run \`cd ${task.path} && gh pr list --author ${builder1} --state open\`$`,
         ),
       ),
     )
@@ -311,7 +311,7 @@ describe('1.4c/session-start: what the summary holds', () => {
     })
 
     expect(result.code).toBe(2)
-    expect(result.stderr).toContain(`to resolve: run \`hackwin join\` in ${path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${path} && hackwin join\``)
   })
 
   test('CM12: a CLI older than the version pinned on origin/main exits 2 with the install command', async () => {

@@ -227,7 +227,7 @@ describe('AC6: setup --resume on a public fixture repository', () => {
           }
           let result = await runLiveSetup(repo, clone, { executor: failing })
           expect(result.code).toBe(3)
-          expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${clone.path}`)
+          expect(result.stderr).toContain(`run \`cd ${clone.path} && hackwin setup --resume\``)
           const lead = repo.github('lead')
           expect(await lead.apiPages('repos/{owner}/{repo}/rulesets')).toEqual([])
           await clone.git.fetch()

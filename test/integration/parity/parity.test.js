@@ -171,7 +171,7 @@ describe('AC58/wrapper: the generated /gate wrapper starts no Gate', () => {
         expect(result.stderr).toBe(
           [
             'hackwin gate: the Gate starts only in its own terminal, never inside an agent session or a script: open a separate terminal for it; no Gate is running on this machine',
-            `  to resolve: run \`hackwin gate\` in ${world.main}`,
+            `  to resolve: run \`cd ${world.main} && hackwin gate\``,
             '',
           ].join('\n'),
         )

@@ -230,7 +230,7 @@ export function expectParity(world, run) {
   expect(starts).toEqual([{ cwd: worktrees.terminal, args: [prompt('terminal')] }])
   expect(wrapper.take.stdout).toContain(`prompt: ${prompts.wrapper}`)
   expect(wrapper.take.stdout).toContain(
-    `start Claude Code for #${issues.wrapper} in a new terminal: run \`claude "$(cat ${prompts.wrapper})"\` in ${worktrees.wrapper}`,
+    `start Claude Code for #${issues.wrapper} in a new terminal: run \`cd ${worktrees.wrapper} && claude "$(cat ${prompts.wrapper})"\``,
   )
   expect(terminal.take.stdout).toContain(`starting Claude Code in ${worktrees.terminal}`)
 

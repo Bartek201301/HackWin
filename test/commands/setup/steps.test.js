@@ -271,7 +271,7 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
     const result = await runSetup(fixture, fake)
     expect(result.code).toBe(2)
     expect(result.stderr).toContain('setup asks its questions in an interactive terminal')
-    expect(result.stderr).toContain(`run \`hackwin setup --answers <file>\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup --answers <file>\``)
   })
 
   test('1.4d/preconditions: a dirty tree, another branch, a worktree and a non-admin exit 2', async () => {
@@ -293,7 +293,7 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
     const task = await fixture.worktree({ issue: 7 })
     result = await runSetup(fixture, fake, { answers, cwd: task.path })
     expect(result.code).toBe(2)
-    expect(result.stderr).toContain(`run \`hackwin setup\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup\``)
 
     fake.state.collaborators[LEAD] = 'write'
     result = await runSetup(fixture, fake, { answers })
@@ -429,7 +429,7 @@ describe('1.4f/preconditions: the workflow scope of the gh login that git pushes
       'gh is logged in without the workflow scope (its scopes: gist, read:org, repo), and git pushes with its token: GitHub refuses a push that creates a workflow file without that scope, and the bootstrap commit creates .github/workflows/hackwin.yml',
     )
     expect(result.stderr).toContain(
-      `to resolve: run \`gh auth refresh -s workflow\` in any directory, then run \`hackwin setup\` in ${fixture.main}`,
+      `to resolve: run \`gh auth refresh -s workflow\` in any directory, then run \`cd ${fixture.main} && hackwin setup\``,
     )
     expect(result.stdout).not.toContain('How many people')
     expect(snapshot(fixture.main)).toEqual(before)

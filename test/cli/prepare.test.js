@@ -403,7 +403,7 @@ describe('1.3b/fast-forward: the main checkout follows origin/main (CM10)', () =
     const result = await run(repo, ['status'])
     expect(result.code).toBe(0)
     expect(result.stderr).toBe(
-      `warning: the main checkout is behind origin/main and was not fast-forwarded, because it has local changes or is not on main; to update it, run \`git merge --ff-only origin/main\` in ${repo.clone}\n`,
+      `warning: the main checkout is behind origin/main and was not fast-forwarded, because it has local changes or is not on main; to update it, run \`cd ${repo.clone} && git merge --ff-only origin/main\`\n`,
     )
     expect(head()).toBe(before)
     expect(readFileSync(join(repo.clone, 'README.md'), 'utf8')).toBe('local change\n')
@@ -441,7 +441,7 @@ describe('1.3b/setup: setup on an unconfigured repository skips the preparation'
       expect(status.stderr).toBe(
         [
           'hackwin status: not configured: hackwin.yml is missing on origin/main',
-          `  to resolve: run \`hackwin setup\` in ${repo.clone}`,
+          `  to resolve: run \`cd ${repo.clone} && hackwin setup\``,
           '',
         ].join('\n'),
       )
