@@ -17,6 +17,28 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Live scenarios on pre-release build 3: AC66, AC76, AC77 and the live AC6 (worktree at `934a94f`)
+
+- Setup:
+  - The integrator ran the live scenarios at `lead-55`'s request, one at a time, in a worktree detached at `934a94f`, the merge commit of build 3 (`package.json` `0.1.0-pre.3`, `npm ci`).
+  - The scenarios act only as the Lead, whose `gh` login is `Bartek201301`, so no `HACKWIN_TEST_BUILDER_TOKEN` was set or read. `lead-55` had first assumed they needed the builder token; the headers of `parity.fixture.test.js` and `setup.fixture.test.js` say they do not, and the release tests do not mention it.
+  - No other test run was going: all task sessions were closed, and the load average was between 1.87 and 2.66 at each start.
+- What happened:
+  - `npm run test:ac -- AC66`, 02:13:03 to 02:16:30 UTC: AC66 passed 2, failed 0 (the offline test and the live one on `hackwin-fixture-b`); 1121 skipped; Vitest duration 204.55 s. The fixture's `hackwin` check run `39710318451`, on the task's pull request, logged `installing hackwin 0.1.0-pre.3` and succeeded.
+  - `HACKWIN_TEST_PRERELEASE=3 npm run test:ac -- AC76 AC77`, 02:16:39 to 02:20:28 UTC: AC76 passed 16, failed 0; AC77 passed 9, failed 1; 1097 skipped; Vitest duration 227.76 s.
+    - The failed test was "AC77: the procedure of 20.6: ..." in `test/integration/release/release.fixture.test.js`. It failed before its own steps, in the harness's reset of `hackwin-fixture-c` (`test/harness/reset.js` line 186): "the reset of Bartek201301/hackwin-fixture-c did not hold: open issues: 37".
+    - Issue #37 ("A first task") was created at 02:18:22 by the previous scenario of the run and closed by the Lead's account at 02:18:35. Its events show nothing after the close. The reset reads the open issues back right after it closes them (`GET issues?state=open`), and that read still listed #37.
+    - Inferred, not observed: GitHub's issue listing lagged a few seconds behind the close, as #115 saw with the label filter.
+    - The PR of that run that names a release of another phase failed its `hackwin` check (run `39710804761`, `installing hackwin 0.1.0-pre.3`), which AC77 expects.
+  - `npm run test:ac -- AC6`, 02:21:02 to 02:22:45 UTC: AC6 passed 13, failed 0; 1110 skipped; Vitest duration 102.77 s. Among them, the live test of `setup.fixture.test.js` on `hackwin-fixture-a`, which #144 changed and which had not run since: "AC6: a setup that stops after the bootstrap push is completed by setup --resume, and a second resume creates no label or rule set", 98.8 s.
+  - To diagnose the failure, `HACKWIN_TEST_PRERELEASE=3 npm run test:ac -- AC77` ran once more, 02:22:52 to 02:28:03 UTC: AC77 passed 10, failed 0; Vitest duration 310.91 s.
+    - The fixture's check run `39711229318` on the bug fix PR logged `installing hackwin 0.1.1-pre.3` and succeeded.
+    - The PR that names a release of another phase failed its `hackwin` check (run `39711493769`), as AC77 expects.
+    - A pass on rerun does not undo the failure of the first run.
+- Problems: the reset's read-back of open issues can fail on a just-closed issue that GitHub still lists. This is the harness (integrator, `test/harness/reset.js`); no issue opened yet. One `check` run of the fixture, `39711229282`, was still in progress when the run ended; the next reset before a scenario handles what a run leaves.
+- Measured: AC66 2 of 2 in 204.55 s; AC76 16 of 16 and AC77 9 of 10 in 227.76 s; AC6 13 of 13 in 102.77 s; the AC77 rerun 10 of 10 in 310.91 s.
+- Evidence: worktree at `934a94f`; fixture runs `39710318451` (fixture-b), `39710804761`, `39711229318` and `39711493769` (fixture-c); issue #37 of `hackwin-fixture-c`; releases `v0.1.0-pre.3`, `v0.1.1-pre.3` and `v0.2.0-pre.3`.
+
 ### 2026-10-22 · Phase 1 · Pre-release build 3: 0.1.0-pre.3 on main and three GitHub pre-releases (PR #159, issue #157)
 
 - Setup: the human asked through `lead-55` for a pre-release of the usability pass to check before 0.1.0 (plan section 9, decisions 5 and 14). The integrator did the bump in its own worktree `task/157-version-pre-3`, created from `7e57c0b`, after #145, #146, #147, #148, #149 and #154 were merged. `lead-55` reviewed the PR and sent the merge, after the log PR #158.
