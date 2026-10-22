@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { parse } from 'yaml'
 import { PreconditionError } from '../../src/core/runtime/errors.js'
 import { parseHackwinConfig, parseOwners, validateConfig } from '../../src/core/config/index.js'
+import { parseTaskBlock } from '../../src/core/tasks/index.js'
 import {
   HASH_MARKERS,
   HTML_MARKERS,
@@ -11,15 +12,19 @@ import {
   languageName,
   planBlockFiles,
   planProjectFiles,
+  projectInput,
   renderAgentsBlock,
   renderHackwinConfig,
   renderOwners,
+  renderTaskTemplate,
   withBlock,
   withCliVersion,
 } from '../../src/generate/index.js'
 import { nodeProjectFiles, teamConfig } from '../harness/index.js'
 
-const INPUT = { defaultBranch: 'main', language: 'en' }
+/** The input of a team of three on the roles of the Node fixture (shared, counter, todos, greeting). */
+const TEAM = teamConfig(3)
+const INPUT = projectInput(TEAM)
 
 /** The files of the template, which the Node fixture holds unchanged except where noted. */
 const TEMPLATE = nodeProjectFiles()
@@ -30,8 +35,21 @@ const CHANGED_IN_FIXTURE = ['.gitignore', TEMPLATE_CHECK_WORKFLOW_PATH]
 /** The guide to the documents, which Release 1 did not have (plan section 9, decision 12). */
 const GUIDE = 'docs/hackwin/documents.md'
 
-/** The template file whose text changed since Release 1: it names the six documents. */
+/**
+ * The template file whose text changed since Release 1: it names the six documents, and its first
+ * lines point to the guide to the CLI.
+ */
 const MANUAL_WORKFLOW = 'docs/hackwin/manual-workflow.md'
+
+/** The guide to the CLI, which Release 1 did not have (#146). */
+const USING = 'docs/hackwin/using-hackwin.md'
+
+/** The task issue template, whose block is rendered from hackwin.yml and owners.yml (#146). */
+const TASK_TEMPLATE = '.github/ISSUE_TEMPLATE/hackwin-task.md'
+
+/** The paragraph under the title of the manual workflow that points to the guide to the CLI. */
+const CLI_POINTER =
+  'This is the method without the HackWin CLI. A team that uses the CLI follows `using-hackwin.md` instead, where `hackwin take` composes the prompt, `hackwin ship` opens the pull request and the Gate merges.'
 
 /** The documents that the guide covers, in its order. */
 const DOCUMENTS = ['prd.md', 'spec.md', 'architecture.md', 'design.md', 'epics.md', 'non-code.md']
@@ -89,25 +107,30 @@ describe('1.4d/files: the files of the template', () => {
       const path = spec.path
       if (path === TEMPLATE_CHECK_WORKFLOW_PATH || path === 'AGENTS.md') continue
       if (CHANGED_IN_FIXTURE.includes(path) || path === GUIDE || path === MANUAL_WORKFLOW) continue
+      if (path === USING || path === TASK_TEMPLATE) continue
       expect(empty[path], path).toEqual({ path, action: 'write', content: TEMPLATE[path] })
     }
-    // The manual workflow differs only in its steps on the documents and the foundation task.
+    // The manual workflow differs only in its steps on the documents and the foundation task,
+    // and in the paragraph under its title that points to the guide to the CLI.
     const workflow = /** @type {string} */ (empty[MANUAL_WORKFLOW].content)
     const steps = /^(1\. \*\*Documents\.\*\*|2\. \*\*The foundation task\.\*\*) /
     /** @param {string} text */
     const others = (text) => text.split('\n').filter((line) => !steps.test(line))
-    expect(others(workflow)).toEqual(others(TEMPLATE[MANUAL_WORKFLOW]))
+    expect(others(workflow.replace(`${CLI_POINTER}\n\n`, ''))).toEqual(
+      others(TEMPLATE[MANUAL_WORKFLOW]),
+    )
     expect(workflow).not.toBe(TEMPLATE[MANUAL_WORKFLOW])
   })
 
-  test('1.4d/files: on the template, the AGENTS.md block changes, documents.md is added and every other file is kept', () => {
+  test('1.4d/files: on the template, the blocks of AGENTS.md and the task issue template change, documents.md and using-hackwin.md are added and every other file is kept', () => {
     const changes = plan(TEMPLATE)
     expect(
       Object.values(changes)
         .filter((change) => change.action !== 'keep')
         .map((change) => change.path),
-    ).toEqual(['AGENTS.md', GUIDE])
+    ).toEqual(['AGENTS.md', TASK_TEMPLATE, GUIDE, USING])
     expect(changes[GUIDE]).toEqual(plan({})[GUIDE])
+    expect(changes[USING]).toEqual(plan({})[USING])
     expect(changes[TEMPLATE_CHECK_WORKFLOW_PATH].notice).toContain('was changed by the team')
   })
 
@@ -141,7 +164,7 @@ describe('1.4d/files: the files of the template', () => {
     expect(block.startsWith(HTML_MARKERS.begin)).toBe(true)
     expect(block.endsWith(HTML_MARKERS.end)).toBe(true)
     expect(block).toContain('The project language is Polish.')
-    expect(block).toContain('`hackwin take <issue>`')
+    expect(block).toContain('`hackwin take [<issue>]`')
     expect(block).toContain('run `hackwin ship` in the worktree of your task')
     expect(block).toContain('Never push to `trunk`.')
     expect(block).toContain(
@@ -182,9 +205,14 @@ describe('1.4l/documents: one guide to six documents instead of the skeletons', 
   const guide = /** @type {string} */ (empty[GUIDE]?.content)
   const parts = guideParts(guide ?? '')
 
-  test('1.4l/documents: on an empty repository, documents.md, before-the-event.md and manual-workflow.md are the only files planned under docs/hackwin/', () => {
+  test('1.4l/documents: on an empty repository, documents.md, before-the-event.md, manual-workflow.md and using-hackwin.md are the only files planned under docs/hackwin/', () => {
     const planned = Object.keys(empty).filter((path) => path.startsWith('docs/'))
-    expect(planned.sort()).toEqual(['docs/hackwin/before-the-event.md', GUIDE, MANUAL_WORKFLOW])
+    expect(planned.sort()).toEqual([
+      'docs/hackwin/before-the-event.md',
+      GUIDE,
+      MANUAL_WORKFLOW,
+      USING,
+    ])
     for (const path of planned) expect(empty[path].action, path).toBe('write')
     expect(guide).toContain(
       '`setup` creates only this guide: the Lead or the planning session creates each document when they start writing it.',
@@ -377,5 +405,284 @@ describe('1.4g/regenerate: what setup --regenerate rewrites in the kept files', 
         expect.objectContaining({ kind: 'config', key: 'cli_version' }),
       )
     }
+  })
+})
+
+/**
+ * The text of a file that `setup` plans on an empty repository.
+ * @param {string} path
+ * @param {typeof INPUT} [input]
+ */
+function planned(path, input = INPUT) {
+  return /** @type {string} */ (plan({}, input)[path].content)
+}
+
+/** No em dash and no en dash in the texts that #146 changed. */
+const DASHES = /[\u2013\u2014]/
+
+describe('1.4n/guide: the guide to the CLI', () => {
+  const guide = planned(USING)
+
+  test('1.4n/guide: on an empty repository setup plans using-hackwin.md, and it keeps an existing one as it is', () => {
+    expect(plan({})[USING]).toEqual({ path: USING, action: 'write', content: guide })
+    expect(guide.startsWith('# Using HackWin\n')).toBe(true)
+    expect(plan({ [USING]: 'ours\n' })[USING]).toEqual({ path: USING, action: 'keep' })
+    expect(planBlockFiles(() => 'ours\n', INPUT).map((change) => change.path)).not.toContain(USING)
+  })
+
+  test('1.4n/guide: it covers the roles, the terminals, the loop, the Gate, status, refusals, writing a task and the permission mode', () => {
+    const headings = guide.split('\n').filter((line) => line.startsWith('## '))
+    expect(headings).toEqual([
+      '## 1. Roles',
+      '## 2. The terminals',
+      '## 3. The loop',
+      '## 4. The Gate, and why pull requests show BLOCKED',
+      '## 5. `hackwin status`',
+      '## 6. When HackWin refuses',
+      '## 7. Writing a task',
+      '## 8. Permission mode of the agent sessions',
+    ])
+    for (const text of [
+      // The terminals each person keeps open.
+      '| Lead | The planning session | The main checkout |',
+      '| Lead | The Gate | The main checkout | `hackwin gate`, for the whole event.',
+      '| Every member, the Lead included | One terminal per task, 1 or 2 at a time | Start in the main checkout |',
+      // The loop: take with no number first, work, commit, ship.
+      '1. **Take.** In the main checkout, run `hackwin take`. With no number it takes the next task of your roles',
+      '2. **Work.**',
+      '3. **Commit.**',
+      '4. **Ship.** The session runs `hackwin ship` in the worktree.',
+      // The Gate and BLOCKED.
+      "GitHub shows every pull request as `BLOCKED`, the Lead's included. This is expected",
+      // Refusals.
+      'to resolve: run `cd <directory> && <command>`',
+      '| The Gate fails your pull request (`gate:failed`',
+      // A task, by hand or by the planning session.
+      "**Ask the planning session.** Tell the Lead's planning session what the task must achieve",
+      'Choose New issue, then the template "HackWin task"',
+      // The permission mode, and why the hooks keep the sessions safe.
+      '**Recommended for task sessions: auto mode, or bypass permissions.**',
+      "**Why HackWin's hooks keep these sessions safe.**",
+      'Claude Code applies deny rules and `PreToolUse` hook refusals in every permission mode, bypass permissions included, and no allow rule overrides them.',
+    ]) {
+      expect(guide, text).toContain(text)
+    }
+  })
+
+  test('1.4n/guide: the texts that #146 changed hold no em dash and no en dash', () => {
+    for (const text of [
+      guide,
+      planned(MANUAL_WORKFLOW),
+      planned(TASK_TEMPLATE),
+      renderAgentsBlock(INPUT),
+    ]) {
+      expect(text).not.toMatch(DASHES)
+    }
+  })
+})
+
+describe('1.4n/manual-workflow: the method by hand points to the guide to the CLI', () => {
+  test('1.4n/manual-workflow: its first lines say that it is the method without the CLI and point to using-hackwin.md; the rest stays', () => {
+    const workflow = planned(MANUAL_WORKFLOW)
+    const lines = workflow.split('\n')
+    expect(lines.slice(0, 3)).toEqual(['# The HackYeah method by hand', '', CLI_POINTER])
+    expect(CLI_POINTER).toContain('the method without the HackWin CLI')
+    expect(CLI_POINTER).toContain('`using-hackwin.md`')
+    // Without the pointer, the text is the one that setup wrote before #146 (1.4d/files names
+    // the two steps that differ from Release 1).
+    const rest = workflow.replace(`${CLI_POINTER}\n\n`, '')
+    expect(rest.startsWith('# The HackYeah method by hand\n\nThis guide runs the method')).toBe(
+      true,
+    )
+    expect(rest.split('\n')).toHaveLength(lines.length - 2)
+  })
+})
+
+describe('1.4n/agents-block: take with the issue number optional', () => {
+  test("1.4n/agents-block: the AGENTS.md block shows hackwin take [<issue>] and says that without a number it takes the next task of the caller's roles", () => {
+    const block = renderAgentsBlock(INPUT)
+    expect(block).toContain(
+      "- `hackwin take [<issue>]` creates the worktree of a task, on its own branch `task/<issue>-<slug>` from the current `origin/main`. The issue number is optional: without it, `hackwin take` takes the next task of the caller's roles. Work only in that worktree.",
+    )
+    expect(block).not.toContain('`hackwin take <issue>`')
+  })
+})
+
+/**
+ * An issue body made from the task issue template: GitHub drops the front matter, and the Lead
+ * fills in the fields of the data block.
+ * @param {string} template
+ * @param {{ role: string, wave: number, paths: string[], depends_on: number[], acceptance_tests: string[] }} fields
+ */
+function filledBody(template, fields) {
+  const list = (/** @type {string[]} */ items) => items.map((item) => `  - ${JSON.stringify(item)}`)
+  const body = template
+    .replace(/^---\n[\s\S]*?\n---\n/, '')
+    .replace(/^role: {2,}#/m, `role: ${fields.role}  #`)
+    .replace(/^wave: {2,}#/m, `wave: ${fields.wave}  #`)
+    .replace(/^(paths: +#.*)\n {2}-\n/m, (_, line) => `${line}\n${list(fields.paths).join('\n')}\n`)
+    .replace(/^depends_on: \[\]/m, `depends_on: ${JSON.stringify(fields.depends_on)}`)
+    .replace(
+      /^acceptance_tests:\n {2}- +(#.*)\n/m,
+      (_, comment) =>
+        `acceptance_tests:\n${list(fields.acceptance_tests).join('\n')}  ${comment}\n`,
+    )
+  expect(body).not.toBe(template)
+  return body
+}
+
+/** The HTML comment of the template that holds the example task. */
+const EXAMPLE = /<!--\nExample of a filled task for this team[\s\S]*?-->\n/
+
+describe('1.4n/task-template: the task issue template knows the team', () => {
+  const template = planned(TASK_TEMPLATE)
+  const config = { hackwin: TEAM.hackwin, owners: TEAM.owners }
+
+  test('1.4n/task-template: it names the roles and their paths, the event end as the deadline, one example in comments, and the planning session', () => {
+    expect(template).toContain(
+      '  - shared, the Lead\'s shared role: "src/shared/**", "docs/**", ".github/**", and every path that no other role names\n' +
+        '  - counter: "src/features/counter/**"\n' +
+        '  - todos: "src/features/todos/**"\n' +
+        '  - greeting: "src/features/greeting/**"\n' +
+        '  - open to every role: "README.md"\n',
+    )
+    expect(template).toContain(
+      'role:                      # ownership role: shared, counter, todos or greeting\n',
+    )
+    expect(TEAM.hackwin.project.event.end).toBe('2026-10-25T15:00:00+02:00')
+    expect(template).toContain(
+      'deadline: "2026-10-25T15:00:00+02:00"   # ISO 8601 with offset; the end of the event by default\n',
+    )
+    expect(template).toContain(
+      "The Lead's planning session can write the whole issue for you: tell it what the task must achieve, and it fills in this template and creates the issue with `gh issue create`.",
+    )
+    expect(template).toContain(
+      'the test command of hackwin.yml, "npm test --", followed by the tests',
+    )
+    // The example sits in an HTML comment, as does the help, inside HackWin's block.
+    const example = EXAMPLE.exec(template)?.[0] ?? ''
+    expect(example).toContain(
+      'kind: task\nrole: counter\nwave: 1\npaths:\n  - "src/features/counter/**"\n',
+    )
+    expect(example).toContain('deadline: "2026-10-25T15:00:00+02:00"\n')
+    expect(example).not.toMatch(/```|~~~|# hackwin:task/)
+    expect(template.indexOf(example)).toBeLessThan(template.indexOf(HTML_MARKERS.end))
+    // The text outside the block, the front matter, is that of Release 1.
+    const before = (/** @type {string} */ text) => text.slice(0, text.indexOf(HTML_MARKERS.begin))
+    expect(before(template)).toBe(before(TEMPLATE[TASK_TEMPLATE]))
+  })
+
+  test('1.4n/task-template: a body made from the template gives parseTaskBlock exactly its fields, and the example adds no field and no error', () => {
+    const fields = {
+      role: 'todos',
+      wave: 2,
+      paths: ['src/features/todos/**', 'README.md'],
+      depends_on: [7, 9],
+      acceptance_tests: ['src/features/todos/list.test.js'],
+    }
+    const body = filledBody(template, fields)
+    const expected = {
+      isTask: true,
+      valid: true,
+      block: { kind: 'task', ...fields, deadline: TEAM.hackwin.project.event.end },
+    }
+    expect(parseTaskBlock(body, config)).toEqual(expected)
+    expect(body).toMatch(EXAMPLE)
+    expect(parseTaskBlock(body.replace(EXAMPLE, ''), config)).toEqual(expected)
+    // The template as GitHub offers it, before the Lead fills it in, is a task with errors only
+    // in the fields left empty.
+    const empty = parseTaskBlock(template.replace(/^---\n[\s\S]*?\n---\n/, ''), config)
+    expect(empty).toEqual({
+      isTask: true,
+      valid: false,
+      errors: [
+        'role is missing',
+        'paths must be a list of non-empty strings',
+        'acceptance_tests must be a list of non-empty strings',
+      ],
+    })
+  })
+
+  test('1.4n/task-template: the example is a valid task of this team, and stays inside its role in every team shape', () => {
+    /** @param {string} text */
+    const exampleBlock = (text) => {
+      const lines = (EXAMPLE.exec(text)?.[0] ?? '').split('\n')
+      const from = lines.indexOf('kind: task')
+      const to = lines.findIndex((line) => line.startsWith('deadline: '))
+      return ['```yaml', '# hackwin:task', ...lines.slice(from, to + 1), '```'].join('\n')
+    }
+    expect(parseTaskBlock(exampleBlock(template), config)).toMatchObject({
+      valid: true,
+      block: {
+        role: 'counter',
+        paths: ['src/features/counter/**'],
+        acceptance_tests: ['src/features/counter/first-version.test.js'],
+      },
+    })
+    // A solo team whose only role has a file and a directory: the test file lies in the directory.
+    const solo = {
+      hackwin: TEAM.hackwin,
+      owners: {
+        schema: 1,
+        roles: { core: { shared: true, paths: ['README.md', 'lib/**'] } },
+        open: [],
+      },
+    }
+    const soloTemplate = renderTaskTemplate(projectInput(solo)).whole
+    expect(parseTaskBlock(exampleBlock(soloTemplate), solo)).toMatchObject({
+      valid: true,
+      block: { role: 'core', paths: ['lib/**'], acceptance_tests: ['lib/first-version.test.js'] },
+    })
+    expect(soloTemplate).toContain('# ownership role: core\n')
+    expect(soloTemplate).not.toContain('open to every role')
+  })
+
+  test('1.4n/task-template: a value of owners.yml cannot end a comment or the block', () => {
+    const owners = {
+      schema: 1,
+      roles: {
+        shared: { shared: true, paths: [] },
+        web: { paths: ['web-->x/**', 'a\n<!-- hackwin:end -->/**'] },
+      },
+      open: [],
+    }
+    const { whole } = renderTaskTemplate({ ...INPUT, owners })
+    // The comments end where the template's own comments end: no value adds a `-->`.
+    const ends = (/** @type {string} */ text) => text.split('-->').length
+    expect(ends(whole)).toBe(ends(renderTaskTemplate(INPUT).whole))
+    expect(whole.match(/^<!-- hackwin:end -->$/gm)).toHaveLength(1)
+    expect(whole).toContain(
+      "  - shared, the Lead's shared role: every path that no other role names\n",
+    )
+  })
+
+  test('1.4n/task-template: setup --regenerate writes the block from the current hackwin.yml and owners.yml, and keeps the rest of the file', () => {
+    const release1 = TEMPLATE[TASK_TEMPLATE]
+    const ours = `${release1}\nOur own note after the block.\n`
+    const read = (/** @type {string} */ path) => (path === TASK_TEMPLATE ? ours : null)
+    const [change] = planBlockFiles(read, INPUT).filter((entry) => entry.path === TASK_TEMPLATE)
+    expect(change).toEqual({
+      path: TASK_TEMPLATE,
+      action: 'write',
+      content: withBlock(ours, {
+        block: renderTaskTemplate(INPUT).block,
+        whole: template,
+        markers: HTML_MARKERS,
+        path: TASK_TEMPLATE,
+      }),
+    })
+    expect(change.content).toContain('\nOur own note after the block.\n')
+    // A changed hackwin.yml and owners.yml change the block.
+    const changed = structuredClone(config)
+    changed.hackwin.project.event.end = '2026-10-26T12:00:00+01:00'
+    changed.owners.roles.payments = { paths: ['src/features/payments/**'] }
+    const again = planBlockFiles(
+      (path) => (path === TASK_TEMPLATE ? /** @type {string} */ (change.content) : null),
+      projectInput(changed),
+    ).find((entry) => entry.path === TASK_TEMPLATE)
+    expect(again?.action).toBe('write')
+    expect(again?.content).toContain('deadline: "2026-10-26T12:00:00+01:00"')
+    expect(again?.content).toContain('  - payments: "src/features/payments/**"\n')
+    expect(again?.content).toContain('\nOur own note after the block.\n')
   })
 })

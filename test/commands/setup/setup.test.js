@@ -11,8 +11,11 @@ import {
   TEMPLATE_CHECK_WORKFLOW,
   TEMPLATE_CHECK_WORKFLOW_PATH,
   WORKFLOW_PATH,
+  allowRules,
   denyRules,
   planProjectFiles,
+  projectInput,
+  renderTaskTemplate,
   staleGeneratedFiles,
 } from '../../../src/generate/index.js'
 import { COMMANDS } from '../../../src/cli/registry.js'
@@ -346,7 +349,7 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     expect(writes(fake)).toEqual([])
   })
 
-  test('AC6/files: on a repository from the template, setup keeps the team lines and the documents, replaces its own blocks and the generated files, adds documents.md and removes the unchanged check.yml', async () => {
+  test('AC6/files: on a repository from the template, setup keeps the team lines and the documents, replaces its own blocks and the generated files, adds documents.md and using-hackwin.md and removes the unchanged check.yml', async () => {
     const template = nodeProjectFiles()
     const ownRule = '- Team rule: every component has a story.\n'
     const changedSkill = `${template['.claude/skills/research/SKILL.md']}\nOur own addition.\n`
@@ -367,6 +370,7 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     const commit = await fixture.git.revParse('HEAD')
     const changed = await filesOf(fixture, commit)
     const read = (/** @type {string} */ path) => readFileSync(join(fixture.main, path), 'utf8')
+    const input = projectInput(await loadConfig(fixture.git))
 
     // The template's unchanged check.yml is removed; nothing outside 6.4 changes.
     expect(changed).toContainEqual({ status: 'D', path: TEMPLATE_CHECK_WORKFLOW_PATH })
@@ -387,11 +391,20 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     expect(agents).not.toContain('Only the Lead merges.')
     expect(agents.match(/hackwin:begin/g)).toHaveLength(1)
 
+    // The task issue template: HackWin's block names the team's roles, the rest stays.
+    const taskTemplate = '.github/ISSUE_TEMPLATE/hackwin-task.md'
+    expect(changed).toContainEqual({ status: 'M', path: taskTemplate })
+    expect(read(taskTemplate)).toBe(
+      template[taskTemplate].replace(
+        /<!-- hackwin:begin -->[\s\S]*<!-- hackwin:end -->/,
+        () => renderTaskTemplate(input).block,
+      ),
+    )
+
     // Files whose block is already HackWin's and the research files stay.
     const unchanged = [
       'CLAUDE.md',
       '.github/pull_request_template.md',
-      '.github/ISSUE_TEMPLATE/hackwin-task.md',
       '.gitignore',
       '.env.example',
       '.claude/skills/research/SKILL.md',
@@ -403,7 +416,8 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
     expect(read('.claude/skills/research/SKILL.md')).toBe(changedSkill)
     expect(read('owners.yml')).toBe(template['owners.yml'])
 
-    // The documents and guides of the template stay byte for byte; the guide to the documents is added.
+    // The documents and guides of the template stay byte for byte; the guides to the documents
+    // and to the CLI are added.
     const documents = [
       'prd',
       'spec',
@@ -417,21 +431,23 @@ describe('AC6/files: a failed setup changes nothing; existing files are treated 
       expect(changed.map((file) => file.path)).not.toContain(path)
       expect(read(path), path).toBe(path === 'docs/hackwin/prd.md' ? changedPrd : template[path])
     }
-    const guide = 'docs/hackwin/documents.md'
-    expect(template[guide]).toBeUndefined()
-    expect(changed).toContainEqual({ status: 'A', path: guide })
-    expect(read(guide)).toBe(
-      planProjectFiles(() => null, { defaultBranch: 'main', language: 'en' }).find(
-        (change) => change.path === guide,
-      )?.content,
-    )
+    for (const guide of ['docs/hackwin/documents.md', 'docs/hackwin/using-hackwin.md']) {
+      expect(template[guide]).toBeUndefined()
+      expect(changed).toContainEqual({ status: 'A', path: guide })
+      expect(read(guide)).toBe(
+        planProjectFiles(() => null, input).find((change) => change.path === guide)?.content,
+      )
+    }
 
-    // The generated files are overwritten; the settings keep the template's rules.
+    // The generated files are overwritten; the settings keep the template's rules and get the
+    // allow list with the project's commands.
     expect(await staleGeneratedFiles(fixture.main, { version: VERSION })).toEqual([])
     const settings = JSON.parse(read(SETTINGS_PATH))
     expect(settings.permissions.deny.slice(0, 3)).toEqual(
       JSON.parse(template[SETTINGS_PATH]).permissions.deny,
     )
+    expect(settings.permissions.allow).toEqual(allowRules(input))
+    expect(settings.permissions.allow).toContain(`Bash(${input.commands.test} *)`)
     expect(Object.keys(settings.hooks)).toEqual(CLAUDE_HOOKS.map((hook) => hook.event))
     expect(changed).toContainEqual({ status: 'A', path: WORKFLOW_PATH })
   })
