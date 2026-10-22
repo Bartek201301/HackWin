@@ -241,9 +241,7 @@ describe('1.4d/ownership: the proposal of step 4', () => {
       'core',
       'core', // builder1 with the shared role: asked again
       'ui',
-      '',
-      '',
-      '',
+      '', // keep the commands, the smoke test and the path groups
       '2026-10-24T09:00:00+02:00',
       '2026-10-25T15:00:00+02:00',
       '',
@@ -349,8 +347,8 @@ describe('1.4d/preconditions: step 1 and the questions', () => {
         'project.event.end must be after the event start',
       ],
       [
-        (a) => (a.project.event.start = '2026-10-24 09:00'),
-        'project.event.start must be an ISO 8601 time',
+        (a) => (a.project.event.start = '24.10.2026 09:00'),
+        'project.event.start must be a date and time as YYYY-MM-DD HH:MM',
       ],
       [
         (a) => (a.project.default_branch = 'trunk'),

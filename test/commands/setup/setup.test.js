@@ -161,9 +161,7 @@ const SOLO_INPUT = [
   '', // sessions: 2
   '', // keep the roles of owners.yml
   '', // the Lead holds every role
-  '', // keep the detected commands
-  '', // no smoke test
-  '', // keep the path groups
+  '', // keep the detected commands, no smoke test and the path groups
   EVENT.start,
   EVENT.end,
   '', // project language: en
@@ -197,13 +195,13 @@ describe('AC3: setup proposes the stack commands of a Node project', () => {
     expect(result.stderr).not.toContain('hackwin setup:')
     expect(result.code).toBe(0)
     expect(result.stdout).toContain(
-      'Stack commands, detected from package.json and package-lock.json (npm):',
+      'Commands, detected from package.json and package-lock.json (npm):',
     )
     for (const line of [
-      'install: npm ci',
-      'check: npm run check',
-      'test: npm test --',
-      'format: npm run format --',
+      'install the dependencies: npm ci',
+      'full check: npm run check',
+      'run the tests a task names: npm test --',
+      'format files: npm run format --',
     ]) {
       expect(result.stdout).toContain(`  ${line}\n`)
     }

@@ -185,7 +185,7 @@ async function requireSharedTask(ctx, { config, identity, worktree }) {
     throw new PreconditionError(
       `setup --regenerate rewrites files of the shared role ${shared}, which ${identity.login} does not hold`,
       {
-        resolve: `the holder of ${shared}, the Lead, runs it in ${worktree.path}; to stop working on #${worktree.issue}, ${runIn(`hackwin take ${worktree.issue} --release`, main)}`,
+        resolve: `the holder of ${shared}, the Lead, runs it (${runIn('hackwin setup --regenerate', worktree.path)}); to stop working on #${worktree.issue}, ${runIn(`hackwin take ${worktree.issue} --release`, main)}`,
       },
     )
   }
