@@ -184,9 +184,7 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
     expect(result.lines).toContain(
       `wave 1: 1 open task; milestone Wave ${visible}: 0 of 1 issues closed`,
     )
-    expect(result.lines).toContain(
-      `  ${BUILDER1}: next #10 Counter ${visible.slice(0, 49)}...; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
-    )
+    expect(result.lines).toContain(`  ${BUILDER1}: next #10 Counter ${visible.slice(0, 49)}...`)
   })
 
   test('--json carries the same cleaned text, so no control character reaches the terminal there either', async () => {
@@ -256,9 +254,7 @@ describe('1.6f/members: only issues of members are tasks', () => {
     expect(lines).toContain(
       `  #20 not from a member of the team, so the Gate does not test it: From outside (${OUTSIDER})`,
     )
-    expect(lines).toContain(
-      `  ${BUILDER1}: next #10 Real task; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
-    )
+    expect(lines).toContain(`  ${BUILDER1}: next #10 Real task`)
   })
 })
 

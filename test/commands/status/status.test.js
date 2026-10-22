@@ -214,17 +214,14 @@ describe('AC44: status from GitHub alone', () => {
     const onClone = await runStatus({ cwd: fresh.path, ...lead })
     expect(onLaptop.code).toBe(0)
     expect(onClone.code).toBe(0)
-    // The caller's own next line names the main checkout of each clone (1.6h/next).
-    const inMain = (/** @type {string[]} */ lines, /** @type {string} */ main) =>
-      sharedSections(lines).map((line) => line.replace(`cd ${main} &&`, 'cd <main checkout> &&'))
-    expect(inMain(onClone.lines, fresh.path)).toEqual(inMain(onLaptop.lines, fixture.main))
+    expect(sharedSections(onClone.lines)).toEqual(sharedSections(onLaptop.lines))
     expect(sharedSections(onLaptop.lines)).toEqual([
       'attention:',
       '  ATTENTION repeated-failure #22: stage merge-test failed twice; look at #22',
       '  needs-lead: issue #30: Question for the Lead',
       'who does what:',
       `  ${LEAD}: #16 in progress, due in 22h00m: Shared layout`,
-      `  ${LEAD}: next #19 (OVERDUE by 2h30m) Shared styles; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
+      `  ${LEAD}: next #19 (OVERDUE by 2h30m) Shared styles`,
       `  ${BUILDER1}: #10 in review, OVERDUE by 1h00m: Counter button`,
       `  ${BUILDER1}: #11 in review, due in 6h00m: Todo list`,
       `  ${BUILDER1}: #13 in progress, OVERDUE by 2h00m: Counter reset`,
@@ -737,7 +734,7 @@ describe('AC60: status and the main checkout (CM10)', () => {
   })
 })
 
-describe("1.6h/next: the caller's own next line ends with the take command to paste", () => {
+describe('1.6h/next: the last line gives a caller with a next task the take command to paste', () => {
   /** A running Gate and one ready task each for builder1 and builder2; none for the Lead. */
   const readyTasks = () =>
     createFakeGitHub({
@@ -750,18 +747,31 @@ describe("1.6h/next: the caller's own next line ends with the take command to pa
   /** @param {{ cwd: string, env: Record<string, string>, login: string, json?: boolean }} where */
   const statusAs = ({ cwd, env, login, json = false }) =>
     runStatus({ cwd, env, executor: readyTasks().as(login), clock: fixedClock(NOW), json })
-  /** The next lines of who does what. */
-  const nextLines = (/** @type {string[]} */ lines) =>
-    sharedSections(lines).filter((line) => / (next|no ready task)/.test(line))
+  /** The lines of who does what, as they were before #148. */
+  const whoDoesWhat = [
+    'who does what:',
+    `  ${LEAD}: nothing in progress`,
+    `  ${LEAD}: no ready task`,
+    `  ${BUILDER1}: nothing in progress`,
+    `  ${BUILDER1}: next #10 Counter step`,
+    `  ${BUILDER2}: nothing in progress`,
+    `  ${BUILDER2}: next #11 Greeting style`,
+  ]
+  /** @param {string[]} lines */
+  const sectionOf = (lines) => {
+    const start = lines.indexOf('who does what:')
+    return lines.slice(start, lines.indexOf('waiting for merge: none'))
+  }
 
-  test('the caller gets `hackwin take` without a number in the main checkout; the lines of the others stay as they were', async () => {
+  test('after the digest, `hackwin take` without a number in the main checkout; who does what stays as it was', async () => {
     const result = await statusAs({ cwd: fixture.main, env: fixture.env, login: BUILDER1 })
     expect(result.code).toBe(0)
-    expect(nextLines(result.lines)).toEqual([
-      `  ${LEAD}: no ready task`,
-      `  ${BUILDER1}: next #10 Counter step; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
-      `  ${BUILDER2}: next #11 Greeting style`,
+    expect(sectionOf(result.lines)).toEqual(whoDoesWhat)
+    expect(result.lines.slice(-2)).toEqual([
+      'gate digest since your last status (2026-10-24T11:59:00.000Z): nothing new',
+      `to start your next task, run \`cd ${fixture.main} && hackwin take\``,
     ])
+    expect(result.out.match(/hackwin take/g)).toHaveLength(1)
   })
 
   test('--json prints the same lines, and its data carries no command', async () => {
@@ -772,8 +782,10 @@ describe("1.6h/next: the caller's own next line ends with the take command to pa
       json: true,
     })
     expect(result.code).toBe(0)
-    const plain = await statusAs({ cwd: fixture.main, env: fixture.env, login: BUILDER1 })
-    expect(nextLines(result.json.lines)).toEqual(nextLines(plain.lines))
+    expect(sectionOf(result.json.lines)).toEqual(whoDoesWhat)
+    expect(result.json.lines.at(-1)).toBe(
+      `to start your next task, run \`cd ${fixture.main} && hackwin take\``,
+    )
     expect(JSON.stringify(result.json.data)).not.toContain('hackwin take')
     for (const member of result.json.data.who) {
       expect(Object.keys(member)).toEqual(['login', 'name', 'roles', 'working', 'next'])
@@ -783,11 +795,7 @@ describe("1.6h/next: the caller's own next line ends with the take command to pa
   test('a caller without a ready task gets no command', async () => {
     const result = await statusAs({ cwd: fixture.main, env: fixture.env, login: LEAD })
     expect(result.code).toBe(0)
-    expect(nextLines(result.lines)).toEqual([
-      `  ${LEAD}: no ready task`,
-      `  ${BUILDER1}: next #10 Counter step`,
-      `  ${BUILDER2}: next #11 Greeting style`,
-    ])
+    expect(sectionOf(result.lines)).toEqual(whoDoesWhat)
     expect(result.out).not.toContain('hackwin take')
   })
 
@@ -797,8 +805,8 @@ describe("1.6h/next: the caller's own next line ends with the take command to pa
       const worktree = await own.worktree({ issue: 77, title: 'Elsewhere' })
       const result = await statusAs({ cwd: worktree.path, env: own.env, login: BUILDER1 })
       expect(result.code).toBe(0)
-      expect(nextLines(result.lines)).toContain(
-        `  ${BUILDER1}: next #10 Counter step; to start the next one, run \`cd ${own.main} && hackwin take\``,
+      expect(result.lines.at(-1)).toBe(
+        `to start your next task, run \`cd ${own.main} && hackwin take\``,
       )
     } finally {
       own.cleanup()

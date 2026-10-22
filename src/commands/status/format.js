@@ -5,9 +5,10 @@
 // time, the stop notice after `quit`, or that the Gate has not been started (7.6, failure
 // behavior).
 //
-// The caller's own "next" line ends with the `take` command to paste, without a number: `take`
-// then picks the first task of the caller's queue that passes its checks (7.7, #148). The command
-// names the main checkout of this clone, so on another machine only that line differs.
+// The last line gives a caller who has a next task the `take` command to paste, without a number:
+// `take` then picks the first task of the caller's queue that passes its checks (7.7, #148). It
+// names the main checkout of this clone, so it stays out of "who does what", which is the same on
+// every machine (AC44).
 //
 // The data is cleaned of control characters already (view.js); every line passes cleanText once
 // more, so that no text, also from hackwin.yml or the local heartbeat, reaches the terminal with
@@ -53,21 +54,30 @@ const STAGE_WORDS = Object.freeze({
  */
 export function statusLines(data, { main }) {
   const now = new Date(data.at)
-  const caller = data.login.toLowerCase()
-  const take = runIn('hackwin take', main)
   return [
     ...headerLines(data, now),
     ...section('attention', data.attention.map(attentionLine)),
     ...section(
       'who does what',
-      data.who.flatMap((member) =>
-        memberLines(member, now, member.login.toLowerCase() === caller ? take : null),
-      ),
+      data.who.flatMap((member) => memberLines(member, now)),
     ),
     ...section('waiting for merge', data.waiting.map(waitingLine)),
     ...section('blocked', data.blocked.map(blockedLine)),
     ...digestLines(data.digest, data.gate.state),
+    ...takeLine(data, main),
   ].map(cleanText)
+}
+
+/**
+ * The `take` command for a caller who has a next task, as the last line; none for anyone else.
+ * @param {StatusData} data
+ * @param {string} main
+ * @returns {string[]}
+ */
+function takeLine({ login, who }, main) {
+  const caller = who.find((member) => member.login.toLowerCase() === login.toLowerCase())
+  if (!caller || caller.next.length === 0) return []
+  return [`to start your next task, ${runIn('hackwin take', main)}`]
 }
 
 /**
@@ -200,11 +210,9 @@ function attentionLine(entry) {
 /**
  * @param {MemberEntry} member
  * @param {Date} now
- * @param {string | null} take The `take` command for the caller's own line; null for another
- *   member's.
  * @returns {string[]}
  */
-function memberLines(member, now, take) {
+function memberLines(member, now) {
   const who = `${member.login}:`
   const lines =
     member.working.length === 0
@@ -221,8 +229,7 @@ function memberLines(member, now, take) {
       return `#${task.number}${due} ${title(task.title)}`
     })
     const more = member.next.length - shown.length
-    const start = take === null ? '' : `; to start the next one, ${take}`
-    lines.push(`${who} next ${shown.join('; ')}${more > 0 ? `; and ${more} more` : ''}${start}`)
+    lines.push(`${who} next ${shown.join('; ')}${more > 0 ? `; and ${more} more` : ''}`)
   }
   return lines
 }
