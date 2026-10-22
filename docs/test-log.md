@@ -17,6 +17,32 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Three texts of the pre.3 check: setup's `.env.local` step, `/gate` while a Gate runs, ship's step 12 (PR #166, issue #165)
+
+- Setup: the three text findings of the manual check of 0.1.0-pre.3. The human decided to fix them before 0.1.0, as one task, one session and one PR (`lead-55`). The integrator opened #165, role lane-a, with one "Scope change:" comment for the lane B files (ship) and one for the lane C files (`notInTerminal` of the Gate), and a worktree `task/165-manual-check-texts` from `1f0f584`. `lead-55` started the session, reviewed the PR and sent the merge.
+- What happened:
+  - setup: join's rule of step 7 is now `envExampleKeys(main)` in `src/commands/join/checks.js`, the keys that `.env.example` in the main checkout lists. Setup's step 15 prints "5. send .env.local to each member over a private channel; it is never committed" only when that list is not empty. Next steps 1 to 4 are unchanged, and join's own output too.
+  - gate: inside an agent session, with a Gate holding the lock, the "to resolve" line is now "nothing needs doing: the Gate already runs in its own terminal; to see its state, run `cd <main> && hackwin status`". The message with the pid and the heartbeat, exit code 2 and `details` are unchanged. With no Gate running, the refusal is unchanged.
+  - ship: step 12 is `PUBLISH_STEPS.hotspot`, and `ship` prints "step 12, hotspot notice: skipped, it comes in a later version of HackWin: a notice of the other open pull requests that change the same files" between step 11 and step 13.
+  - New tests: 1.4o/env-local (2), 1.5k/step-12 (1) and 1.6i/gate-running (1). Existing tests changed only in the `.env.local` line, the `resolve` of the AC58 test with a running Gate, and the step sequences of ship (`11, 13` to `11, 12, 13`).
+  - Commit `a3060a8` and a merge of main (`5e7d662`); PR #166 opened at 11:24:22 UTC. 10 files, all inside the issue's paths and its two Scope change comments.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: no secret, no dash, no conflict with `b8fbcb4`. The only line that matched a secret pattern is the test's `API_KEY=placeholder`, which the 1.4o test writes at run time into an ignored `.env.local` of its fixture.
+    - Step 6, with the PR merged into `b8fbcb4` (a fast-forward to `5e7d662`), at a load average of 1.78 with no other vitest process: `npm test` passed 1089 of 1089, and `npm run test:ac -- 1.4o/env-local 1.5k/step-12 1.6i/gate-running` passed 1.4o/env-local 2, 1.5k/step-12 1 and 1.6i/gate-running 1. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39771329785`, succeeded: both jobs passed 1088 tests and skipped 1 of 1089. It took 165 s.
+- Problems: the limits that the PR names:
+  - Criterion 1.5k says "terminal and `--json`'s `lines` alike". `ship --json` sends every step line to stderr, so its `lines` hold no step line, step 11 and 13 included. Changing that would change the `--json` data, which the issue keeps out of scope, so the test checks the step 12 line in the terminal output and in the progress lines of a `--json` run.
+  - In step 14, setup still prints join's checklist line ".env.example lists no key, so no .env.local is needed"; the 1.4o test checks that step 15's summary has no `.env.local` line.
+  - With a Gate running, `error.resolve` in `--json` is now a string instead of `{ command, dir }`.
+  - Not run live on a sandbox repository.
+- Workflow notes of the PR:
+  - "The criterion 1.5k ("`--json`'s `lines`") does not match how `ship --json` reports step lines (stderr, not `lines`); I tested stderr and noted it above instead of changing the `--json` data."
+  - "The criterion 1.4o ("no line about `.env.local`") read literally would also cover join's step 7 line that setup prints in step 14; I read it as the summary of step 15, which the problem statement describes."
+  - "Nothing else blocked the task. `origin/main` brought only `docs/test-log.md` (#164), no conflict."
+- Measured: PR open 7 min 55 s (11:24:22 to 11:32:17 UTC); 1 commit and 1 merge of main, 1 PR run (169 s), 0 conflicts; local merge test `npm test` 157.93 s, `test:ac` 6.38 s; the run on main after the merge 165 s.
+- Evidence: issue #165; PR https://github.com/Bartek201301/HackWin/pull/166; head `5e7d662`; merge commit `043ce35`; runs `39770334813` (PR) and `39771329785` (main).
+
 ### 2026-10-22 · Phase 1 · Manual check per release on 0.1.0-pre.3: a fresh repository, real Claude Code sessions in auto mode and with bypass permissions (plan section 6, item 6)
 
 - Setup:
