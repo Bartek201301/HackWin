@@ -208,8 +208,13 @@ export async function runParity(world) {
 export function expectParity(world, run) {
   const { issues, worktrees, observed, starts, before, after, prompts } = run
   const { terminal, wrapper } = observed
+  // Each mode's task has its own paths under counterTask's directory, which the pull request
+  // body names among its acceptance tests (#147).
   const same = (/** @type {Mode} */ mode, /** @type {string} */ text) =>
-    withoutIssue(text, issues[mode])
+    withoutIssue(text, issues[mode]).replaceAll(
+      `src/features/counter/${mode}/`,
+      'src/features/counter/<mode>/',
+    )
 
   // take: the same exit code, labels, assignee and branch.
   expect(terminal.take.code, terminal.take.stderr).toBe(0)
