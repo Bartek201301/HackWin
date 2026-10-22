@@ -374,3 +374,86 @@ describe('1.5g/outsider-task: ship refuses the worktree of an issue that no memb
     expect(result.stderr).not.toContain('\u001b')
   })
 })
+
+describe('1.5i/uncommitted: ship refuses uncommitted work and says what to do, in a Claude Code session and in a terminal', () => {
+  /**
+   * A scene whose worktree has a changed file and an untracked one.
+   * @returns {Promise<Scene>}
+   */
+  async function uncommitted() {
+    const s = await scene()
+    writeFileSync(
+      join(s.worktree.path, 'src/features/counter/reset.js'),
+      'export const reset = () => 2\n',
+    )
+    writeFileSync(join(s.worktree.path, 'scratch.txt'), 'notes\n')
+    return s
+  }
+
+  /**
+   * The first line of the refusal, the same for every caller.
+   * @param {Scene} s
+   */
+  const refusal = (s) =>
+    `hackwin ship: the working tree of ${s.worktree.path} has changes: 2 paths, src/features/counter/reset.js, scratch.txt; ship checks only committed work`
+
+  test('through the Claude Code wrapper, the refusal says to ask the session to commit the listed files and then to type /ship again', async () => {
+    const s = await uncommitted()
+    const before = await remoteBranch(s)
+    const result = await ship(s, { env: { HACKWIN_CALLER: 'claude-code' } })
+    expect(result.code, result.stderr).toBe(2)
+    expect(result.stderr).toContain(
+      `${refusal(s)}\n  to resolve: ask this session to commit the listed files, then type \`/ship\` again\n`,
+    )
+    expect(await remoteBranch(s)).toBe(before)
+
+    const json = JSON.parse(
+      (await ship(s, { json: true, env: { HACKWIN_CALLER: 'claude-code' } })).stdout,
+    )
+    expect(json).toMatchObject({ ok: false, exitCode: 2 })
+    expect(json.error.details).toEqual({
+      paths: ['src/features/counter/reset.js', 'scratch.txt'],
+      merging: false,
+    })
+  })
+
+  test('from a terminal and without a terminal, the refusal keeps its text and ends with a line to paste', async () => {
+    const s = await uncommitted()
+    const dir = s.worktree.path
+    const resolve = `  to resolve: commit these changes or remove them in ${dir}, then run \`cd ${dir} && hackwin ship\`\n`
+    for (const tty of [true, false]) {
+      const result = await ship(s, { tty })
+      expect(result.code, result.stderr).toBe(2)
+      expect(result.stderr).toContain(`${refusal(s)}\n${resolve}`)
+    }
+  })
+
+  test('a merge left in progress: the session is asked to resolve and commit it, a terminal gets a line to paste', async () => {
+    const s = await scene()
+    await s.fixture.publish(
+      { 'src/features/counter/reset.js': 'export const reset = () => -1\n' },
+      { branch: BRANCH, message: 'Change the reset from another clone' },
+    )
+    await s.fixture.commit('Change the reset locally', {
+      dir: s.worktree.path,
+      files: { 'src/features/counter/reset.js': 'export const reset = () => 1\n' },
+    })
+    expect((await ship(s)).code).toBe(1)
+    const dir = s.worktree.path
+
+    const session = await ship(s, { env: { HACKWIN_CALLER: 'claude-code' } })
+    expect(session.code, session.stderr).toBe(2)
+    expect(session.stderr).toContain(
+      `a merge is in progress in ${dir}: 1 path, src/features/counter/reset.js`,
+    )
+    expect(session.stderr).toContain(
+      '  to resolve: ask this session to resolve the conflicts and commit the merge, then type `/ship` again\n',
+    )
+
+    const terminal = await ship(s, { tty: true })
+    expect(terminal.code, terminal.stderr).toBe(2)
+    expect(terminal.stderr).toContain(
+      `  to resolve: resolve the conflicts and commit the merge in ${dir}, then run \`cd ${dir} && hackwin ship\`\n`,
+    )
+  })
+})
