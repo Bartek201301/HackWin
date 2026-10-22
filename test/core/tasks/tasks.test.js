@@ -174,9 +174,9 @@ describe('1.3b/task-block: the task block of 8.1', () => {
       /deadline is missing/,
     ],
     [
-      'a deadline without an offset',
+      'a deadline in neither form',
       (block) => {
-        block.deadline = '2026-10-25 12:00'
+        block.deadline = '2026-10-25T12:00'
       },
       /is not an ISO 8601 time with an offset/,
     ],
@@ -252,6 +252,82 @@ describe('1.3b/task-block: the task block of 8.1', () => {
     )
     expect(invalid).toMatchObject({ valid: false, block: null })
     expect(invalid?.errors).toEqual(['deadline is missing; every task has one (T11)'])
+  })
+})
+
+describe("1.3f/deadline: a task deadline as a date and time in the event's time zone", () => {
+  /**
+   * The deadline that a block with this deadline parses to, or its errors.
+   * @param {unknown} deadline
+   * @param {typeof config} [own]
+   */
+  function deadlineOf(deadline, own = config) {
+    const parsed = /** @type {any} */ (parseTaskBlock(body({ ...blockObject(), deadline }), own))
+    return parsed.valid ? parsed.block.deadline : parsed.errors
+  }
+
+  test('YYYY-MM-DD HH:MM is read in the offset of the event times, and the ISO form stays as it is', () => {
+    expect(deadlineOf('2026-10-25 12:00')).toBe('2026-10-25T12:00:00+02:00')
+    expect(deadlineOf('2026-10-24 23:59')).toBe('2026-10-24T23:59:00+02:00')
+    expect(deadlineOf('2026-10-25T12:00:00+02:00')).toBe('2026-10-25T12:00:00+02:00')
+    expect(deadlineOf('2026-10-25T10:00:00Z')).toBe('2026-10-25T10:00:00Z')
+    // Unquoted in YAML, the short form is a string too.
+    const text = stringify({ ...blockObject(), deadline: 'X' }).replace(
+      'deadline: X',
+      'deadline: 2026-10-25 12:00',
+    )
+    const parsed = /** @type {any} */ (parseTaskBlock(body(text), config))
+    expect(parsed.block.deadline).toBe('2026-10-25T12:00:00+02:00')
+  })
+
+  test('an event in UTC gives the short form the offset +00:00', () => {
+    const utc = hackwinObject()
+    utc.project.event = { start: '2026-10-24T07:00:00Z', end: '2026-10-25T13:00:00+00:00' }
+    const own = { ...config, hackwin: parseHackwinConfig(yaml(utc)) }
+    expect(deadlineOf('2026-10-25 12:00', own)).toBe('2026-10-25T12:00:00+00:00')
+  })
+
+  test('a value in neither form, or no real day or time, is refused naming both forms', () => {
+    for (const value of [
+      '2026-10-25T12:00',
+      '2026-10-25',
+      '25.10.2026 12:00',
+      '2026-02-30 10:00',
+      '2026-10-25 24:00',
+      '2026-10-25 12:60',
+      1761386400,
+    ]) {
+      expect(deadlineOf(value)).toEqual([
+        `deadline ${JSON.stringify(value)} is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00", or a date and time in the event's time zone, such as "2026-10-17 23:59"`,
+      ])
+    }
+  })
+
+  test('with different offsets for the start and the end of the event, the short form is refused', () => {
+    const changing = hackwinObject()
+    changing.project.event = {
+      start: '2026-10-24T09:00:00+02:00',
+      end: '2026-10-25T15:00:00+01:00',
+    }
+    const own = { ...config, hackwin: parseHackwinConfig(yaml(changing)) }
+    expect(deadlineOf('2026-10-25 12:00', own)).toEqual([
+      'deadline "2026-10-25 12:00" has no offset, and the event\'s start and end have different offsets (+02:00 and +01:00), so either could be an hour off; write it with its offset, such as "2026-10-25T12:00:00+01:00"',
+    ])
+    expect(deadlineOf('2026-10-25T12:00:00+01:00', own)).toBe('2026-10-25T12:00:00+01:00')
+  })
+
+  test('the queue orders a short deadline by the time it names', () => {
+    const tasks = [
+      [21, '2026-10-25 12:00'],
+      [22, '2026-10-25T11:30:00+02:00'],
+      [23, '2026-10-25T10:15:00Z'],
+    ].map(([number, deadline]) =>
+      toTask(issue({ number: Number(number), body: body({ ...blockObject(), deadline }) }), config),
+    )
+    // 10:15Z is 12:15+02:00, after 12:00+02:00.
+    expect(queueOf(/** @type {any} */ (tasks), ['web']).map((task) => task.number)).toEqual([
+      22, 21, 23,
+    ])
   })
 })
 
@@ -611,7 +687,7 @@ describe('1.3b/task-block-errors: no control character, line break or bidi forma
       'role webb is not a role of owners.yml',
       'wave must be a whole number, not "one"',
       'paths[0] (src/features/web/[id].js) "[" is not supported: character classes, groups and extglobs are not; write \\[ for the character itself',
-      'deadline "tomorrow" is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00"',
+      'deadline "tomorrow" is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00", or a date and time in the event\'s time zone, such as "2026-10-17 23:59"',
     ])
   })
 

@@ -10,6 +10,7 @@ import { main } from '../../src/cli/main.js'
 import { UsageError } from '../../src/core/runtime/errors.js'
 import { createRepoWithOrigin, createScratch } from '../core/git/temp-repo.js'
 import { createConfiguredRepo, fakeGh } from '../core/config/fixtures.js'
+import { renderWrapper } from '../../src/generate/wrappers.js'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const bin = join(root, 'bin', 'hackwin.js')
@@ -158,5 +159,36 @@ describe('1.3a/registry: the command registry', () => {
       encoding: 'utf8',
     })
     expect(output).toContain('Usage: hackwin <command> [options]')
+  })
+})
+
+describe('1.3f/help: the help says that take needs no number', () => {
+  test('hackwin --help says it after the list of commands', () => {
+    const result = hackwin(['--help'])
+    expect(result.status).toBe(0)
+    const lines = result.stdout.split('\n')
+    const end = lines.indexOf('', lines.indexOf('Commands:') + 1)
+    expect(lines[end + 1]).toBe(
+      'Without a number, `hackwin take` takes the next task of your roles.',
+    )
+  })
+
+  test('hackwin take --help says what take does without N and with N', () => {
+    const result = hackwin(['take', '--help'])
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('Usage: hackwin take [N] [--release]')
+    expect(result.stdout).toContain(
+      'Without N, take takes the next task of your roles: the first task of your queue that passes every check.',
+    )
+    expect(result.stdout).toContain('With N, it takes task #N.')
+  })
+
+  test('the generated wrapper of take does not change', () => {
+    const take = /** @type {any} */ (COMMANDS.find((entry) => entry.name === 'take'))
+    const { details, ...rest } = take
+    expect(details.length).toBeGreaterThan(0)
+    expect(renderWrapper(take, { version: '0.1.0' })).toBe(
+      renderWrapper(rest, { version: '0.1.0' }),
+    )
   })
 })
