@@ -17,6 +17,22 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Version 0.1.0 on main, and the release tarball (PR #168, issue #167)
+
+- Setup: the integrator did this task itself, at `lead-55`'s request after the merge of #166, in its worktree `task/167-version-0-1-0`, created from `043ce35`. `lead-55` sent the merge. Issue #167 names what the bump changes for the live scenarios, so that the merge could weigh it.
+- What happened:
+  - One commit, `fbcb27c`: `package.json` (line 3) and both version fields of `package-lock.json` (lines 3 and 9) carry `0.1.0`; nothing else changed. `npm run format` left both files unchanged, and `node bin/hackwin.js --version` printed `0.1.0`. PR #168 opened at 11:39:12 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 2 files inside issue #167's paths; no secret pattern; no dash; no conflict with `043ce35`.
+    - Step 6, with the PR merged into `043ce35` (a fast-forward to `fbcb27c`), at a load average of 2.13: `npm test` passed 1089 of 1089. The task's only criterion is an inspection, so `npm run test:ac` was not run. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39773105029`, succeeded: both jobs passed 1088 tests and skipped 1 of 1089.
+  - The release tarball, at `lead-55`'s request: `npm pack` of a `git archive` of the merge commit `77fb7ee` into `/Users/bartus/Desktop/hackwin/release-0.1.0/hackwin-0.1.0.tgz`. 316807 bytes, sha256 `e0dd6b839d92ed489c0735a5930dc1c9b4e6d85ff9e0976a633770decaed576d`, 137 files: `LICENSE`, `README.md`, `package.json`, `bin/` and `src/`. The file list is the same as that of `v0.1.0-pre.3`. Installed into a temporary prefix, `hackwin --version` printed `0.1.0`; the machine's own `hackwin` stayed `0.1.0-pre.3`.
+  - No tag, no GitHub release and nothing on npm: the human publishes this file to npm (step 1.8); the tag `v0.1.0` and the GitHub release follow after that.
+- Problems: once main carries 0.1.0, AC66 and the live part of 1.7b pass only after 0.1.0 is on npm, because the fixture's CI installs `hackwin@0.1.0` from npm (contracts 6.3). The live flow scenarios of 1.7a refuse a version without a pre-release identifier (`requirePrerelease` in `test/integration/flow/world-live.js`), and contracts 6.2 describes only the time before 0.1.0. `lead-55` decided: one integrator issue for both, after the release. AC77 is unaffected. None of these runs in CI.
+- Measured: PR open 7 min 8 s (11:39:12 to 11:46:20 UTC); 1 commit, 1 PR run (168 s), 0 conflicts; local merge test `npm test` 148.83 s; the run on main after the merge 168 s.
+- Evidence: issue #167; PR https://github.com/Bartek201301/HackWin/pull/168; head `fbcb27c`; merge commit `77fb7ee`; runs `39772198492` (PR) and `39773105029` (main).
+
 ### 2026-10-22 · Phase 1 · Three texts of the pre.3 check: setup's `.env.local` step, `/gate` while a Gate runs, ship's step 12 (PR #166, issue #165)
 
 - Setup: the three text findings of the manual check of 0.1.0-pre.3. The human decided to fix them before 0.1.0, as one task, one session and one PR (`lead-55`). The integrator opened #165, role lane-a, with one "Scope change:" comment for the lane B files (ship) and one for the lane C files (`notInTerminal` of the Gate), and a worktree `task/165-manual-check-texts` from `1f0f584`. `lead-55` started the session, reviewed the PR and sent the merge.
