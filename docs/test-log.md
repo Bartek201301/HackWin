@@ -17,6 +17,41 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.6h status and Gate: the next command, plain words first, clean labels (PR #150, issue #148)
+
+- Setup: a builder session of lane C in worktree `task/148-status-gate-plain-words`, created by the integrator from `a15680c`. `lead-55` opened the session, reviewed the PR and sent the merge, after #152 and #151. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - Two parts of item 2 conflicted with PRD line 819: dropping "resolver: none", and not printing the `paths.gated` notice. The integrator held them in the issue. `lead-55` decided that both header items stay, only in plain words, and the issue's body and one comment record that.
+  - For a caller with a next task, the last line of `status`, after the Gate digest, is the `take` command to paste, with no number: "to start your next task, run `cd <main checkout> && hackwin take`".
+    - The first commit, `a4fd6df`, put it at the end of the caller's own "next" line, as criterion 1.6h/next said. That made "who does what" differ between machines, which AC44 forbids.
+    - At `lead-55`'s review the second commit, `26b80c7`, moved it to its own last line, outside "who does what". The AC44 test compares that section exactly again.
+    - After the merge the integrator changed criterion 1.6h/next of #148 to match, at `lead-55`'s request, with one comment.
+  - `status` and the Gate's header print the same protection line. It starts with "only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected", and the details follow. The Gate's separate notice about BLOCKED became part of that line.
+  - "resolver: none" is now "conflict resolver: not in this version, so the author of a pull request resolves each conflict".
+  - The `paths.gated` notice now says what to do.
+  - In stage 11, once the task issue is closed, the Gate removes its status labels (`ready`, `blocked`, `in-progress`, `in-review`). `cut` and the role label stay, and a closed issue's status stays `closed`. Before this, issues #2 and #3 of the sandbox stayed `in-review` after their merge.
+  - The third commit, `919c7b5`, made one 1.6h/next test independent of the order in which the tests run. It had passed in `npm test` and failed in `npm run test:ac`.
+  - PR #150 opened at 00:31:29 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 10 files inside issue #148's paths; no secret pattern; no dash; no conflict with `dade826`.
+    - Step 6, with the PR merged into `dade826` at a load average of 7.01 with no other vitest process, while `lead-55` kept #146's session from starting a full suite: `npm test` passed 1049 of 1049, and `npm run test:ac -- 1.6h/next 1.6h/plain-words 1.6h/labels` passed 1.6h/next 4, 1.6h/plain-words 2 and 1.6h/labels 1. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39702424099`, succeeded: both jobs passed 1048 tests and skipped 1 of 1049.
+- Problems:
+  - The PR names these limitations:
+    - "poll: every N s" and "keep awake: ..." keep their wording;
+    - the notice "the pipeline is not built yet" says nothing to do, but `hackwin gate` never prints it;
+    - the Gate's start warnings were not reworded;
+    - label removal on a closed issue was tested against the fake GitHub only.
+  - The criterion that put the command into "who does what" conflicted with AC44, which cost a second commit and a full test run.
+- Workflow notes of the PR:
+  - "The issue body changed during the task. Its held part of item 2 was decided by `lead-55` and announced with a message to this session, so the issue was read twice. No time lost beyond that."
+  - "Criterion 1.6h/next put the paste-ready `take` command, which names a directory of this machine, into "who does what". AC44 asks for that section to be the same on every machine. ... `lead-55`'s review asked for its own line instead, so a second commit and a second full test run were needed."
+  - "A test passed in `npm test` but failed in `npm run test:ac` because of the order in which the tests run: an earlier test in the same file had recorded a status call. That cost a third commit and a third full test run."
+  - "While the third full run was under way, `lead-55` asked to start no new full run until the integrator's merge tests for #151 and #152 are done, because of the machine's load. No run was started after that message."
+- Measured: PR open 22 min 3 s (00:31:29 to 00:53:32 UTC); 3 commits, 2 PR runs (123 s and 162 s), 0 conflicts; local merge test `npm test` 135.61 s; the run on main after the merge 159 s.
+- Evidence: issue #148; PR https://github.com/Bartek201301/HackWin/pull/150; head `919c7b5`; merge commit `df4fb1a`; runs `39700206991` and `39701510215` (PR) and `39702424099` (main).
+
 ### 2026-10-22 · Phase 1 · 1.5i ship: a filled pull request body, and a refusal that says what to do (PR #151, issue #147)
 
 - Setup: a builder session of lane B in worktree `task/147-ship-filled-pr-body`, created by the integrator from `a15680c`. `lead-55` opened the session, reviewed the PR and sent the merge, after #152. The task is one of the usability tasks of plan decision 14.
