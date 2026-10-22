@@ -4,7 +4,7 @@
 // message per member to paste into a chat, and next steps for the Lead.
 
 import { describe, expect, test } from 'vitest'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { REPOSITORY_URL, VERSION } from '../../../src/cli/context.js'
 import { installCommand, loadConfig } from '../../../src/core/config/index.js'
@@ -436,7 +436,6 @@ describe('1.4m/next: the next steps of the Lead at the end of setup', () => {
       `  2. write the first tasks as issues from the template "HackWin task" (.github/ISSUE_TEMPLATE/hackwin-task.md), or ask your planning session, the Claude Code session in ${main}, to write them from that template`,
       `  3. take a task: run \`cd ${main} && hackwin take\`; with no number, take picks the next task of your queue`,
       '  4. read docs/hackwin/using-hackwin.md: how the team works with HackWin',
-      '  send .env.local to each member over a private channel; it is never committed',
     ])
     const text = lines.join('\n')
     expect(text).toContain('protection: full, with the update restriction')
@@ -444,5 +443,69 @@ describe('1.4m/next: the next steps of the Lead at the end of setup', () => {
     expect(text).toContain('members:')
     expect(text).toContain('cd app && hackwin join')
     expect(text).not.toContain('manual-workflow.md')
+  })
+})
+
+describe('1.4o/env-local: the reminder to send .env.local only when .env.example lists a key', () => {
+  /**
+   * The next steps of the Lead, 1 to 4, as 1.4m/next has them.
+   * @param {string} main
+   */
+  const nextSteps = (main) => [
+    'next steps for you, the Lead:',
+    `  1. start the Gate in a terminal of its own and leave it open: run \`cd ${main} && hackwin gate\``,
+    `  2. write the first tasks as issues from the template "HackWin task" (.github/ISSUE_TEMPLATE/hackwin-task.md), or ask your planning session, the Claude Code session in ${main}, to write them from that template`,
+    `  3. take a task: run \`cd ${main} && hackwin take\`; with no number, take picks the next task of your queue`,
+    '  4. read docs/hackwin/using-hackwin.md: how the team works with HackWin',
+  ]
+
+  /**
+   * Run setup and return its summary of step 15, from its first line to the end: in the terminal,
+   * or with --json from `lines`. Join's step 7 comes before the summary, and its line stays.
+   * @param {import('../../harness/index.js').Fixture} fixture
+   * @param {import('../../harness/index.js').FakeGitHub} fake
+   * @param {string[]} args
+   * @returns {Promise<{ summary: string[], next: string[] }>} The summary and its next steps.
+   */
+  async function summaryOf(fixture, fake, args) {
+    const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args })
+    expect(result.code, result.stderr).toBe(0)
+    const lines = args.includes('--json')
+      ? JSON.parse(result.stdout).lines
+      : result.stdout.trimEnd().split('\n')
+    const start = lines.indexOf('setup of hackwin-test/app is complete')
+    expect(start).toBeGreaterThanOrEqual(0)
+    const summary = lines.slice(start)
+    return { summary, next: summary.slice(summary.indexOf('next steps for you, the Lead:')) }
+  }
+
+  test('1.4o/env-local: with an .env.example that lists no key, and with no .env.example, the summary has no line about .env.local, in the terminal and in --json', async () => {
+    const { fixture, fake } = await createSetupFixture()
+    expect(readFileSync(join(fixture.main, '.env.example'), 'utf8')).toBe('')
+    for (const args of [[], ['--resume', '--json']]) {
+      const { summary, next } = await summaryOf(fixture, fake, args)
+      expect(summary.filter((line) => line.includes('.env.local'))).toEqual([])
+      expect(next).toEqual(nextSteps(fixture.main))
+    }
+
+    rmSync(join(fixture.main, '.env.example'))
+    for (const args of [['--resume'], ['--resume', '--json']]) {
+      const { summary, next } = await summaryOf(fixture, fake, args)
+      expect(summary.filter((line) => line.includes('.env.local'))).toEqual([])
+      expect(next).toEqual(nextSteps(fixture.main))
+    }
+  })
+
+  test('1.4o/env-local: with an .env.example that lists a key, the reminder is the numbered next step after the others, and the next steps 1 to 4 are as before', async () => {
+    const { fixture, fake } = await createSetupFixture({ files: { '.env.example': 'API_KEY=\n' } })
+    // The Lead holds .env.local, which the project ignores, so join's step 7 passes.
+    writeFileSync(join(fixture.main, '.env.local'), 'API_KEY=placeholder\n')
+    for (const args of [[], ['--resume', '--json']]) {
+      const { next } = await summaryOf(fixture, fake, args)
+      expect(next).toEqual([
+        ...nextSteps(fixture.main),
+        '  5. send .env.local to each member over a private channel; it is never committed',
+      ])
+    }
   })
 })

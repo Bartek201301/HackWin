@@ -95,7 +95,8 @@ async function expectShipped(s, head) {
 
 /**
  * The ways a ship stops in steps 10 to 14. Each makes the step fail and returns what undoes it;
- * `last` is the last step that succeeded.
+ * `last` is the step of the last progress line: the last step that succeeded, or step 12, which
+ * is skipped.
  * @type {Array<{ step: number, title: string, last: number, interrupt: (s: Scene) => () => void }>}
  */
 const INTERRUPTIONS = [
@@ -121,7 +122,7 @@ const INTERRUPTIONS = [
   },
   {
     step: 13,
-    last: 11,
+    last: 12,
     title: 'report',
     interrupt: (s) =>
       s.fake.on('POST repos/{owner}/{repo}/issues/:number/comments', () => {
@@ -165,7 +166,7 @@ describe('AC16: ship pushes, opens the pull request, reports, sets in-review and
     expect(report).toMatch(/^\| 8 \| acceptance tests \| passed in \d+\.\d s \|$/m)
     expect(s.fake.find(ISSUE)?.labels).toEqual(['role:counter', 'in-review'])
 
-    expect(stepsOf(result.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
+    expect(stepsOf(result.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
     expect(lastLine(result.stdout)).toBe(`PR #${number} opened at ${head}. Do not merge. Stop.`)
   })
 
@@ -190,7 +191,7 @@ describe('AC16: ship pushes, opens the pull request, reports, sets in-review and
       expect(again.code, again.stderr).toBe(0)
       expect(checksRan(s)).toBe(false)
       expect(again.stdout).toContain(`steps 3 to 9, checks: passed for ${head} at `)
-      expect(stepsOf(again.stdout)).toEqual([1, 2, 10, 11, 13, 14])
+      expect(stepsOf(again.stdout)).toEqual([1, 2, 10, 11, 12, 13, 14])
       const number = await expectShipped(s, head)
       expect(pullsOf(s)).toHaveLength(1)
       expect(commentsOf(s)).toHaveLength(1)
@@ -214,7 +215,7 @@ describe('AC16: ship pushes, opens the pull request, reports, sets in-review and
     })
     const second = await ship(s)
     expect(second.code, second.stderr).toBe(0)
-    expect(stepsOf(second.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
+    expect(stepsOf(second.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
     expect(second.stdout).toContain(`step 11, pull request: PR #${number} of ${BRANCH} is open`)
     expect(await expectShipped(s, head)).toBe(number)
     expect(pullsOf(s)).toHaveLength(1)
@@ -358,7 +359,7 @@ describe('1.5c/ship: a rerun reuses only a pull request of this repository and o
     expect(again.stdout).toContain(
       `steps 3 to 9, checks: the green check record of ${head} was written by hackwin 0.0.9, not ${VERSION}, so the checks run again`,
     )
-    expect(stepsOf(again.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
+    expect(stepsOf(again.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
     expect(JSON.parse(readFileSync(file, 'utf8')).cli_version).toBe(VERSION)
     await expectShipped(s, head)
   })
@@ -540,5 +541,23 @@ describe('1.5i/pr-body: ship fills in the role, the checks that passed and the a
   test('a body with CRLF line endings, as GitHub keeps one edited in the browser, keeps them', () => {
     const body = pullRequestBody(HACKWIN_TEMPLATE, ISSUE).replaceAll('\n', '\r\n')
     expect(fillPullRequestBody(body, factsOf())).toBe(filledTemplate().replaceAll('\n', '\r\n'))
+  })
+})
+
+describe('1.5k/step-12: ship says why step 12 does not run', () => {
+  test('in a ship that opens a pull request, the line of step 12 comes right after the line of step 11 and right before the line of step 13, in the terminal and with --json', async () => {
+    for (const json of [false, true]) {
+      const s = await scene({ push: false })
+      const result = await ship(s, { json })
+      expect(result.code, result.stderr).toBe(0)
+      // With --json, stdout holds only the JSON result, and the step lines go to stderr.
+      const lines = (json ? result.stderr : result.stdout).split('\n')
+      const at = lines.findIndex((line) => line.startsWith('step 11, pull request: opened PR #'))
+      expect(at).toBeGreaterThanOrEqual(0)
+      expect(lines[at + 1]).toBe(
+        'step 12, hotspot notice: skipped, it comes in a later version of HackWin: a notice of the other open pull requests that change the same files',
+      )
+      expect(lines[at + 2]).toMatch(new RegExp(`^step 13, report: commented on issue #${ISSUE}: `))
+    }
   })
 })

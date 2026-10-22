@@ -227,7 +227,7 @@ async function settingsCheck(scope) {
  * @returns {Promise<Outcome>}
  */
 async function envCheck({ main }) {
-  const keys = envKeys(await readOptional(join(main, '.env.example')))
+  const keys = await envExampleKeys(main)
   if (keys.length === 0) return passed('.env.example lists no key, so no .env.local is needed')
   const path = join(main, '.env.local')
   const count = `${keys.length} key${keys.length === 1 ? '' : 's'}`
@@ -235,6 +235,16 @@ async function envCheck({ main }) {
   return failed(`.env.example lists ${count}, but ${path} does not exist`, [
     `ask the Lead for .env.local, sent over a private channel, and save it as ${path}`,
   ])
+}
+
+/**
+ * The keys that `.env.example` in the main checkout lists; none when it does not exist. A project
+ * needs `.env.local` exactly when there is a key: step 7 and the next steps of `setup` use this.
+ * @param {string} main
+ * @returns {Promise<string[]>}
+ */
+export async function envExampleKeys(main) {
+  return envKeys(await readOptional(join(main, '.env.example')))
 }
 
 /**

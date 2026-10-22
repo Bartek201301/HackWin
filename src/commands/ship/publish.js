@@ -86,6 +86,11 @@ export async function publish(ctx, worktree, synced, checked) {
   const pull = await publishing(PUBLISH_STEPS.pull, dir, () =>
     openPullRequest(ctx, worktree, synced, checked),
   )
+  progress(
+    ctx,
+    PUBLISH_STEPS.hotspot,
+    'skipped, it comes in a later version of HackWin: a notice of the other open pull requests that change the same files',
+  )
   const report = await publishing(PUBLISH_STEPS.report, dir, () =>
     reportOnIssue(ctx, synced, checked, pull.pull),
   )
