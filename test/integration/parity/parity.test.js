@@ -262,7 +262,8 @@ describe('AC67: the command set of Phase 1', () => {
         const entry = /** @type {(typeof COMMANDS)[number]} */ (
           COMMANDS.find((command) => command.name === name)
         )
-        expect(result.stdout).toBe(`Usage: ${entry.usage}\n\n${entry.summary}.\n`)
+        const details = entry.details ? `\n${entry.details.join('\n')}\n` : ''
+        expect(result.stdout).toBe(`Usage: ${entry.usage}\n\n${entry.summary}.\n${details}`)
       }
       expect(world.bridgeCalls.length).toBe(calls)
     },

@@ -321,13 +321,18 @@ export function parseCommandLine(argv) {
  * @returns {string}
  */
 export function helpText(entry) {
-  if (entry) return `Usage: ${entry.usage}\n\n${entry.summary}.\n`
+  if (entry) {
+    const details = entry.details ? `\n${entry.details.join('\n')}\n` : ''
+    return `Usage: ${entry.usage}\n\n${entry.summary}.\n${details}`
+  }
   const width = Math.max(...COMMANDS.map((command) => command.name.length))
   return [
     'Usage: hackwin <command> [options]',
     '',
     'Commands:',
     ...COMMANDS.map((command) => `  ${command.name.padEnd(width)}  ${command.summary}`),
+    '',
+    'Without a number, `hackwin take` takes the next task of your roles.',
     '',
     'Options:',
     '  --json     Print the full result as JSON',

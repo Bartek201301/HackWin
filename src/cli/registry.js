@@ -17,6 +17,8 @@ import { UsageError } from '../core/runtime/errors.js'
  * @property {'lane-a' | 'lane-b' | 'lane-c'} owner The role that writes the module.
  * @property {string} usage
  * @property {string} summary
+ * @property {string[]} [details] More lines for the command's own --help. The generated wrappers
+ *   take only `summary` and `usage`, so these lines do not change a generated file.
  * @property {Record<string, FlagSpec>} flags The command's own flags. Global flags come on top.
  * @property {number} maxArgs How many positional arguments the command takes at most.
  * @property {boolean} plumbing True for `hackwin internal ...`, which --help does not list.
@@ -56,6 +58,10 @@ export const COMMANDS = Object.freeze(
       owner: 'lane-b',
       usage: 'hackwin take [N] [--release]',
       summary: 'Check a task, create its worktree and start your agent with a composed prompt',
+      details: [
+        'Without N, take takes the next task of your roles: the first task of your queue that passes every check. It names each task it skipped and why.',
+        'With N, it takes task #N.',
+      ],
       flags: { release: { type: 'boolean' } },
       maxArgs: 1,
       plumbing: false,
