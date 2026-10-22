@@ -312,22 +312,36 @@ describe('1.6a/header: the header of a starting Gate', () => {
       new RegExp(`^\\d\\d:\\d\\d Gate started: start 1, pid ${process.pid}$`),
     )
     expect(header.slice(1, 6)).toEqual([
-      'protection: full-restricted',
-      'resolver: none',
+      "protection: only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected. Details: full-restricted; the update restriction is active, so the Gate merges with --admin, and only after its own stages pass",
+      'conflict resolver: not in this version, so the author of a pull request resolves each conflict',
       'poll: every 60 s',
       'queue: 0 pull requests',
       `status issue: #1 https://github.com/${DEFAULT_FAKE_REPO}/issues/1`,
     ])
     expect(header).toContain(
-      'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
-    )
-    expect(header).toContain(
-      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
+      'notice: the Gate cannot ask you to review a migration or a production config change, because paths.gated in hackwin.yml is empty; if the project has such files, add their globs to paths.gated in a task of the shared role; if it has none, nothing needs doing',
     )
     expect(header.filter((line) => line.includes('not built yet'))).toEqual([])
     expect(header).not.toContain(
       'notice: the pipeline is not built yet: this Gate polls, but takes no pull request',
     )
+    expect(await quit(gate)).toBe(0)
+  })
+})
+
+describe('1.6h/plain-words: the header starts with plain words, and each notice says what to do', () => {
+  test('the protection line starts with one plain sentence, the Resolver is named in plain words, and the one notice says what to do', async () => {
+    const gate = await startLeadGate()
+    const header = gate.io.out.split('\n')
+    expect(header[1]).toBe(
+      "protection: only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected. Details: full-restricted; the update restriction is active, so the Gate merges with --admin, and only after its own stages pass",
+    )
+    expect(header[2]).toBe(
+      'conflict resolver: not in this version, so the author of a pull request resolves each conflict',
+    )
+    expect(header.filter((line) => line.startsWith('notice:'))).toEqual([
+      'notice: the Gate cannot ask you to review a migration or a production config change, because paths.gated in hackwin.yml is empty; if the project has such files, add their globs to paths.gated in a task of the shared role; if it has none, nothing needs doing',
+    ])
     expect(await quit(gate)).toBe(0)
   })
 })
