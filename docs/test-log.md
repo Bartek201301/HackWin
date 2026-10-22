@@ -17,6 +17,28 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Harness: the reset reads again while GitHub still lists an issue it just closed (PR #163, issue #162)
+
+- Setup: the integrator did this task itself, at `lead-55`'s request after the live scenarios on build 3, in its worktree `task/162-reset-read-again`, created from `1816ab9`. `lead-55` reviewed it and sent the merge. Low priority; it does not block 0.1.0.
+- What happened:
+  - Issue #162 records the failure of the first AC77 run on build 3. The harness's reset of `hackwin-fixture-c` read back issue #37 as open, seconds after the reset itself had closed it. That GitHub's listing lagged is inferred.
+  - `resetFixtureRepo` (`test/harness/reset.js`) now reads the state again while the only differences are open issues or pull requests that this reset closed itself (`onlyJustClosed`). It reads up to 6 times in all, 1 second apart (`READ_BACK_ATTEMPTS`, `READ_BACK_DELAY_MS`), and logs each extra read. Any other difference still fails at once, an open issue that the reset did not close included. Pull requests are included because the same `issues?state=open` listing returns them, which `lead-55` agreed with. Contracts 6.4 says so.
+  - Three new tests in 1.3d/reset put an executor in front of the fake GitHub that keeps the just-closed issue in the open listing:
+    - for 2 reads the reset holds after 3 reads;
+    - for more than 6 it fails after 6 reads, naming the issue;
+    - with an issue that the reset never closed it fails at once, after 1 read.
+
+    With the loop switched off, the first two failed.
+  - One commit, `e416e86`; PR #163 opened at 02:44:56 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 3 files inside issue #162's paths; no secret pattern; no dash; no conflict with `1816ab9`.
+    - Step 6, with the PR merged into `1816ab9` (a fast-forward to `e416e86`): `npm test` passed 1085 of 1085, and `npm run test:ac -- 1.3d/reset` passed 1.3d/reset 7. The load average rose to 11.87 by the end; no sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39714763610`, succeeded: both jobs passed 1084 tests and skipped 1 of 1085. It took 593 s, and the PR run 546 s, against about 150 s earlier in the night; the cause was not looked into.
+- Problems: none in this task. Not run against real GitHub yet; the next live scenarios use it. A label, branch, rule set or unpin that lagged the same way would still fail at once; only the issue listing was observed to lag.
+- Measured: PR open 18 min 39 s (02:44:56 to 03:03:35 UTC); 1 commit, 1 PR run (546 s), 0 conflicts; local merge test `npm test` 196.55 s; the run on main after the merge 593 s.
+- Evidence: issue #162; PR https://github.com/Bartek201301/HackWin/pull/163; head `e416e86`; merge commit `1f0f584`; runs `39713080078` (PR) and `39714763610` (main).
+
 ### 2026-10-22 · Phase 1 · Live scenarios on pre-release build 3: AC66, AC76, AC77 and the live AC6 (worktree at `934a94f`)
 
 - Setup:
