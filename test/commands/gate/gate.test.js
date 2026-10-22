@@ -191,7 +191,9 @@ describe('AC58: the /gate wrapper inside an agent session starts no Gate', () =>
     expect(result.error.message).toContain(
       `a Gate is already running on this machine: pid ${process.pid}, started ${readJson(files.lock).started_at}, last heartbeat ${heartbeat.heartbeat_at}`,
     )
-    expect(result.error.resolve).toEqual({ command: 'hackwin gate', dir: fixture.main })
+    expect(result.error.resolve).toBe(
+      `nothing needs doing: the Gate already runs in its own terminal; to see its state, run \`cd ${fixture.main} && hackwin status\``,
+    )
     expect(result.error.details.caller).toBe('claude-code')
 
     expect(await quit(gate)).toBe(0)
@@ -206,6 +208,33 @@ describe('AC58: the /gate wrapper inside an agent session starts no Gate', () =>
     expect(io.err).toContain('the Gate starts only in its own terminal')
     expect(io.err).toContain(`to resolve: run \`cd ${fixture.main} && hackwin gate\``)
     expect(gateFilesPresent()).toEqual({ lock: false, state: false, heartbeat: false })
+  })
+})
+
+describe('1.6i/gate-running: a /gate refused while a Gate runs does not say to start one', () => {
+  test('exit 2, no Gate starts, no line says to run hackwin gate, and the resolve line says that nothing needs doing', async () => {
+    const gate = await startLeadGate()
+    const lock = readJson(files.lock)
+
+    const { io, done } = startMain(fixture, {
+      fake: leadGitHub(),
+      login: LEAD,
+      env: { ...fixture.env, HACKWIN_CALLER: 'claude-code' },
+    })
+    expect(await done).toBe(2)
+    expect(io.err).toContain(
+      `the Gate starts only in its own terminal, never inside an agent session or a script: open a separate terminal for it; a Gate is already running on this machine: pid ${process.pid}, started ${lock.started_at}`,
+    )
+    expect(io.err).toContain(
+      `  to resolve: nothing needs doing: the Gate already runs in its own terminal; to see its state, run \`cd ${fixture.main} && hackwin status\``,
+    )
+    // The error starts with `hackwin gate:`, the command that failed; no line says to run it.
+    expect(io.err.split('\n').filter((line) => /run `[^`]*hackwin gate`/.test(line))).toEqual([])
+    expect(io.out).toBe('')
+    expect(readJson(files.lock)).toEqual(lock)
+
+    expect(await quit(gate)).toBe(0)
+    expect(readJson(files.state).starts).toBe(1)
   })
 })
 

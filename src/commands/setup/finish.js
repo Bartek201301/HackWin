@@ -20,6 +20,7 @@ import {
 import { readProtection } from '../../core/protection/index.js'
 import { readLocal } from '../../core/state/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
+import { envExampleKeys } from '../join/checks.js'
 import { run as runJoin } from '../join/index.js'
 import { inviteMembers } from './invitations.js'
 import { createLabels } from './labels.js'
@@ -216,7 +217,8 @@ async function finish(ctx, questions, { repository, config: given }) {
   const identity = resolveIdentity(config, await ctx.github.login())
   const joined = await joinLead(ctx, questions, { config, identity })
 
-  // Step 15.
+  // Step 15. The reminder about .env.local only when there is one to send, by join's step 7.
+  const envLocal = (await envExampleKeys(root)).length > 0
   const lines = [
     joined.exitCode === 1
       ? `setup of ${name} is complete except for join on this machine`
@@ -229,7 +231,9 @@ async function finish(ctx, questions, { repository, config: given }) {
     `  2. write the first tasks as issues from the template "HackWin task" (.github/ISSUE_TEMPLATE/hackwin-task.md), or ask your planning session, the Claude Code session in ${root}, to write them from that template`,
     `  3. take a task: ${runIn('hackwin take', root)}; with no number, take picks the next task of your queue`,
     `  4. read ${GUIDE}: how the team works with HackWin`,
-    `  send .env.local to each member over a private channel; it is never committed`,
+    ...(envLocal
+      ? ['  5. send .env.local to each member over a private channel; it is never committed']
+      : []),
   ]
   return {
     exitCode: joined.exitCode === 1 ? 1 : 0,

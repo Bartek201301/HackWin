@@ -140,7 +140,7 @@ describe('AC1: setup configures the repository and GitHub', () => {
     expect(result.stdout).toContain('push protection: on: GitHub blocks a push')
   })
 
-  test('AC1: the summary names the protection state, push protection, what each member runs, the next steps and .env.local; the Lead is joined', async () => {
+  test('AC1: the summary names the protection state, push protection, what each member runs and the next steps, with no .env.local to send for an .env.example without keys; the Lead is joined', async () => {
     const { fixture, fake } = await createSetupFixture()
     const result = await runSetup(fixture, fake, { answers: teamAnswers(3), args: ['--json'] })
     expect(result.code).toBe(0)
@@ -160,7 +160,7 @@ describe('AC1: setup configures the repository and GitHub', () => {
       `start the Gate in a terminal of its own and leave it open: run \`cd ${fixture.main} && hackwin gate\``,
     )
     expect(lines).toContain('write the first tasks as issues from the template "HackWin task"')
-    expect(lines).toContain('send .env.local to each member over a private channel')
+    expect(lines).not.toContain('send .env.local')
     expect(json.data.protection.state).toBe('full-restricted')
     expect(json.data.pushProtection.on).toBe(true)
     expect(json.data.join.exitCode).toBe(0)

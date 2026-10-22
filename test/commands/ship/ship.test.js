@@ -179,7 +179,7 @@ describe('1.5d/ship: merge main and local checks', () => {
       expect(await s.worktree.git.isAncestor(commit, head)).toBe(true)
     }
 
-    expect(stepsOf(result.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
+    expect(stepsOf(result.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
     expect(result.stdout).toContain(`merged the commits of origin/${BRANCH} that the branch lacked`)
     expect(result.stdout).toContain('step 2, merge main: merged origin/main')
     expect(result.stdout).toContain(`step 9, check record: written for ${head}`)

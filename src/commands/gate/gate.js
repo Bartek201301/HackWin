@@ -229,7 +229,8 @@ export async function startGate(ctx, options = {}) {
 
 /**
  * The refusal outside a terminal (7.5, preconditions): the `/gate` wrapper of an agent session,
- * a script or a hook starts nothing. It says how to start the Gate and whether one runs.
+ * a script or a hook starts nothing. It says whether a Gate runs: with none, how to start it; with
+ * one, that nothing needs doing.
  * @param {CommandContext} ctx
  * @param {GateFiles} files
  * @param {string} main
@@ -245,7 +246,10 @@ async function notInTerminal(ctx, files, main) {
   return new PreconditionError(
     `the Gate starts only in its own terminal, never inside an agent session or a script: open a separate terminal for it; ${running}`,
     {
-      resolve: { command: 'hackwin gate', dir: main },
+      resolve:
+        holder === null
+          ? { command: 'hackwin gate', dir: main }
+          : `nothing needs doing: the Gate already runs in its own terminal; to see its state, ${runIn('hackwin status', main)}`,
       details: { caller: ctx.caller, running: holder },
     },
   )

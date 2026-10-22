@@ -54,13 +54,21 @@ export const STEPS = Object.freeze({
   record: step(9, 'check record', 'the green check record is for the commit that was checked (E4)'),
 })
 
-/** Steps 10 to 14 of 7.9: the steps that publish the checked commit. Step 12 is Phase 3. */
+/**
+ * Steps 10 to 14 of 7.9: the steps that publish the checked commit. Step 12 is Phase 3: `ship`
+ * prints it as skipped.
+ */
 export const PUBLISH_STEPS = Object.freeze({
   push: step(10, 'push', 'the branch is pushed only after its checks passed, never forced (E4)'),
   pull: step(
     11,
     'pull request',
     'one open pull request per task, not a draft, that closes the task (T1, 8.4)',
+  ),
+  hotspot: step(
+    12,
+    'hotspot notice',
+    'every other open pull request that changes one of the same files is named (H2)',
   ),
   report: step(
     13,
