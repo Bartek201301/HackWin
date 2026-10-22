@@ -17,6 +17,51 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.4n generated files: a guide to the CLI, a task template that knows the team, an allow list (PR #153, issue #146)
+
+- Setup: a builder session of lane A in worktree `task/146-generated-files-guide`, created by the integrator from `a15680c`, beside #145 (lane A, setup). `lead-55` opened the session, reviewed the PR twice and sent the merge. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - `setup` creates `docs/hackwin/using-hackwin.md` when it is missing and keeps an existing one. It covers the roles, the terminals each person keeps open, the loop with `hackwin take` with no number first, the Gate and why pull requests show `BLOCKED`, `status`, a table of refusals with what to do, how to write a task or ask the planning session for one, and the permission mode: auto mode or bypass permissions for task sessions, with what the hooks do not cover.
+  - `manual-workflow.md` gets a paragraph under its title: it is the method without the CLI, and teams with the CLI read `using-hackwin.md`. The rest is unchanged.
+  - The task issue template's block is now rendered from `hackwin.yml` and `owners.yml`, so `--regenerate` rewrites it.
+    - In HTML comments it names each role with its paths, the `open` list, the test command, and that the planning session can write the issue. `role:` names the roles, and `deadline:` holds the event end.
+    - One filled example task of the team sits at the end, in an HTML comment with no fenced block, so `parseTaskBlock` never reads it. `src/core/tasks` did not change.
+  - The `AGENTS.md` block reads `` `hackwin take [<issue>]` `` and says that without a number it takes the next task of the caller's roles.
+  - `.claude/settings.json` gets `permissions.allow`:
+    - the project's commands of `hackwin.yml`;
+    - `git status`, `git diff`, `git log`, `git add` and `git commit`;
+    - `hackwin status`, `hackwin take` and `hackwin ship`.
+
+    A command that may take arguments gets its bare form beside the form with ` *`, after `lead-55`'s first review (`fe4bce4`). A test checks that no allow entry matches any form of `docs/verification.md` row 2. The deny rules and the hooks did not change.
+  - Accepted by `lead-55` as deviations from the issue:
+    - `bootstrap.js` and `regenerate.js` pass the new input also to `planProjectFiles` and `planBlockFiles`, not only to `writeClaudeSettings`, through a new helper `filesInput`;
+    - the settings input's `commands` is optional, so that `test/internal/hook/pre-tool-use.test.js` stays unchanged;
+    - 1.4d/bootstrap now reports "2 secrets", because the allow list repeats the check command that holds the planted token.
+  - `git merge origin/main` (`df4fb1a`) conflicted in `test/commands/setup/regenerate.test.js`, where #152 and this task each appended a describe block. The session kept both.
+  - Four commits: `5095110`, `fc759bb`, a merge of main `61730fd`, and `fe4bce4`. PR #153 opened at 00:58:40 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 14 files inside issue #146's paths; no secret pattern; no dash; no conflict with `df4fb1a`.
+    - Before step 6 the integrator waited about 6 minutes, because #154's session ran its suite and the load average rose to 25.
+    - Step 6, with the PR merged into `df4fb1a` (a fast-forward to `fe4bce4`), at a load average of 2.55 with no vitest process: `npm test` passed 1065 of 1065. `npm run test:ac -- 1.4n/guide 1.4n/manual-workflow 1.4n/task-template 1.4n/agents-block 1.4n/allow 1.4l/documents 1.4d/files AC6/files 1.4g/regenerate` passed 1.4n/guide 3, 1.4n/manual-workflow 1, 1.4n/task-template 6, 1.4n/agents-block 1, 1.4n/allow 5, 1.4l/documents 5, 1.4d/files 5, AC6/files 10 and 1.4g/regenerate 18. The run took 230 s instead of about 130 s: an Xcode build ran beside it, and the load rose to 15. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39705278348`, succeeded: both jobs passed 1064 tests and skipped 1 of 1065.
+- Problems:
+  - The allow list was not tried in a real Claude Code session. The tests check it against a model of the documented matching, and the manual check of 0.1.0-pre.3 will try it (`lead-55`).
+  - Whether a trailing ` *` matches the bare command is unchecked in a real session, so every such rule has its bare form beside it.
+  - The template's help and example comments stay in an issue body unless the author deletes them, and `take` put them into the prompt; #154 (lane B) fixes that.
+  - The PR also names these limitations:
+    - the example's test file is named `first-version.test.js` whatever the stack;
+    - `before-the-event.md` still says that the committed settings hold only the deny rules for env files;
+    - `BootstrapInput.language` is no longer read in `bootstrap.js`.
+- Workflow notes of the PR:
+  - "The issue says that `bootstrap.js` and `regenerate.js` change only in the two `writeClaudeSettings` calls. The criterion that `setup --regenerate` writes the template's block from the current `hackwin.yml` and `owners.yml` also needed the input of `planProjectFiles` and `planBlockFiles` in those files. ..."
+  - "`test/internal/hook/pre-tool-use.test.js` is outside this task's paths and calls `mergeClaudeSettings(null, { defaultBranch: 'main' })`. To leave it unchanged, `commands` is optional in the settings input ..."
+  - "`lead-55`'s review of `61730fd` asked for the bare form beside every allow rule that ends in ` *`, which `fe4bce4` adds."
+  - "At `lead-55`'s request (load near 40 during the merge tests of #151 and #152), I stopped a running `npm test` and waited for the go before running the full suite and the acceptance tests."
+  - "`git merge origin/main` (`df4fb1a`, after #150, #151 and #152) conflicted in `test/commands/setup/regenerate.test.js`. #152 and this task each appended a describe block at the end of the file. I kept both, #152's `1.4m/paste` first."
+- Measured: PR open 23 min 32 s (00:58:40 to 01:22:12 UTC); 4 commits, 2 PR runs (156 s and 162 s), 1 conflict, resolved on the branch; local merge test `npm test` 230.16 s; the run on main after the merge 164 s.
+- Evidence: issue #146; PR https://github.com/Bartek201301/HackWin/pull/153; head `fe4bce4`; merge commit `1da4520`; runs `39702938943` and `39703909579` (PR) and `39705278348` (main).
+
 ### 2026-10-22 · Phase 1 · 1.6h status and Gate: the next command, plain words first, clean labels (PR #150, issue #148)
 
 - Setup: a builder session of lane C in worktree `task/148-status-gate-plain-words`, created by the integrator from `a15680c`. `lead-55` opened the session, reviewed the PR and sent the merge, after #152 and #151. The task is one of the usability tasks of plan decision 14.
