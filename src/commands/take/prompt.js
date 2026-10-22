@@ -517,19 +517,30 @@ function personalPart({ language, explanationStyle, projectLanguage }) {
 }
 
 /**
- * The issue body without its task block, with every heading one level lower so that it sits
- * under the part's heading. Code blocks stay as they are.
+ * The issue body without its task block and its HTML comments, with every heading one level
+ * lower so that it sits under the part's heading. Code blocks stay as they are, the comments in
+ * them included. A comment ends at its `-->` and takes a fenced block inside it along; a line
+ * that holds nothing besides comments goes too, and an opening `<!--` without a `-->` stays, so
+ * that no text of the issue is lost (#154).
  * @param {string | null | undefined} body
  * @returns {string}
  */
 export function issueText(body) {
   const lines = (body ?? '').replace(/\r\n?/g, '\n').split('\n')
+  const lastLine = lines.findLastIndex((line) => line.includes('-->'))
+  const lastClose = {
+    line: lastLine,
+    at: lastLine === -1 ? -1 : lines[lastLine].lastIndexOf('-->'),
+  }
   /** @type {string[]} */
   const kept = []
   for (let i = 0; i < lines.length; i += 1) {
     const open = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
     if (!open) {
-      kept.push(lines[i].replace(/^(#{1,5})(?=\s)/, '$1#'))
+      const { text, end, removed } = withoutComments(lines, i, lastClose)
+      const line = removed ? text.trimEnd() : text
+      if (!removed || line !== '') kept.push(line.replace(/^(#{1,5})(?=\s)/, '$1#'))
+      i = end
       continue
     }
     let end = i + 1
@@ -544,6 +555,65 @@ export function issueText(body) {
     i = end
   }
   return kept.join('\n').trim()
+}
+
+/**
+ * Line `start` of the issue without its HTML comments, and the last line it takes: a comment that
+ * goes on past the line ends on a later one, and the text after its `-->` joins this line. A
+ * `<!--` in a code span or after a backslash is text, not a comment.
+ * @param {string[]} lines
+ * @param {number} start
+ * @param {{ line: number, at: number }} lastClose Where the last `-->` of the issue starts; an
+ *   opening `<!--` after it has no end.
+ * @returns {{ text: string, end: number, removed: boolean }}
+ */
+function withoutComments(lines, start, lastClose) {
+  const token = /\\.|`+|<!--/g
+  let end = start
+  let at = 0
+  let text = ''
+  let removed = false
+  for (;;) {
+    const line = lines[end]
+    token.lastIndex = at
+    const match = token.exec(line)
+    if (!match) return { text: text + line.slice(at), end, removed }
+    let next = match.index + match[0].length
+    const closes =
+      end < lastClose.line || (end === lastClose.line && match.index + 2 <= lastClose.at)
+    if (match[0] === '<!--' && closes) {
+      // `<!-->` and `<!--->` are whole comments, as in HTML.
+      text += line.slice(at, match.index)
+      let close = line.indexOf('-->', match.index + 2)
+      while (close === -1) {
+        end += 1
+        close = lines[end].indexOf('-->')
+      }
+      at = close + 3
+      removed = true
+      continue
+    }
+    if (match[0][0] === '`') next = codeSpanEnd(line, next, match[0].length) ?? next
+    text += line.slice(at, next)
+    at = next
+  }
+}
+
+/**
+ * The end of the code span that a run of `length` backticks opens, or null when no run of as many
+ * backticks on the line closes it and the run is plain text.
+ * @param {string} line
+ * @param {number} from
+ * @param {number} length
+ * @returns {number | null}
+ */
+function codeSpanEnd(line, from, length) {
+  const run = /`+/g
+  run.lastIndex = from
+  for (let match = run.exec(line); match; match = run.exec(line)) {
+    if (match[0].length === length) return match.index + length
+  }
+  return null
 }
 
 /**
