@@ -17,6 +17,34 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · runIn: one line to paste, `cd <dir> && <command>`, for every run-this message (PR #144, issue #143)
+
+- Setup: a product decision of the Lead for 0.1.0, after the manual check of 0.1.0-pre.2, through `lead-55` on 22 October 2026. The integrator did the task itself in its worktree `task/143-paste-ready-run-lines`, created from `38ba529`. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - `runIn(command, dir)` in `src/core/runtime/output.js` now returns ``run `cd <dir> && <command>` `` for an absolute directory. The directory is quoted by `quoteShellArg` when it needs quoting.
+  - `any directory` keeps ``run `<command>` in <dir>``, and so does a place in words, such as "the main checkout of their clone of <url>" in setup's member lines, because a `cd` to it would fail. Contracts CM4 and the `runIn` row describe this.
+  - The tests:
+    - With only `runIn` changed, `npm test` failed 87 of 1013 tests in 22 files, each on the old wording.
+    - Before they changed, a "Scope change:" comment on issue #143 named the 19 test files of lanes A, B and C.
+    - A script rewrote the old form, and 3 lines were written by hand. A check of the diff found that each of the other 62 changed lines was exactly that rewrite.
+    - A new test pastes the line into `sh -c` from another directory. The directory's name holds a space, quotes, `$`, `;`, `&`, `|`, parentheses, `*` and backticks, and the command ran there.
+  - The integrator found nothing that an agent relies on in the old form:
+    - the generated settings have no allow rule that matches a command's text;
+    - the PreToolUse hook follows a `cd` in a command line;
+    - each wrapper runs only its own command.
+
+    Assumed, not observed in a session: an agent that follows such a line runs the `cd` too.
+  - Lines written by hand without `runIn` did not change. `lead-55` routed them into the usability tasks: `src/commands/take/prompt.js` lines 336 and 350 to #147, and the E3 refusal (`src/internal/hook/pre-tool-use.js` line 103) and `src/commands/setup/regenerate.js` line 188 to #145.
+  - One commit, `c4db922`; PR #144 opened at 23:56:18 UTC.
+  - Merged with the procedure of the plan, section 8, after #140.
+    - Steps 1 to 5 passed: 26 files, all inside issue #143's paths (7 in the integrator's role and 19 of other lanes named in the scope change); no secret pattern; no dash; no conflict with `000720f`.
+    - Step 6, with the PR merged into `000720f` at a load average of 7.09 with no other vitest process: `npm test` passed 1014 of 1014, and `npm run test:ac -- 1.3a/runtime` passed 1.3a/runtime 14. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39697676274`, succeeded: both jobs passed 1013 tests and skipped 1 of 1014.
+- Problems: the live test `test/commands/setup/setup.fixture.test.js` (AC6, line 230) was changed but not run. It runs at the next live pass, as `lead-55` decided. The offline AC6 tests check the same `setup --resume` line, and they pass.
+- Measured: PR open 10 min 24 s (23:56:18 to 00:06:42 UTC); 1 commit, 1 PR run (155 s), 0 conflicts; with only `runIn` changed, 87 of 1013 tests failed in 22 files; local merge test `npm test` 142.69 s; the run on main after the merge 148 s.
+- Evidence: issue #143; PR https://github.com/Bartek201301/HackWin/pull/144; head `c4db922`; merge commit `a15680c`; runs `39696591777` (PR) and `39697676274` (main).
+
 ### 2026-10-22 · Phase 1 · Plan section 6, item 6 and decision 13: the manual check per release in auto mode and with bypass permissions (PR #140, issue #139)
 
 - Setup: the human decided after the manual check of 0.1.0-pre.2, through `lead-55`. The integrator recorded it in its own worktree `task/139-manual-check-auto-mode`, created from `9323de1`. `lead-55` reviewed the PR twice and sent the merge.
