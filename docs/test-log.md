@@ -17,6 +17,30 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Pre-release build 3: 0.1.0-pre.3 on main and three GitHub pre-releases (PR #159, issue #157)
+
+- Setup: the human asked through `lead-55` for a pre-release of the usability pass to check before 0.1.0 (plan section 9, decisions 5 and 14). The integrator did the bump in its own worktree `task/157-version-pre-3`, created from `7e57c0b`, after #145, #146, #147, #148, #149 and #154 were merged. `lead-55` reviewed the PR and sent the merge, after the log PR #158.
+- What happened:
+  - One commit, `13cc48e`: `package.json` (line 3) and both version fields of `package-lock.json` (lines 3 and 9) from `0.1.0-pre.2` to `0.1.0-pre.3`, and nothing else. PR #159 opened at 01:55:52 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed again against `da597e3`, the main after the log PR #158: 2 files inside issue #157's paths; no secret pattern; no dash; no conflict.
+    - Step 6, with the PR merged into `da597e3` at a load average of 1.41: `npm ci && npm test` passed 1082 of 1082. The only criterion is an inspection, so `npm run test:ac` was skipped. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39709266191`, succeeded: both jobs passed 1081 tests and skipped 1 of 1082.
+  - The packs came from three `git archive` copies of the merge commit `934a94f`. Two copies had only `package.json` line 3 changed, to `0.1.1-pre.3` and `0.2.0-pre.3`. `npm pack` ran in each, and each tarball's `package.json` carries its own version.
+  - `gh release create` with `--target 934a94f --prerelease --latest=false` and the notes of build 2 made `v0.1.0-pre.3` (02:07:06 UTC), `v0.1.1-pre.3` (02:07:08) and `v0.2.0-pre.3` (02:07:12).
+    - Each tag points at `934a94f`.
+    - `releases/latest` is still `v0`.
+    - Each asset is 316468 bytes, and GitHub's digest equals the local sha256:
+      - `0.1.0-pre.3` `4747d5caba7ffc152fec9e032d96849ee541c35afc1c949a218fcea4478f477d`;
+      - `0.1.1-pre.3` `dd1295fa137951f9489a4b35912c060f41f3fe4f6aef2618b9fc278fc5468526`;
+      - `0.2.0-pre.3` `ac8955216cf882bc0003bbf12293107a540e95aca688ce26f2ae84917354c1a3`.
+    - Each downloaded asset is identical to its local pack (`cmp`).
+  - `npm install -g <release URL> --prefix <scratch>` passed for all three, and `hackwin --version` printed each version. The installed `0.1.0-pre.3` prints the new help lines of #149 for `take`.
+- Problems: none in this build. The live scenarios of AC66, AC76 and AC77 did not run on build 3. No npm publish: 0.1.0 is the Lead's step 1.8.
+- Measured: PR open 7 min 51 s (01:55:52 to 02:03:43 UTC); 1 commit, 1 PR run (164 s), 0 conflicts; local merge test `npm test` 225.08 s; the run on main after the merge 167 s; the three releases within 6 s.
+- Evidence: issue #157; PR https://github.com/Bartek201301/HackWin/pull/159; head `13cc48e`; merge commit `934a94f`; runs `39708507476` (PR) and `39709266191` (main); releases https://github.com/Bartek201301/HackWin/releases/tag/v0.1.0-pre.3, https://github.com/Bartek201301/HackWin/releases/tag/v0.1.1-pre.3 and https://github.com/Bartek201301/HackWin/releases/tag/v0.2.0-pre.3.
+
 ### 2026-10-22 · Phase 1 · 1.3f README with the whole workflow, take in the help, friendly task deadlines, plan decision 14 (PR #156, issue #149)
 
 - Setup: the integrator's own usability task of plan decision 14, in its worktree `task/149-readme-help-deadlines`, created from `a15680c`. `lead-55` decided the order: the help, the deadlines and the plan first, the README after #145 to #148 were merged. `lead-55` reviewed the PR twice and sent the merge.
