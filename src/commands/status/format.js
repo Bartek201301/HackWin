@@ -5,12 +5,18 @@
 // time, the stop notice after `quit`, or that the Gate has not been started (7.6, failure
 // behavior).
 //
+// The caller's own "next" line ends with the `take` command to paste, without a number: `take`
+// then picks the first task of the caller's queue that passes its checks (7.7, #148). The command
+// names the main checkout of this clone, so on another machine only that line differs.
+//
 // The data is cleaned of control characters already (view.js); every line passes cleanText once
 // more, so that no text, also from hackwin.yml or the local heartbeat, reaches the terminal with
 // one. A title is cut after the cleaning, by characters, so no cut falls inside an escape.
 
+import { runIn } from '../../core/runtime/index.js'
 import { formatDigestLine, hoursAndMinutes } from '../gate/digest.js'
 import { duration } from '../gate/pulls.js'
+import { protectionLine } from '../gate/status-issue.js'
 import { cleanText } from './text.js'
 
 /** @import { DigestEntry } from '../gate/digest.js' */
@@ -42,16 +48,21 @@ const STAGE_WORDS = Object.freeze({
 /**
  * The lines of `status`.
  * @param {StatusData} data
+ * @param {{ main: string }} clone The main checkout of this clone, where `take` runs.
  * @returns {string[]}
  */
-export function statusLines(data) {
+export function statusLines(data, { main }) {
   const now = new Date(data.at)
+  const caller = data.login.toLowerCase()
+  const take = runIn('hackwin take', main)
   return [
     ...headerLines(data, now),
     ...section('attention', data.attention.map(attentionLine)),
     ...section(
       'who does what',
-      data.who.flatMap((member) => memberLines(member, now)),
+      data.who.flatMap((member) =>
+        memberLines(member, now, member.login.toLowerCase() === caller ? take : null),
+      ),
     ),
     ...section('waiting for merge', data.waiting.map(waitingLine)),
     ...section('blocked', data.blocked.map(blockedLine)),
@@ -107,7 +118,7 @@ function headerLines(data, now) {
   if (gate.local !== null && (gate.state === 'not-started' || gate.state === 'unreadable')) {
     lines.push(localHeartbeatLine(gate.local, now))
   }
-  lines.push(protectionLine(protection, gate.state))
+  lines.push(protectionOf(protection, gate.state))
   lines.push(
     event.seconds_left > 0
       ? `event: ends in ${duration(event.seconds_left * 1000)}, at ${event.end}`
@@ -153,14 +164,11 @@ function livenessLine(gate, now) {
  * @param {GateLiveness['state']} gate
  * @returns {string}
  */
-function protectionLine({ state, update_restricted }, gate) {
+function protectionOf({ state, update_restricted }, gate) {
   if (gate === 'not-started') return "protection: unknown until the Gate's first start"
   if (gate === 'unreadable') return 'protection: unknown, the status issue holds no readable block'
   if (state === null) return 'protection: unknown, the status issue does not name it'
-  const blocked = update_restricted
-    ? "; the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included: that is expected, the Gate merges with --admin after its own stages pass"
-    : ''
-  return `protection: ${state}${blocked}`
+  return protectionLine(state, update_restricted)
 }
 
 /**
@@ -192,9 +200,11 @@ function attentionLine(entry) {
 /**
  * @param {MemberEntry} member
  * @param {Date} now
+ * @param {string | null} take The `take` command for the caller's own line; null for another
+ *   member's.
  * @returns {string[]}
  */
-function memberLines(member, now) {
+function memberLines(member, now, take) {
   const who = `${member.login}:`
   const lines =
     member.working.length === 0
@@ -211,7 +221,8 @@ function memberLines(member, now) {
       return `#${task.number}${due} ${title(task.title)}`
     })
     const more = member.next.length - shown.length
-    lines.push(`${who} next ${shown.join('; ')}${more > 0 ? `; and ${more} more` : ''}`)
+    const start = take === null ? '' : `; to start the next one, ${take}`
+    lines.push(`${who} next ${shown.join('; ')}${more > 0 ? `; and ${more} more` : ''}${start}`)
   }
   return lines
 }

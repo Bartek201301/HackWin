@@ -214,14 +214,17 @@ describe('AC44: status from GitHub alone', () => {
     const onClone = await runStatus({ cwd: fresh.path, ...lead })
     expect(onLaptop.code).toBe(0)
     expect(onClone.code).toBe(0)
-    expect(sharedSections(onClone.lines)).toEqual(sharedSections(onLaptop.lines))
+    // The caller's own next line names the main checkout of each clone (1.6h/next).
+    const inMain = (/** @type {string[]} */ lines, /** @type {string} */ main) =>
+      sharedSections(lines).map((line) => line.replace(`cd ${main} &&`, 'cd <main checkout> &&'))
+    expect(inMain(onClone.lines, fresh.path)).toEqual(inMain(onLaptop.lines, fixture.main))
     expect(sharedSections(onLaptop.lines)).toEqual([
       'attention:',
       '  ATTENTION repeated-failure #22: stage merge-test failed twice; look at #22',
       '  needs-lead: issue #30: Question for the Lead',
       'who does what:',
       `  ${LEAD}: #16 in progress, due in 22h00m: Shared layout`,
-      `  ${LEAD}: next #19 (OVERDUE by 2h30m) Shared styles`,
+      `  ${LEAD}: next #19 (OVERDUE by 2h30m) Shared styles; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
       `  ${BUILDER1}: #10 in review, OVERDUE by 1h00m: Counter button`,
       `  ${BUILDER1}: #11 in review, due in 6h00m: Todo list`,
       `  ${BUILDER1}: #13 in progress, OVERDUE by 2h00m: Counter reset`,
@@ -245,7 +248,7 @@ describe('AC44: status from GitHub alone', () => {
     )
     expect(onClone.lines[0]).toBe('gate: running, heartbeat 1m00s ago')
     expect(onClone.lines.slice(1, 5)).toEqual([
-      "protection: full-restricted; the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included: that is expected, the Gate merges with --admin after its own stages pass",
+      "protection: only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected. Details: full-restricted; the update restriction is active, so the Gate merges with --admin, and only after its own stages pass",
       'event: ends in 25h00m, at 2026-10-25T15:00:00+02:00',
       'status issue: #1 https://github.com/hackwin-test/app/issues/1',
       'wave 1: 9 open tasks; milestone Wave 1: 2 of 13 issues closed',
@@ -728,6 +731,75 @@ describe('AC60: status and the main checkout (CM10)', () => {
         '# Fixture\n\nA local change.\n',
       )
       expect(result.lines[0]).toMatch(/^the Gate has not been started/)
+    } finally {
+      own.cleanup()
+    }
+  })
+})
+
+describe("1.6h/next: the caller's own next line ends with the take command to paste", () => {
+  /** A running Gate and one ready task each for builder1 and builder2; none for the Lead. */
+  const readyTasks = () =>
+    createFakeGitHub({
+      issues: [
+        statusIssue(1, { heartbeat_at: '2026-10-24T11:59:00.000Z' }),
+        taskIssue(10, { role: 'counter', title: 'Counter step' }),
+        taskIssue(11, { role: 'greeting', title: 'Greeting style' }),
+      ],
+    })
+  /** @param {{ cwd: string, env: Record<string, string>, login: string, json?: boolean }} where */
+  const statusAs = ({ cwd, env, login, json = false }) =>
+    runStatus({ cwd, env, executor: readyTasks().as(login), clock: fixedClock(NOW), json })
+  /** The next lines of who does what. */
+  const nextLines = (/** @type {string[]} */ lines) =>
+    sharedSections(lines).filter((line) => / (next|no ready task)/.test(line))
+
+  test('the caller gets `hackwin take` without a number in the main checkout; the lines of the others stay as they were', async () => {
+    const result = await statusAs({ cwd: fixture.main, env: fixture.env, login: BUILDER1 })
+    expect(result.code).toBe(0)
+    expect(nextLines(result.lines)).toEqual([
+      `  ${LEAD}: no ready task`,
+      `  ${BUILDER1}: next #10 Counter step; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
+      `  ${BUILDER2}: next #11 Greeting style`,
+    ])
+  })
+
+  test('--json prints the same lines, and its data carries no command', async () => {
+    const result = await statusAs({
+      cwd: fixture.main,
+      env: fixture.env,
+      login: BUILDER1,
+      json: true,
+    })
+    expect(result.code).toBe(0)
+    const plain = await statusAs({ cwd: fixture.main, env: fixture.env, login: BUILDER1 })
+    expect(nextLines(result.json.lines)).toEqual(nextLines(plain.lines))
+    expect(JSON.stringify(result.json.data)).not.toContain('hackwin take')
+    for (const member of result.json.data.who) {
+      expect(Object.keys(member)).toEqual(['login', 'name', 'roles', 'working', 'next'])
+    }
+  })
+
+  test('a caller without a ready task gets no command', async () => {
+    const result = await statusAs({ cwd: fixture.main, env: fixture.env, login: LEAD })
+    expect(result.code).toBe(0)
+    expect(nextLines(result.lines)).toEqual([
+      `  ${LEAD}: no ready task`,
+      `  ${BUILDER1}: next #10 Counter step`,
+      `  ${BUILDER2}: next #11 Greeting style`,
+    ])
+    expect(result.out).not.toContain('hackwin take')
+  })
+
+  test('in a task worktree the command names the main checkout, where take runs', async () => {
+    const own = await createFixture({ team: 3 })
+    try {
+      const worktree = await own.worktree({ issue: 77, title: 'Elsewhere' })
+      const result = await statusAs({ cwd: worktree.path, env: own.env, login: BUILDER1 })
+      expect(result.code).toBe(0)
+      expect(nextLines(result.lines)).toContain(
+        `  ${BUILDER1}: next #10 Counter step; to start the next one, run \`cd ${own.main} && hackwin take\``,
+      )
     } finally {
       own.cleanup()
     }

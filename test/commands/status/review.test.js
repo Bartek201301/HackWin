@@ -184,7 +184,9 @@ describe('1.6f/terminal: no text from GitHub puts a control character or a line 
     expect(result.lines).toContain(
       `wave 1: 1 open task; milestone Wave ${visible}: 0 of 1 issues closed`,
     )
-    expect(result.lines).toContain(`  ${BUILDER1}: next #10 Counter ${visible.slice(0, 49)}...`)
+    expect(result.lines).toContain(
+      `  ${BUILDER1}: next #10 Counter ${visible.slice(0, 49)}...; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
+    )
   })
 
   test('--json carries the same cleaned text, so no control character reaches the terminal there either', async () => {
@@ -254,7 +256,9 @@ describe('1.6f/members: only issues of members are tasks', () => {
     expect(lines).toContain(
       `  #20 not from a member of the team, so the Gate does not test it: From outside (${OUTSIDER})`,
     )
-    expect(lines).toContain(`  ${BUILDER1}: next #10 Real task`)
+    expect(lines).toContain(
+      `  ${BUILDER1}: next #10 Real task; to start the next one, run \`cd ${fixture.main} && hackwin take\``,
+    )
   })
 })
 
@@ -399,7 +403,7 @@ describe('1.6f/states: each state says what is true', () => {
     expect(result.lines.slice(0, 5)).toEqual([
       'gate: running, heartbeat 1m00s ago',
       'warning: the status issue #7 is closed; a running Gate keeps editing it, but the next start of the Gate creates a new status issue; to keep this one, reopen #7',
-      "protection: full-restricted; the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included: that is expected, the Gate merges with --admin after its own stages pass",
+      "protection: only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected. Details: full-restricted; the update restriction is active, so the Gate merges with --admin, and only after its own stages pass",
       'event: ends in 25h00m, at 2026-10-25T15:00:00+02:00',
       'status issue: #7 https://github.com/hackwin-test/app/issues/7',
     ])
@@ -547,8 +551,10 @@ describe('1.6f/states: each state says what is true', () => {
 })
 
 describe('1.6f/blocked-notice: BLOCKED is expected while the update restriction is active, in any protection state', () => {
-  const notice =
-    "the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included: that is expected, the Gate merges with --admin after its own stages pass"
+  const plain =
+    "only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected."
+  const details =
+    'the update restriction is active, so the Gate merges with --admin, and only after its own stages pass'
 
   test.each(['full', 'soft', 'full-restricted'])(
     'protection %s with the update restriction',
@@ -565,7 +571,7 @@ describe('1.6f/blocked-notice: BLOCKED is expected while the update restriction 
         },
         { json: true },
       )
-      expect(result.json.lines[1]).toBe(`protection: ${protection}; ${notice}`)
+      expect(result.json.lines[1]).toBe(`protection: ${plain} Details: ${protection}; ${details}`)
       expect(result.json.data.protection).toEqual({ state: protection, update_restricted: true })
     },
   )
@@ -581,6 +587,17 @@ describe('1.6f/blocked-notice: BLOCKED is expected while the update restriction 
       ],
     })
     expect(result.lines[1]).toBe('protection: full')
+  })
+})
+
+describe('1.6h/plain-words: the protection line of status starts with one plain sentence', () => {
+  test('under the update restriction it says that only the Gate can merge and that BLOCKED is expected, then the details', async () => {
+    const result = await statusOf({
+      issues: [statusIssue(1, { heartbeat_at: '2026-10-24T11:59:00.000Z' })],
+    })
+    expect(result.lines[1]).toBe(
+      "protection: only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected. Details: full-restricted; the update restriction is active, so the Gate merges with --admin, and only after its own stages pass",
+    )
   })
 })
 

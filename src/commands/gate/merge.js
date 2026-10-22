@@ -13,7 +13,8 @@
 // Then the Gate deletes the remote branch: only a task branch of this repository, never a default
 // branch.
 //
-// Stage 11 sets `gate:merged`, closes the task issue, sets the dependents whose dependencies are
+// Stage 11 sets `gate:merged`, closes the task issue and removes its status label, such as
+// `in-review`, since a closed task is done (8.3, #148), sets the dependents whose dependencies are
 // all closed from `blocked` to `ready` (I12), closes the pull request's attention items that close
 // with it (9.6), makes sure the scratch worktree is gone and writes the digest line. Then it
 // fetches the new main and raises a repeated failure attention item when the merge commit's first
@@ -28,6 +29,7 @@ import { join } from 'node:path'
 import { readProtection } from '../../core/protection/index.js'
 import { RemoteError, execShell } from '../../core/runtime/index.js'
 import { parseBranch, setTaskStatus, toTask } from '../../core/tasks/index.js'
+import { STATUS_LABELS } from '../../core/tasks/labels.js'
 import { CLOSED_WITH_THE_PULL, closeAttention, raiseAttention } from './attention.js'
 import { codeSpan, inlineCode } from './comment.js'
 import { hasMergedLine } from './digest.js'
@@ -308,8 +310,9 @@ export async function afterMergeStage(run) {
 }
 
 /**
- * Close the task issue when it is still open, then set its dependents whose dependencies are all
- * closed from `blocked` to `ready` (I12).
+ * Close the task issue when it is still open, as GitHub does with `Closes #N`, and remove the
+ * status labels of an open task from it once it is closed; `cut` and its role label stay. Then
+ * set its dependents whose dependencies are all closed from `blocked` to `ready` (I12).
  * @param {PullRun} run
  * @param {number} task
  * @returns {Promise<void>}
@@ -317,10 +320,15 @@ export async function afterMergeStage(run) {
 async function closeTask(run, task) {
   const { gate, pr } = run
   const { github } = gate.ctx
-  const issue = await github.getIssue(task)
+  let issue = await github.getIssue(task)
   if (issue !== null && issue.state === 'open' && !issue.isPullRequest) {
-    await github.updateIssue(task, { state: 'closed', stateReason: 'completed' })
+    issue = await github.updateIssue(task, { state: 'closed', stateReason: 'completed' })
     gate.line(`#${pr} closed its task #${task}`)
+  }
+  if (issue !== null && issue.state === 'closed' && !issue.isPullRequest) {
+    for (const label of issue.labels) {
+      if (STATUS_LABELS.includes(label)) await github.removeLabel(task, label)
+    }
   }
   const blocked = await github.listIssues({ state: 'open', labels: ['blocked'] })
   /** @type {Map<number, { state: string }>} */
