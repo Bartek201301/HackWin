@@ -17,6 +17,269 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.3f README with the whole workflow, take in the help, friendly task deadlines, plan decision 14 (PR #156, issue #149)
+
+- Setup: the integrator's own usability task of plan decision 14, in its worktree `task/149-readme-help-deadlines`, created from `a15680c`. `lead-55` decided the order: the help, the deadlines and the plan first, the README after #145 to #148 were merged. `lead-55` reviewed the PR twice and sent the merge.
+- What happened:
+  - Help:
+    - `hackwin --help` says after the list of commands that `hackwin take` without a number takes the next task of your roles;
+    - `hackwin take --help` adds what `take` does without N and with N;
+    - the lines come from a new optional `details` field of the registry, which the generated wrappers do not read, and a test checks that the take wrapper does not change.
+  - Task deadlines (`src/core/tasks/block.js`):
+    - a deadline `YYYY-MM-DD HH:MM` is read in the offset of the event times in `hackwin.yml`, and the block gives it in the ISO form;
+    - a day or time that does not exist is refused;
+    - when the event's start and end have different offsets, the short form is refused, because either offset could be an hour off, a rule `lead-55` accepted;
+    - the ISO form is unchanged.
+
+    The old test "a deadline without an offset" used the short form, which is now valid, so it changed.
+  - Plan decision 14 records the usability decision for 0.1.0 and the PRD lines that change in the next revision. The template's row is PRD line 583, not 588 as `lead-55`'s draft had it. Section 6, item 6 and row 13 make the manual check's wrapper call use a wrapper whose command is not on the allow list, such as `/gate`, as `lead-55` decided.
+  - README for 0.1.0: the whole workflow, with the HackYeah numbers at the top, the phases with Phase 2 and 3 marked as coming, and the statements of PRD 17.4, AC49, AC50 and the Codex beta note. Its claims were checked against main `d1edd83`, the guide of #146 and the bodies of PRs #150 to #153 and #155.
+  - Two "Scope change:" comments on #149:
+    - `test/integration/parity/parity.test.js`, whose AC67 check of `take --help` needed the new lines; the first full `npm test` found it;
+    - one line of `src/generate/templates/using-hackwin.md` (lane A), so that the guide names both deadline forms, at `lead-55`'s request.
+  - At the review of `e7166a1`, `lead-55` found that the quick start put `hackwin ship` in the main checkout, where `ship` refuses (PRD 7.9). `8c39cde` says where each command runs.
+  - Five commits: `7bee61b`, `8faa246`, a merge of main `f30f79a`, `e7166a1` and `8c39cde`. PR #156 opened at 01:33:24 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 10 files inside issue #149's paths, one of them lane A's under the scope change; no secret pattern; no dash; no conflict with `d1edd83`.
+    - Step 6, with the PR merged into `d1edd83` (a fast-forward to `8c39cde`), at a load average of 1.83 that rose to 18.10 by the end of the run: `npm test` passed 1082 of 1082, and `npm run test:ac -- 1.3f/help 1.3f/deadline` passed 1.3f/help 3 and 1.3f/deadline 5. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39707958037`, succeeded: both jobs passed 1081 tests and skipped 1 of 1082.
+- Problems:
+  - The README's install line names `hackwin@0.1.0` on npm, which step 1.8 publishes; until then the pre-releases install by URL.
+  - The README was checked against the code, the tests and the PRs, not against a live run of 0.1.0.
+- Workflow notes of the PR:
+  - "The first full `npm test` failed AC67, an integrator test outside the issue's paths, which expected `take --help` without the new lines. A "Scope change:" comment came first, then the fix."
+  - "At the review of `e7166a1`, `lead-55` asked to say where `ship` runs and to fold the guide's deadline line into this PR; `8c39cde` does both."
+- Measured: PR open 16 min 45 s (01:33:24 to 01:50:09 UTC); 5 commits, 2 PR runs (176 s and 151 s), 0 conflicts; local merge test `npm test` 228.68 s; the run on main after the merge 172 s.
+- Evidence: issue #149; PR https://github.com/Bartek201301/HackWin/pull/156; head `8c39cde`; merge commit `7e57c0b`; runs `39706369792` and `39707222093` (PR) and `39707958037` (main).
+
+### 2026-10-22 · Phase 1 · 1.5j take: the task prompt leaves out the HTML comments of the issue (PR #155, issue #154)
+
+- Setup: a follow-up for 0.1.0 from `lead-55`'s review of PR #153. PR #153 adds a help comment and a full example task, both HTML comments, to the task issue template, and `take`'s prompt kept HTML comments, so a forgotten help text or example would reach the agent's prompt and the example would read like a second task. The integrator opened #154 for lane B with a worktree `task/154-take-prompt-without-comments` from `df4fb1a`. `lead-55` started the session, reviewed the PR and sent the merge, after #153.
+- What happened:
+  - `issueText` in `src/commands/take/prompt.js` now leaves out every HTML comment outside a fenced code block, on one line or several, with the markers `<!-- hackwin:begin -->` and `<!-- hackwin:end -->`. A line that holds nothing but comments goes too.
+  - The edge cases follow the integrator's reading in the issue:
+    - a comment inside a fenced code block stays;
+    - a fenced block inside a comment goes with it;
+    - a line with visible text keeps its text;
+    - an unclosed `<!--` stays.
+  - The session added one rule, which `lead-55` accepted: a `<!--` inside an inline code span, or after a backslash, is text and stays. Without it, the body of #154 itself would lose visible text in its prompt.
+  - The task block, headings, visible text, code blocks and the Scope change comments are as before. `src/core/tasks` and the task block format did not change.
+  - One test renders an issue body from PR #153's template, with the fields filled and the help, the placeholders and the example left in.
+  - One commit, `6dee5e1`; PR #155 opened at 01:14:07 UTC.
+  - Merged with the procedure of the plan, section 8, after #153.
+    - Steps 1 to 5 passed: 2 files inside issue #154's paths; no secret pattern; no dash; no conflict with `1da4520`.
+    - Step 6, with the PR merged into `1da4520` at a load average of 10.84 with no other vitest process: `npm test` passed 1074 of 1074, and `npm run test:ac -- 1.5j/comments` passed 1.5j/comments 9. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39705688704`, succeeded: both jobs passed 1073 tests and skipped 1 of 1074.
+- Problems: the limits of the code span rule, as the PR names them and `lead-55` asked to record:
+  - a code span is recognized within one line only, so a `<!--` in a span that runs over a line break is treated as a comment;
+  - an indented code block (four spaces) is not treated as code, so a comment in it is left out.
+
+  The tests build the issue body in memory; no real issue on GitHub was read.
+- Workflow notes of the PR:
+  - "The issue had no comments, so no scope change applied."
+  - "The integrator's edge cases do not cover a comment inside an inline code span. I decided it (see above) instead of asking, because the issue's own body shows the case."
+- Measured: PR open 12 min 21 s (01:14:07 to 01:26:28 UTC); 1 commit, 1 PR run (164 s), 0 conflicts; local merge test `npm test` 212.21 s; the run on main after the merge 164 s.
+- Evidence: issue #154; PR https://github.com/Bartek201301/HackWin/pull/155; head `6dee5e1`; merge commit `d1edd83`; runs `39704499988` (PR) and `39705688704` (main).
+
+### 2026-10-22 · Phase 1 · 1.4n generated files: a guide to the CLI, a task template that knows the team, an allow list (PR #153, issue #146)
+
+- Setup: a builder session of lane A in worktree `task/146-generated-files-guide`, created by the integrator from `a15680c`, beside #145 (lane A, setup). `lead-55` opened the session, reviewed the PR twice and sent the merge. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - `setup` creates `docs/hackwin/using-hackwin.md` when it is missing and keeps an existing one. It covers the roles, the terminals each person keeps open, the loop with `hackwin take` with no number first, the Gate and why pull requests show `BLOCKED`, `status`, a table of refusals with what to do, how to write a task or ask the planning session for one, and the permission mode: auto mode or bypass permissions for task sessions, with what the hooks do not cover.
+  - `manual-workflow.md` gets a paragraph under its title: it is the method without the CLI, and teams with the CLI read `using-hackwin.md`. The rest is unchanged.
+  - The task issue template's block is now rendered from `hackwin.yml` and `owners.yml`, so `--regenerate` rewrites it.
+    - In HTML comments it names each role with its paths, the `open` list, the test command, and that the planning session can write the issue. `role:` names the roles, and `deadline:` holds the event end.
+    - One filled example task of the team sits at the end, in an HTML comment with no fenced block, so `parseTaskBlock` never reads it. `src/core/tasks` did not change.
+  - The `AGENTS.md` block reads `` `hackwin take [<issue>]` `` and says that without a number it takes the next task of the caller's roles.
+  - `.claude/settings.json` gets `permissions.allow`:
+    - the project's commands of `hackwin.yml`;
+    - `git status`, `git diff`, `git log`, `git add` and `git commit`;
+    - `hackwin status`, `hackwin take` and `hackwin ship`.
+
+    A command that may take arguments gets its bare form beside the form with ` *`, after `lead-55`'s first review (`fe4bce4`). A test checks that no allow entry matches any form of `docs/verification.md` row 2. The deny rules and the hooks did not change.
+  - Accepted by `lead-55` as deviations from the issue:
+    - `bootstrap.js` and `regenerate.js` pass the new input also to `planProjectFiles` and `planBlockFiles`, not only to `writeClaudeSettings`, through a new helper `filesInput`;
+    - the settings input's `commands` is optional, so that `test/internal/hook/pre-tool-use.test.js` stays unchanged;
+    - 1.4d/bootstrap now reports "2 secrets", because the allow list repeats the check command that holds the planted token.
+  - `git merge origin/main` (`df4fb1a`) conflicted in `test/commands/setup/regenerate.test.js`, where #152 and this task each appended a describe block. The session kept both.
+  - Four commits: `5095110`, `fc759bb`, a merge of main `61730fd`, and `fe4bce4`. PR #153 opened at 00:58:40 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 14 files inside issue #146's paths; no secret pattern; no dash; no conflict with `df4fb1a`.
+    - Before step 6 the integrator waited about 6 minutes, because #154's session ran its suite and the load average rose to 25.
+    - Step 6, with the PR merged into `df4fb1a` (a fast-forward to `fe4bce4`), at a load average of 2.55 with no vitest process: `npm test` passed 1065 of 1065. `npm run test:ac -- 1.4n/guide 1.4n/manual-workflow 1.4n/task-template 1.4n/agents-block 1.4n/allow 1.4l/documents 1.4d/files AC6/files 1.4g/regenerate` passed 1.4n/guide 3, 1.4n/manual-workflow 1, 1.4n/task-template 6, 1.4n/agents-block 1, 1.4n/allow 5, 1.4l/documents 5, 1.4d/files 5, AC6/files 10 and 1.4g/regenerate 18. The run took 230 s instead of about 130 s: an Xcode build ran beside it, and the load rose to 15. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39705278348`, succeeded: both jobs passed 1064 tests and skipped 1 of 1065.
+- Problems:
+  - The allow list was not tried in a real Claude Code session. The tests check it against a model of the documented matching, and the manual check of 0.1.0-pre.3 will try it (`lead-55`).
+  - Whether a trailing ` *` matches the bare command is unchecked in a real session, so every such rule has its bare form beside it.
+  - The template's help and example comments stay in an issue body unless the author deletes them, and `take` put them into the prompt; #154 (lane B) fixes that.
+  - The PR also names these limitations:
+    - the example's test file is named `first-version.test.js` whatever the stack;
+    - `before-the-event.md` still says that the committed settings hold only the deny rules for env files;
+    - `BootstrapInput.language` is no longer read in `bootstrap.js`.
+- Workflow notes of the PR:
+  - "The issue says that `bootstrap.js` and `regenerate.js` change only in the two `writeClaudeSettings` calls. The criterion that `setup --regenerate` writes the template's block from the current `hackwin.yml` and `owners.yml` also needed the input of `planProjectFiles` and `planBlockFiles` in those files. ..."
+  - "`test/internal/hook/pre-tool-use.test.js` is outside this task's paths and calls `mergeClaudeSettings(null, { defaultBranch: 'main' })`. To leave it unchanged, `commands` is optional in the settings input ..."
+  - "`lead-55`'s review of `61730fd` asked for the bare form beside every allow rule that ends in ` *`, which `fe4bce4` adds."
+  - "At `lead-55`'s request (load near 40 during the merge tests of #151 and #152), I stopped a running `npm test` and waited for the go before running the full suite and the acceptance tests."
+  - "`git merge origin/main` (`df4fb1a`, after #150, #151 and #152) conflicted in `test/commands/setup/regenerate.test.js`. #152 and this task each appended a describe block at the end of the file. I kept both, #152's `1.4m/paste` first."
+- Measured: PR open 23 min 32 s (00:58:40 to 01:22:12 UTC); 4 commits, 2 PR runs (156 s and 162 s), 1 conflict, resolved on the branch; local merge test `npm test` 230.16 s; the run on main after the merge 164 s.
+- Evidence: issue #146; PR https://github.com/Bartek201301/HackWin/pull/153; head `fe4bce4`; merge commit `1da4520`; runs `39702938943` and `39703909579` (PR) and `39705278348` (main).
+
+### 2026-10-22 · Phase 1 · 1.6h status and Gate: the next command, plain words first, clean labels (PR #150, issue #148)
+
+- Setup: a builder session of lane C in worktree `task/148-status-gate-plain-words`, created by the integrator from `a15680c`. `lead-55` opened the session, reviewed the PR and sent the merge, after #152 and #151. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - Two parts of item 2 conflicted with PRD line 819: dropping "resolver: none", and not printing the `paths.gated` notice. The integrator held them in the issue. `lead-55` decided that both header items stay, only in plain words, and the issue's body and one comment record that.
+  - For a caller with a next task, the last line of `status`, after the Gate digest, is the `take` command to paste, with no number: "to start your next task, run `cd <main checkout> && hackwin take`".
+    - The first commit, `a4fd6df`, put it at the end of the caller's own "next" line, as criterion 1.6h/next said. That made "who does what" differ between machines, which AC44 forbids.
+    - At `lead-55`'s review the second commit, `26b80c7`, moved it to its own last line, outside "who does what". The AC44 test compares that section exactly again.
+    - After the merge the integrator changed criterion 1.6h/next of #148 to match, at `lead-55`'s request, with one comment.
+  - `status` and the Gate's header print the same protection line. It starts with "only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected", and the details follow. The Gate's separate notice about BLOCKED became part of that line.
+  - "resolver: none" is now "conflict resolver: not in this version, so the author of a pull request resolves each conflict".
+  - The `paths.gated` notice now says what to do.
+  - In stage 11, once the task issue is closed, the Gate removes its status labels (`ready`, `blocked`, `in-progress`, `in-review`). `cut` and the role label stay, and a closed issue's status stays `closed`. Before this, issues #2 and #3 of the sandbox stayed `in-review` after their merge.
+  - The third commit, `919c7b5`, made one 1.6h/next test independent of the order in which the tests run. It had passed in `npm test` and failed in `npm run test:ac`.
+  - PR #150 opened at 00:31:29 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 10 files inside issue #148's paths; no secret pattern; no dash; no conflict with `dade826`.
+    - Step 6, with the PR merged into `dade826` at a load average of 7.01 with no other vitest process, while `lead-55` kept #146's session from starting a full suite: `npm test` passed 1049 of 1049, and `npm run test:ac -- 1.6h/next 1.6h/plain-words 1.6h/labels` passed 1.6h/next 4, 1.6h/plain-words 2 and 1.6h/labels 1. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39702424099`, succeeded: both jobs passed 1048 tests and skipped 1 of 1049.
+- Problems:
+  - The PR names these limitations:
+    - "poll: every N s" and "keep awake: ..." keep their wording;
+    - the notice "the pipeline is not built yet" says nothing to do, but `hackwin gate` never prints it;
+    - the Gate's start warnings were not reworded;
+    - label removal on a closed issue was tested against the fake GitHub only.
+  - The criterion that put the command into "who does what" conflicted with AC44, which cost a second commit and a full test run.
+- Workflow notes of the PR:
+  - "The issue body changed during the task. Its held part of item 2 was decided by `lead-55` and announced with a message to this session, so the issue was read twice. No time lost beyond that."
+  - "Criterion 1.6h/next put the paste-ready `take` command, which names a directory of this machine, into "who does what". AC44 asks for that section to be the same on every machine. ... `lead-55`'s review asked for its own line instead, so a second commit and a second full test run were needed."
+  - "A test passed in `npm test` but failed in `npm run test:ac` because of the order in which the tests run: an earlier test in the same file had recorded a status call. That cost a third commit and a third full test run."
+  - "While the third full run was under way, `lead-55` asked to start no new full run until the integrator's merge tests for #151 and #152 are done, because of the machine's load. No run was started after that message."
+- Measured: PR open 22 min 3 s (00:31:29 to 00:53:32 UTC); 3 commits, 2 PR runs (123 s and 162 s), 0 conflicts; local merge test `npm test` 135.61 s; the run on main after the merge 159 s.
+- Evidence: issue #148; PR https://github.com/Bartek201301/HackWin/pull/150; head `919c7b5`; merge commit `df4fb1a`; runs `39700206991` and `39701510215` (PR) and `39702424099` (main).
+
+### 2026-10-22 · Phase 1 · 1.5i ship: a filled pull request body, and a refusal that says what to do (PR #151, issue #147)
+
+- Setup: a builder session of lane B in worktree `task/147-ship-filled-pr-body`, created by the integrator from `a15680c`. `lead-55` opened the session, reviewed the PR and sent the merge, after #152. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - `ship` fills the pull request body inside HackWin's block of the template:
+    - the ownership role of the task;
+    - a tick on the merge line, the full check, the format line and the secret line when their steps passed;
+    - the acceptance tests it ran.
+
+    A line it cannot vouch for, the author's own text, and a template without HackWin's block stay as they are. A rerun on the same commit gives the same body. A new head commit brings the new facts.
+  - With uncommitted changes and the caller `claude-code`, the refusal says to ask the session to commit the listed files and then type `/ship` again. From a terminal it keeps today's text and ends with a line to paste. The exit code and the listed paths are unchanged.
+  - Lines 336 and 350 of the task prompt (`src/commands/take/prompt.js`) now use `runIn`, so a human who reads the prompt can paste them.
+  - Contracts 5.5 describes the filled body, through a "Scope change:" comment on #147.
+  - The first full `npm test` of the session failed AC14, 1 of 1025. Its two tasks have different acceptance test paths by design, so the two filled bodies differed in that line.
+    - The integrator posted a second "Scope change:" comment, which `lead-55` asked for. It allows one normalization in `test/integration/parity/flows.js`: `src/features/counter/<mode>/` becomes a placeholder next to `withoutIssue`.
+  - Two commits, `6d0670a` and `cd35765`; PR #151 opened at 00:38:16 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 10 files inside issue #147's paths, the contracts in section 5.5 only; no secret pattern; no dash; no conflict with `11c48cb`.
+    - Step 6, with the PR merged into `11c48cb` at a load average of 6.98 with no other vitest process: `npm test` passed 1042 of 1042, and `npm run test:ac -- 1.5i/pr-body 1.5i/uncommitted 1.5i/prompt-lines` passed 1.5i/pr-body 6, 1.5i/uncommitted 3 and 1.5i/prompt-lines 2. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39702108537`, succeeded: both jobs passed 1041 tests and skipped 1 of 1042.
+- Problems: the PR names two limitations, which `lead-55` asked to record:
+  - The green check record stores no list of the acceptance tests. A rerun that reuses the record of the same commit names the task's current list, even if the Lead changed `acceptance_tests` between the two runs.
+  - The merge line of the generated template names `origin/main`. In a project whose default branch is not `main`, `ship` leaves that line unticked.
+
+  No live test ran: everything ran against the fake GitHub and the local fixtures.
+- Workflow notes of the PR:
+  - "The first `npm test` failed 1 of 1025: AC14 (`test/integration/parity/parity.test.js`, the integrator's file). ... The issue's paths did not include the test, and I found it only at the full `npm test`. I stopped before the push and reported to `lead-55`. The integrator posted a Scope change for `test/integration/parity/flows.js`, and I made the one-line normalization. Time lost: about 2 minutes waiting for the Scope change."
+  - "The full `npm test` took 125 s on the first run and 420 s on the second, while other sessions ran on the machine. No test failed from load."
+- Measured: PR open 12 min 11 s (00:38:16 to 00:50:27 UTC); 2 commits, 1 PR run (140 s), 0 conflicts; local merge test `npm test` 133.14 s; the run on main after the merge 149 s.
+- Evidence: issue #147; PR https://github.com/Bartek201301/HackWin/pull/151; head `cd35765`; merge commit `dade826`; runs `39700885527` (PR) and `39702108537` (main).
+
+### 2026-10-22 · Phase 1 · 1.4m setup: plain questions, friendly event times, a message per member, clear next steps (PR #152, issue #145)
+
+- Setup: a builder session of lane A in worktree `task/145-setup-plain-questions`, created by the integrator from `a15680c`, at the same time as #146 (lane A, the generated files), #147 (lane B) and #148 (lane C). `lead-55` opened the session, reviewed the PR and sent the merge. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - Each block of setup questions now starts with one plain sentence that says what it decides.
+    - The sessions question asks how many tasks a person can run at the same time, one agent session each.
+    - The stack commands, the smoke test and the path groups show as one block, with one "Keep all of these?".
+    - The answers file and `hackwin.yml` keep their format. The PR's test builds `hackwin.yml` from today's answers files for teams of 1, 3 and 4 and finds it the same as before.
+  - The event start and end also take `YYYY-MM-DD HH:MM`, read in the machine's time zone. setup stores and echoes the ISO value with its offset. A local time that daylight saving time skips is refused with its own message.
+  - For each member who is not the caller, the summary keeps the state line and adds a message to paste into a chat: accept the invitation where GitHub sent one, install the pinned version (`installCommand`), clone, `cd` into the clone and `hackwin join`.
+  - The next steps for the Lead:
+    - the Gate as a line to paste;
+    - the first tasks, from the template or from the planning session;
+    - `hackwin take` with no number;
+    - `docs/hackwin/using-hackwin.md`.
+  - The E3 refusal and `setup --regenerate`'s message for a member without the shared role give the Lead's command as a line to paste.
+  - One commit, `ca47463`; PR #152 opened at 00:38:18 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 13 files inside issue #145's paths; no secret pattern; no dash; no conflict with `a15680c`.
+    - Before step 6 the load average was 39.75, with 23 vitest processes of the #146 and #148 worktrees. On 15 October, step 6 of PR #64 failed at a load of 26. So the integrator waited, and `lead-55` asked the two sessions not to start a full suite.
+    - Step 6 started at 00:44:41 UTC, with the PR merged into `a15680c`, at a load average of 11.08 with no other vitest process. `npm test` passed 1031 of 1031. `npm run test:ac -- 1.4m/questions 1.4m/times 1.4m/members 1.4m/next 1.4m/paste` passed 1.4m/questions 6, 1.4m/times 5, 1.4m/members 3, 1.4m/next 1 and 1.4m/paste 2. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39701808936`, succeeded: both jobs passed 1030 tests and skipped 1 of 1031.
+- Problems:
+  - The PR names these limitations itself:
+    - the E3 refusal and the `--regenerate` message name a directory of the machine where they are shown, so on a builder's machine the line names the builder's path;
+    - the invitation link `<repo url>/invitations` was not opened on live GitHub;
+    - the messages were checked against the fake GitHub only;
+    - until #146 merges, the next steps name a guide that setup does not write.
+  - The integrator waited about 3 minutes for the machine's load before step 6.
+- Workflow notes of the PR:
+  - "The issue had no comments and no "Scope change:"; every file this task needed was in its paths."
+  - "Item 5 asks for the Lead's command as a line to paste in two messages that are shown on the caller's machine. Both name a directory of that machine (see "Remaining limitations"), so for a builder the line is a correct `cd` only on the builder's machine. I kept the directories of before and did not change who the message is for."
+  - "`npm run format -- $FILES` with the file list in a shell variable gave Prettier one argument holding every path, because zsh does not split words; naming the files one by one worked. A few minutes lost."
+- Measured: PR open 9 min 10 s (00:38:18 to 00:47:28 UTC); 1 commit, 1 PR run (136 s), 0 conflicts; local merge test `npm test` 127.85 s; the run on main after the merge 151 s.
+- Evidence: issue #145; PR https://github.com/Bartek201301/HackWin/pull/152; head `ca47463`; merge commit `11c48cb`; runs `39700887333` (PR) and `39701808936` (main).
+
+### 2026-10-22 · Phase 1 · runIn: one line to paste, `cd <dir> && <command>`, for every run-this message (PR #144, issue #143)
+
+- Setup: a product decision of the Lead for 0.1.0, after the manual check of 0.1.0-pre.2, through `lead-55` on 22 October 2026. The integrator did the task itself in its worktree `task/143-paste-ready-run-lines`, created from `38ba529`. `lead-55` reviewed the PR and sent the merge.
+- What happened:
+  - `runIn(command, dir)` in `src/core/runtime/output.js` now returns ``run `cd <dir> && <command>` `` for an absolute directory. The directory is quoted by `quoteShellArg` when it needs quoting.
+  - `any directory` keeps ``run `<command>` in <dir>``, and so does a place in words, such as "the main checkout of their clone of <url>" in setup's member lines, because a `cd` to it would fail. Contracts CM4 and the `runIn` row describe this.
+  - The tests:
+    - With only `runIn` changed, `npm test` failed 87 of 1013 tests in 22 files, each on the old wording.
+    - Before they changed, a "Scope change:" comment on issue #143 named the 19 test files of lanes A, B and C.
+    - A script rewrote the old form, and 3 lines were written by hand. A check of the diff found that each of the other 62 changed lines was exactly that rewrite.
+    - A new test pastes the line into `sh -c` from another directory. The directory's name holds a space, quotes, `$`, `;`, `&`, `|`, parentheses, `*` and backticks, and the command ran there.
+  - The integrator found nothing that an agent relies on in the old form:
+    - the generated settings have no allow rule that matches a command's text;
+    - the PreToolUse hook follows a `cd` in a command line;
+    - each wrapper runs only its own command.
+
+    Assumed, not observed in a session: an agent that follows such a line runs the `cd` too.
+  - Lines written by hand without `runIn` did not change. `lead-55` routed them into the usability tasks: `src/commands/take/prompt.js` lines 336 and 350 to #147, and the E3 refusal (`src/internal/hook/pre-tool-use.js` line 103) and `src/commands/setup/regenerate.js` line 188 to #145.
+  - One commit, `c4db922`; PR #144 opened at 23:56:18 UTC.
+  - Merged with the procedure of the plan, section 8, after #140.
+    - Steps 1 to 5 passed: 26 files, all inside issue #143's paths (7 in the integrator's role and 19 of other lanes named in the scope change); no secret pattern; no dash; no conflict with `000720f`.
+    - Step 6, with the PR merged into `000720f` at a load average of 7.09 with no other vitest process: `npm test` passed 1014 of 1014, and `npm run test:ac -- 1.3a/runtime` passed 1.3a/runtime 14. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39697676274`, succeeded: both jobs passed 1013 tests and skipped 1 of 1014.
+- Problems: the live test `test/commands/setup/setup.fixture.test.js` (AC6, line 230) was changed but not run. It runs at the next live pass, as `lead-55` decided. The offline AC6 tests check the same `setup --resume` line, and they pass.
+- Measured: PR open 10 min 24 s (23:56:18 to 00:06:42 UTC); 1 commit, 1 PR run (155 s), 0 conflicts; with only `runIn` changed, 87 of 1013 tests failed in 22 files; local merge test `npm test` 142.69 s; the run on main after the merge 148 s.
+- Evidence: issue #143; PR https://github.com/Bartek201301/HackWin/pull/144; head `c4db922`; merge commit `a15680c`; runs `39696591777` (PR) and `39697676274` (main).
+
+### 2026-10-22 · Phase 1 · Plan section 6, item 6 and decision 13: the manual check per release in auto mode and with bypass permissions (PR #140, issue #139)
+
+- Setup: the human decided after the manual check of 0.1.0-pre.2, through `lead-55`. The integrator recorded it in its own worktree `task/139-manual-check-auto-mode`, created from `9323de1`. `lead-55` reviewed the PR twice and sent the merge.
+- What happened:
+  - The first commit, `652a306`, changed item 6: each release is checked once in auto mode, `claude --permission-mode auto`, and once with bypass permissions on. It also added row 13, with the check's test log entry as its source. PR #140 opened at 23:34:13 UTC.
+  - In its report the integrator named what auto mode loses. The wrappers allow their own command through `allowed-tools` (`src/generate/wrappers.js` line 55), and only a session with prompts on shows a missing allow rule. In auto mode a refusal can also come from Claude Code itself. `lead-55` accepted both points.
+  - The second commit, `0f6e56c`, came after a merge of main `38ba529` (`d46504f`). It added both points to item 6 and row 13: one wrapper call with prompts on finishes without a prompt, and a refusal counts only when it carries HackWin's own text. Issue #139 got its body changed and one "Scope change:" comment.
+  - `claude --help` of Claude Code 2.1.307 lists the choices `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk` and `plan` for `--permission-mode`, not `default`. `lead-55` read in the sandbox transcripts that `--permission-mode default` was accepted (`"permissionMode":"default"` on every turn), so item 6 names it.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 1 file inside issue #139's paths; no secret pattern; no dash; no conflict with `38ba529`.
+    - Step 6, with the PR merged into `38ba529` at a load average of 2.61 with no other vitest process: `npm ci && npm test` passed 1013 of 1013. The only criterion is an inspection, so `npm run test:ac` was skipped. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39697334779`, succeeded: both jobs passed 1012 tests and skipped 1 of 1013.
+- Problems: none in this task.
+  - #146 adds `hackwin status` to the allow list of `.claude/settings.json`. After that, a `/status` call may no longer show whether the wrapper's own `allowed-tools` works.
+  - How Claude Code matches the wrapper's command line, with its `HACKWIN_CALLER=` prefix, against an allow rule was not checked.
+  - `lead-55` decided that #149 makes the check use `/gate`, or another wrapper whose command stays off the allow list.
+- Measured: PR open 29 min 17 s (23:34:13 to 00:03:30 UTC); 3 commits, 2 PR runs (124 s and 154 s), 0 conflicts; local merge test `npm test` 111.63 s; the run on main after the merge 162 s.
+- Evidence: issue #139; PR https://github.com/Bartek201301/HackWin/pull/140; head `0f6e56c`; merge commit `000720f`; runs `39694259937` and `39695198335` (PR) and `39697334779` (main); the test log entry of the manual check of 0.1.0-pre.2.
+
 ### 2026-10-22 · Phase 1 · Manual check per release on 0.1.0-pre.2: real Claude Code sessions with default and with bypass permissions (plan section 6, item 6)
 
 - Setup:
