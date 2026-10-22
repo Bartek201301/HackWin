@@ -17,6 +17,26 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · Plan section 6, item 6 and decision 13: the manual check per release in auto mode and with bypass permissions (PR #140, issue #139)
+
+- Setup: the human decided after the manual check of 0.1.0-pre.2, through `lead-55`. The integrator recorded it in its own worktree `task/139-manual-check-auto-mode`, created from `9323de1`. `lead-55` reviewed the PR twice and sent the merge.
+- What happened:
+  - The first commit, `652a306`, changed item 6: each release is checked once in auto mode, `claude --permission-mode auto`, and once with bypass permissions on. It also added row 13, with the check's test log entry as its source. PR #140 opened at 23:34:13 UTC.
+  - In its report the integrator named what auto mode loses. The wrappers allow their own command through `allowed-tools` (`src/generate/wrappers.js` line 55), and only a session with prompts on shows a missing allow rule. In auto mode a refusal can also come from Claude Code itself. `lead-55` accepted both points.
+  - The second commit, `0f6e56c`, came after a merge of main `38ba529` (`d46504f`). It added both points to item 6 and row 13: one wrapper call with prompts on finishes without a prompt, and a refusal counts only when it carries HackWin's own text. Issue #139 got its body changed and one "Scope change:" comment.
+  - `claude --help` of Claude Code 2.1.307 lists the choices `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk` and `plan` for `--permission-mode`, not `default`. `lead-55` read in the sandbox transcripts that `--permission-mode default` was accepted (`"permissionMode":"default"` on every turn), so item 6 names it.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 1 file inside issue #139's paths; no secret pattern; no dash; no conflict with `38ba529`.
+    - Step 6, with the PR merged into `38ba529` at a load average of 2.61 with no other vitest process: `npm ci && npm test` passed 1013 of 1013. The only criterion is an inspection, so `npm run test:ac` was skipped. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39697334779`, succeeded: both jobs passed 1012 tests and skipped 1 of 1013.
+- Problems: none in this task.
+  - #146 adds `hackwin status` to the allow list of `.claude/settings.json`. After that, a `/status` call may no longer show whether the wrapper's own `allowed-tools` works.
+  - How Claude Code matches the wrapper's command line, with its `HACKWIN_CALLER=` prefix, against an allow rule was not checked.
+  - `lead-55` decided that #149 makes the check use `/gate`, or another wrapper whose command stays off the allow list.
+- Measured: PR open 29 min 17 s (23:34:13 to 00:03:30 UTC); 3 commits, 2 PR runs (124 s and 154 s), 0 conflicts; local merge test `npm test` 111.63 s; the run on main after the merge 162 s.
+- Evidence: issue #139; PR https://github.com/Bartek201301/HackWin/pull/140; head `0f6e56c`; merge commit `000720f`; runs `39694259937` and `39695198335` (PR) and `39697334779` (main); the test log entry of the manual check of 0.1.0-pre.2.
+
 ### 2026-10-22 · Phase 1 · Manual check per release on 0.1.0-pre.2: real Claude Code sessions with default and with bypass permissions (plan section 6, item 6)
 
 - Setup:
