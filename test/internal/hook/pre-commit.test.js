@@ -36,7 +36,7 @@ describe('AC54/hooks: the pre-commit hook on the default branch', () => {
     )
     expect(result.stderr).toContain('rule: E18: no fix is committed directly on main')
     expect(result.stderr).toContain(`- branch main in ${clone.path}`)
-    expect(result.stderr).toContain(`to resolve: run \`hackwin take\` in ${clone.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${clone.path} && hackwin take\``)
     expect(await clone.git.revParse('HEAD')).toBe(before)
   })
 })
@@ -65,7 +65,7 @@ describe('AC47/commit: the scope check at commit', () => {
     )
     expect(blocked.stderr).not.toContain('- src/features/counter/step.js')
     expect(blocked.stderr).toContain(
-      `to resolve: run \`git restore --staged -- src/features/greeting/hello.js\` in ${task.path}`,
+      `to resolve: run \`cd ${task.path} && git restore --staged -- src/features/greeting/hello.js\``,
     )
     expect(await task.git.revParse('HEAD')).toBe(before)
 
@@ -99,7 +99,7 @@ describe('AC80/commit: the secret scan at commit', () => {
     )
     expect(result.stderr).toContain('- src/features/counter/key.js:1: gate.secret_patterns[0]')
     expect(result.stderr).toContain(
-      `to resolve: run \`git restore --staged -- src/features/counter/key.js\` in ${task.path}`,
+      `to resolve: run \`cd ${task.path} && git restore --staged -- src/features/counter/key.js\``,
     )
     expect(result.stderr).not.toContain(teamSecret)
     expect(await task.git.revParse('HEAD')).toBe(before)

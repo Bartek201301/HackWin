@@ -35,7 +35,7 @@ describe('AC18: the pre-push hook requires the check record', () => {
     )
     expect(result.stderr).toContain('rule: E4: no push without green checks on the pushed commit')
     expect(result.stderr).toContain(`- ${task.branch} at ${sha}: no green check record`)
-    expect(result.stderr).toContain(`to resolve: run \`hackwin ship\` in ${task.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${task.path} && hackwin ship\``)
     expect(await remoteHead(task.git, task.branch)).toBeNull()
   })
 
@@ -80,7 +80,7 @@ describe('AC54/hooks: the pre-push hook and history rewrites', () => {
       `- ${task.branch}: ${sha} on origin is not in the history of ${rewritten}`,
     )
     expect(result.stderr).toContain(
-      `to resolve: run \`git pull --no-rebase origin ${task.branch}\` in ${task.path}`,
+      `to resolve: run \`cd ${task.path} && git pull --no-rebase origin ${task.branch}\``,
     )
     expect(await remoteHead(task.git, task.branch)).toBe(sha)
   })
@@ -103,7 +103,7 @@ describe('AC2/pre-push: a push to the default branch', () => {
     )
     expect(result.stderr).toContain('rule: E2: no direct push to main')
     expect(result.stderr).toContain(`- origin: refs/heads/main to ${sha}`)
-    expect(result.stderr).toContain(`to resolve: run \`hackwin take\` in ${clone.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${clone.path} && hackwin take\``)
     expect(await remoteHead(clone.git, 'main')).toBe(before)
   })
 })

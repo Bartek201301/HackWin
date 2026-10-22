@@ -242,7 +242,7 @@ describe('1.4c/pre-tool-use: edits and the role scope', () => {
     })
 
     expect(result.code).toBe(2)
-    expect(result.stderr).toContain(`to resolve: run \`hackwin join\` in ${path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${path} && hackwin join\``)
   })
 
   test('tools that change no file pass without a check', async () => {
@@ -288,7 +288,7 @@ describe('1.4c/pre-tool-use: pushes to the default branch', () => {
       "hackwin: blocked: a change of main without a pull request is blocked: main changes only through the Gate's merges of pull requests",
     )
     expect(reason).toContain('rule: E2: no direct push to main')
-    expect(reason).toContain(`to resolve: run \`hackwin ship\` in ${task.path}`)
+    expect(reason).toContain(`to resolve: run \`cd ${task.path} && hackwin ship\``)
   })
 
   test('a push of the task branch passes, with or without a refspec', async () => {
@@ -315,7 +315,7 @@ describe('1.4c/pre-tool-use: pushes to the default branch', () => {
     ]) {
       const reason = denial(await run(bashCall(cwd, command)))
       expect(reason, command).toContain('rule: E2: no direct push to main')
-      expect(reason, command).toContain(`to resolve: run \`hackwin take\` in ${clone.path}`)
+      expect(reason, command).toContain(`to resolve: run \`cd ${clone.path} && hackwin take\``)
     }
   })
 })
@@ -401,7 +401,7 @@ describe('1.4c/pre-tool-use: gh api calls that update the default branch without
     const { task, run } = await builderScene()
     const reason = denial(await run(bashCall(task.path, command)))
     expect(reason).toContain('rule: E2: no direct push to main')
-    expect(reason).toContain(`to resolve: run \`hackwin ship\` in ${task.path}`)
+    expect(reason).toContain(`to resolve: run \`cd ${task.path} && hackwin ship\``)
   })
 
   test('reading the ref of main and updating another branch are not refused', async () => {

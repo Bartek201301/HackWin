@@ -165,7 +165,7 @@ describe('1.6a/input: quit stops after the current step', () => {
     const result = await gate.done
     running = []
     expect(steps).toEqual(['merge-test started', 'merge-test finished'])
-    expect(result.lines[0]).toMatch(/Gate stopped; to start it again, run `hackwin gate` in /)
+    expect(result.lines[0]).toMatch(/Gate stopped; to start it again, run `cd \S+ && hackwin gate`/)
     const state = readJson(files.state)
     expect(state.queue).toEqual([PR])
     expect(state.prs[String(PR)].stage).toBe('merge-test')

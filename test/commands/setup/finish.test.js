@@ -158,7 +158,7 @@ describe('AC1: setup configures the repository and GitHub', () => {
         ),
       )
     }
-    expect(lines).toContain(`run \`hackwin gate\` in ${fixture.main}, in a separate terminal`)
+    expect(lines).toContain(`run \`cd ${fixture.main} && hackwin gate\`, in a separate terminal`)
     expect(lines).toContain('write the first tasks by hand')
     expect(lines).toContain('send .env.local to each member over a private channel')
     expect(json.data.protection.state).toBe('full-restricted')
@@ -212,7 +212,7 @@ describe('AC6: setup --resume finishes an interrupted setup and creates nothing 
     let result = await runSetup(fixture, fake, { answers })
     expect(result.code).toBe(3)
     expect(result.stderr).toContain(
-      `run \`hackwin setup --resume\` in ${fixture.main}: origin holds the bootstrap commit`,
+      `run \`cd ${fixture.main} && hackwin setup --resume\`: origin holds the bootstrap commit`,
     )
     const head = await fixture.git.revParse('HEAD')
     expect(await originMain(fixture)).toBe(head)
@@ -262,7 +262,7 @@ describe('AC6: setup --resume finishes an interrupted setup and creates nothing 
     const result = await run
     expect(result.code).toBe(2)
     expect(result.stderr).toContain('setup was interrupted after its bootstrap push')
-    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup --resume\``)
     const head = await fixture.git.revParse('HEAD')
     expect(await originMain(fixture)).toBe(head)
     expect(await fixture.git.isClean()).toBe(true)
@@ -417,7 +417,7 @@ describe('1.4f/invitations: members without write access, after confirmation (A4
       expect(callsOf(fake, 'PUT', /\/collaborators\//), String(invite)).toEqual([])
       expect(result.stdout).toContain(`not invited, without write access: ${BUILDER2}`)
       expect(result.stdout).toContain(
-        `Builder Two (${BUILDER2}): needs write access to hackwin-test/app first: give them write access on GitHub (Settings, Collaborators), or run \`hackwin setup --resume\` in ${fixture.main} and answer yes to the invitation`,
+        `Builder Two (${BUILDER2}): needs write access to hackwin-test/app first: give them write access on GitHub (Settings, Collaborators), or run \`cd ${fixture.main} && hackwin setup --resume\` and answer yes to the invitation`,
       )
     }
   })
@@ -487,7 +487,7 @@ describe('1.4f/rules: the branch rules and their read back', () => {
     let result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
     expect(result.code).toBe(0)
     expect(result.stdout).toContain(
-      `the required check hackwin is not pinned to the GitHub Actions app (GitHub answered: gh: Validation Failed: integration_id is not valid (HTTP 422)): a status that anyone with write access posts by hand can satisfy it. Once GitHub Actions has run in hackwin-test/app, run \`hackwin setup --resume\` in ${fixture.main} to pin it`,
+      `the required check hackwin is not pinned to the GitHub Actions app (GitHub answered: gh: Validation Failed: integration_id is not valid (HTTP 422)): a status that anyone with write access posts by hand can satisfy it. Once GitHub Actions has run in hackwin-test/app, run \`cd ${fixture.main} && hackwin setup --resume\` to pin it`,
     )
     let protection = await readProtection(leadClient(fake))
     expect(protection.state).toBe('full-restricted')
@@ -561,7 +561,7 @@ describe('1.4f/resume: setup --resume runs only where the bootstrap push happene
       'the main checkout does not hold origin/main, which holds the bootstrap commit of setup',
     )
     expect(result.stderr).toContain(
-      `run \`git switch main && git merge --ff-only origin/main\` in ${fixture.main}, then run \`hackwin setup --resume\``,
+      `run \`cd ${fixture.main} && git switch main && git merge --ff-only origin/main\`, then run \`cd ${fixture.main} && hackwin setup --resume\``,
     )
     expect(writes(fake)).toHaveLength(before)
   })
@@ -571,7 +571,7 @@ describe('1.4f/resume: setup --resume runs only where the bootstrap push happene
     const result = await runSetup(fixture, fake, { args: ['--resume'] })
     expect(result.code).toBe(2)
     expect(result.stderr).toContain('there is nothing to resume')
-    expect(result.stderr).toContain(`run \`hackwin setup\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup\``)
     expect(writes(fake)).toEqual([])
   })
 
@@ -588,7 +588,7 @@ describe('1.4f/resume: setup --resume runs only where the bootstrap push happene
     const task = await fixture.worktree({ issue: 7 })
     result = await runSetup(fixture, fake, { args: ['--resume'], cwd: task.path })
     expect(result.code).toBe(2)
-    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup --resume\``)
     expect(writes(fake)).toEqual([])
   })
 })
@@ -666,7 +666,7 @@ describe('1.4f/settle: setup does not trust one read right after it writes a set
     expect(json.data.pushProtection.settled).toBe(false)
     expect(json.lines.join('\n')).toMatch(
       new RegExp(
-        `the push protection setting read back from GitHub changed \\d+ times in 60 s, and the line above shows the last read; GitHub may hold another value\\. To read it again later, run \`hackwin setup --resume\` in ${fixture.main.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`,
+        `the push protection setting read back from GitHub changed \\d+ times in 60 s, and the line above shows the last read; GitHub may hold another value\\. To read it again later, run \`cd ${fixture.main.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} && hackwin setup --resume\``,
       ),
     )
   })
@@ -790,7 +790,7 @@ describe('1.4f/settle: a read back survives a failure that may pass, and only th
     expect(result.stderr).toMatch(
       /hackwin setup: setup could not read back the push protection setting steadily within 60 s: \d+ reads failed, the last with: GitHub call failed: .*i\/o timeout/,
     )
-    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup --resume\``)
   })
 
   test('1.4f/settle: a refusal during the read back of setup ends it at once, and the other read stops', async () => {
@@ -801,7 +801,7 @@ describe('1.4f/settle: a read back survives a failure that may pass, and only th
     const result = await runSetup(fixture, fake, { answers: teamAnswers(3) })
     expect(result.code).toBe(3)
     expect(result.stderr).toContain('Resource not accessible by integration')
-    expect(result.stderr).toContain(`run \`hackwin setup --resume\` in ${fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${fixture.main} && hackwin setup --resume\``)
     const patchAt = fake.calls.findIndex(
       (call) => call.method === 'PATCH' && call.endpoint === 'repos/{owner}/{repo}',
     )

@@ -47,7 +47,7 @@ describe('AC15: ship exits 1 and leaves the remote branch unchanged', () => {
     await expectBlocked(s, result, before, 2)
     expect(result.stderr).toContain('conflicts in 1 file')
     expect(result.stderr).toContain('  - src/features/counter/index.js')
-    expect(result.stderr).toContain(`to resolve: run \`hackwin ship\` in ${s.worktree.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${s.worktree.path} && hackwin ship\``)
     expect(await s.worktree.git.tryRevParse('MERGE_HEAD')).not.toBeNull()
     expect(await s.worktree.git.conflictedFiles()).toEqual(['src/features/counter/index.js'])
   })
@@ -99,7 +99,7 @@ describe('AC15: ship exits 1 and leaves the remote branch unchanged', () => {
     await expectBlocked(s, result, before, 5)
     expect(result.stderr).toContain('  - src/features/counter/reset.js')
     expect(result.stderr).toContain(
-      `to resolve: run \`${NODE} tools/format.mjs src/features/counter/reset.js\` in ${s.worktree.path}`,
+      `to resolve: run \`cd ${s.worktree.path} && ${NODE} tools/format.mjs src/features/counter/reset.js\``,
     )
     const file = join(s.worktree.path, 'src/features/counter/reset.js')
     expect(readFileSync(file, 'utf8')).toBe(unformatted)
@@ -125,7 +125,7 @@ describe('AC17: ship outside a task worktree exits 2; on a spike branch it exits
     const result = await ship(s, { cwd: s.fixture.main })
     expect(result.code, result.stderr).toBe(2)
     expect(result.stderr).toContain(`#12 ${s.worktree.path}`)
-    expect(result.stderr).toContain(`to resolve: run \`hackwin ship\` in ${s.worktree.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${s.worktree.path} && hackwin ship\``)
   })
 
   test('ship on a spike/ branch exits 1', async () => {
@@ -298,7 +298,7 @@ describe('1.5d/ship: merge main and local checks', () => {
     const result = await ship(s)
     expect(result.code, result.stderr).toBe(2)
     expect(result.stderr).toContain('issue #12 is ready, not in-progress or in-review')
-    expect(result.stderr).toContain(`to resolve: run \`hackwin take 12\` in ${s.fixture.main}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${s.fixture.main} && hackwin take 12\``)
   })
 
   test('a failed GitHub call in step 1 exits 3', async () => {

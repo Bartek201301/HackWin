@@ -621,7 +621,7 @@ describe("1.6b/status-issue: a start refuses while the status issue shows anothe
       `another Gate is running for this project: the status issue #1 shows the heartbeat of the Gate ${OTHER_ID} at 2026-10-24T09:59:30.000Z, 30 s old, and no stop; this clone's Gate is ${own}; there is one Gate per project`,
     )
     expect(error.resolve).toBe(
-      `type \`quit\` in that Gate's terminal (its clone holds ${OTHER_ID} in .git/hackwin/gate/gate-id); if it no longer runs, wait until 2026-10-24T10:04:30.000Z, when its heartbeat is 300 s old; then run \`hackwin gate\` in ${fixture.main}`,
+      `type \`quit\` in that Gate's terminal (its clone holds ${OTHER_ID} in .git/hackwin/gate/gate-id); if it no longer runs, wait until 2026-10-24T10:04:30.000Z, when its heartbeat is 300 s old; then run \`cd ${fixture.main} && hackwin gate\``,
     )
     // Nothing was started: no start counted, no heartbeat, no edit, no lock left. Only the
     // clone's Gate id now exists.

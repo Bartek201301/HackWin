@@ -161,7 +161,7 @@ describe('AC16: ship pushes, opens the pull request, reports, sets in-review and
       expect(first.code, first.stderr).toBe(3)
       expect(first.stderr).toContain(`hackwin ship: step ${step}, ${title}: `)
       expect(first.stderr).toContain('run ship again: it continues at this step')
-      expect(first.stderr).toContain(`to resolve: run \`hackwin ship\` in ${s.worktree.path}`)
+      expect(first.stderr).toContain(`to resolve: run \`cd ${s.worktree.path} && hackwin ship\``)
       expect(stepsOf(first.stdout).at(-1)).toBe(last)
       const head = await s.worktree.git.revParse('HEAD')
       expect(await remoteBranch(s)).toBe(step === 10 ? null : head)

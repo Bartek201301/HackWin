@@ -169,7 +169,7 @@ export async function unreachable(ctx, error) {}
   ```
 - `ctx.out.line(text)` prints a progress or report line while the command runs: on stdout, or on stderr with `--json`. `ctx.out.write(text)` prints raw text on the same stream, for a question. `ctx.out.warn(text)` prints `warning: <text>` on stderr and adds the text to `warnings`.
 - The runner prints an error on stderr as `hackwin <command>: <message>`, followed by indented lines: for a block the rule, one line per object and `to resolve: ...`; for a configuration error the key; for a remote error the last lines of gh's or git's output; and `to resolve: ...` whenever the error has one. An unexpected error prints `internal error: <message>`; with `HACKWIN_DEBUG=1` also its stack.
-- CM4: every message that tells someone to run something names the directory. `runIn(command, dir)` returns ``run `<command>` in <dir>`` and refuses an empty directory. An error's `resolve` is either `{ command, dir }` or a plain instruction that names no command, such as "ask the Lead to add you to `hackwin.yml`". `dir` is an absolute path, or "any directory" when the place does not matter.
+- CM4: every message that tells someone to run something names the directory. `runIn(command, dir)` refuses an empty command or directory. For an absolute `dir` it returns one line that works when pasted as is into a new terminal in any directory, ``run `cd <dir> && <command>` ``; `dir` is quoted by `quoteShellArg` when it holds a space or another shell character (the Lead's decision for 0.1.0, #143). Any other `dir`, "any directory" or a place on another machine such as "the main checkout of their clone of <url>", cannot be changed to, so `runIn` returns ``run `<command>` in <dir>``. An error's `resolve` is either `{ command, dir }` or a plain instruction that names no command, such as "ask the Lead to add you to `hackwin.yml`". `dir` is an absolute path, or "any directory" when the place does not matter.
 - CM5: a `BlockedError` cannot be created without the rule, at least one file or object, and `resolve`.
 
 ### 3.4 Exit codes and error types
@@ -229,7 +229,7 @@ Each module is imported from its `index.js`, for example `src/core/git/index.js`
 | `EXIT` | | `{ OK: 0, BLOCKED: 1, PRECONDITION: 2, REMOTE: 3 }` |
 | Error classes, `exitCodeOf` | | Section 3.4 |
 | `createOutput` | `{ stdout, stderr, json }` | `Output`: `line`, `write`, `warn`, `warnings`, `json` |
-| `runIn` | `command`, `dir` | `` run `<command>` in <dir> ``; TypeError without a directory |
+| `runIn` | `command`, `dir` | `` run `cd <dir> && <command>` `` for an absolute `dir`, quoted by `quoteShellArg` when needed; `` run `<command>` in <dir> `` for any other place; TypeError without a command or a directory |
 | `formatResolve`, `formatError` | a `resolve`; an error and `{ command, stack }` | The text the runner prints |
 | `exec` | `file`, `args`, `ExecOptions` | `ExecResult`. Never rejects for a non-zero exit; a missing program or directory is a `PreconditionError` |
 | `execShell` | `commandLine`, `ExecOptions` | As `exec`, through `sh -c`, for the commands of `hackwin.yml` |

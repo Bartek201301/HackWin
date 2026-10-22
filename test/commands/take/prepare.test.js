@@ -174,7 +174,7 @@ describe('1.5b/in-session: with the caller kind claude-code, take prints the pro
     const command = `claude "$(cat ${promptFile})"`
     expect(session.stdout.trimEnd().split('\n').slice(-2)).toEqual([
       `prompt: ${promptFile}`,
-      `start Claude Code for #7 in a new terminal: run \`${command}\` in ${worktree.path}`,
+      `start Claude Code for #7 in a new terminal: run \`cd ${worktree.path} && ${command}\``,
     ])
 
     // Labels, assignees and branch as in the terminal.
@@ -301,7 +301,7 @@ describe('1.5b/install: take runs commands.install in the worktree, and a failed
     expect(result.stdout).toContain('  resolving packages')
     expect(result.stdout).toContain('  npm ERR! code E404')
     expect(result.stdout).toContain(
-      `the worktree and the claim stay; fix the install, then run \`hackwin take 8\` in ${clone.path} to finish the remaining steps`,
+      `the worktree and the claim stay; fix the install, then run \`cd ${clone.path} && hackwin take 8\` to finish the remaining steps`,
     )
     expect(await worktree.git.currentBranch()).toBe('task/8-task-8')
     expect(fake.find(8)?.labels).toContain('in-progress')
@@ -365,7 +365,7 @@ describe('1.5b/worktree-failure: when the worktree cannot be created, the label 
     expect(result.code).toBe(2)
     expect(result.stderr).toContain(`the worktree of #7 cannot be created at ${path}:`)
     expect(result.stderr).toContain('the in-progress label and the assignment were undone')
-    expect(result.stderr).toContain(`to resolve: run \`hackwin take 7\` in ${clone.path}`)
+    expect(result.stderr).toContain(`to resolve: run \`cd ${clone.path} && hackwin take 7\``)
     expect(fake.find(7)?.labels.sort()).toEqual([...labels].sort())
     expect(fake.find(7)?.assignees).toEqual([])
     expect(existsSync(promptFileOf(clone, 7))).toBe(false)
@@ -390,7 +390,7 @@ describe('1.5b/agent: an agent that cannot be started leaves the worktree and th
     expect(result.stdout).toContain(`prompt: ${promptFile}`)
     expect(result.stdout.trimEnd().split('\n').slice(-2)).toEqual([
       'Claude Code could not be started: `claude` is not installed or not on PATH; the worktree and the claim stay',
-      `start Claude Code for #7 in a new terminal: run \`claude "$(cat ${promptFile})"\` in ${worktree.path}`,
+      `start Claude Code for #7 in a new terminal: run \`cd ${worktree.path} && claude "$(cat ${promptFile})"\``,
     ])
     expect(await worktree.git.currentBranch()).toBe('task/7-task-7')
     expect(fake.find(7)?.labels).toContain('in-progress')

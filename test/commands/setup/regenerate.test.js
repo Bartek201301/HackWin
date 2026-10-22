@@ -198,7 +198,7 @@ describe('1.4g/regenerate: setup --regenerate in a task worktree of the shared r
     expect(await worktree.git.isClean()).toBe(true)
     expect(result.stdout).toContain(`committed as ${commit} on ${worktree.branch}`)
     expect(result.stdout).toContain(`cli_version ${LOWER} -> ${VERSION}`)
-    expect(result.stdout).toContain(`run \`hackwin ship\` in ${worktree.path}`)
+    expect(result.stdout).toContain(`run \`cd ${worktree.path} && hackwin ship\``)
 
     // The generated files are those of the running version.
     expect(await staleGeneratedFiles(worktree.path, { version: VERSION })).toEqual([])
@@ -287,7 +287,7 @@ describe('1.4g/regenerate: setup --regenerate in a task worktree of the shared r
     expect(result.stderr).toContain(
       'writes a task of the shared role for the release, takes it, runs `hackwin setup --regenerate` in its worktree and ships it',
     )
-    expect(result.stderr).toContain(`run \`hackwin take <N>\` in ${project.fixture.main}`)
+    expect(result.stderr).toContain(`run \`cd ${project.fixture.main} && hackwin take <N>\``)
     expect(snapshot(project.fixture.main)).toEqual(files)
     expect(await project.fixture.git.revParse('HEAD')).toBe(head)
   })

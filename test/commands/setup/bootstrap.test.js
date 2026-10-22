@@ -321,10 +321,10 @@ describe('1.4f/bootstrap: the gaps of the re-review of PR #65', () => {
     )
     expect(result.stderr).not.toContain('nothing changed on GitHub')
     expect(result.stderr).toContain(
-      `to resolve: run \`git ls-remote origin refs/heads/main\` in ${fixture.main}: when it prints`,
+      `to resolve: run \`cd ${fixture.main} && git ls-remote origin refs/heads/main\`: when it prints`,
     )
     expect(result.stderr).toContain(
-      `run \`hackwin setup --resume\` in ${fixture.main}, which first fast-forwards main to origin/main, since the checkout is as clean as before; otherwise`,
+      `run \`cd ${fixture.main} && hackwin setup --resume\`, which first fast-forwards main to origin/main, since the checkout is as clean as before; otherwise`,
     )
     expect(snapshot(fixture.main)).toEqual(files)
     expect(await fixture.git.revParse('HEAD')).toBe(head)
@@ -346,7 +346,7 @@ describe('1.4f/bootstrap: the gaps of the re-review of PR #65', () => {
       'GitHub refuses a push that creates a workflow file from a login without the workflow scope, and the bootstrap commit creates .github/workflows/hackwin.yml',
     )
     expect(result.stderr).toContain(
-      `to resolve: add the scope to the gh login that git pushes with: run \`gh auth refresh -s workflow\` in any directory, then run \`hackwin setup\` in ${fixture.main}`,
+      `to resolve: add the scope to the gh login that git pushes with: run \`gh auth refresh -s workflow\` in any directory, then run \`cd ${fixture.main} && hackwin setup\``,
     )
     expect(await state(fixture)).toEqual(before)
     expect(writes(fake)).toEqual([])
