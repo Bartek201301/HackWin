@@ -17,6 +17,38 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.5i ship: a filled pull request body, and a refusal that says what to do (PR #151, issue #147)
+
+- Setup: a builder session of lane B in worktree `task/147-ship-filled-pr-body`, created by the integrator from `a15680c`. `lead-55` opened the session, reviewed the PR and sent the merge, after #152. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - `ship` fills the pull request body inside HackWin's block of the template:
+    - the ownership role of the task;
+    - a tick on the merge line, the full check, the format line and the secret line when their steps passed;
+    - the acceptance tests it ran.
+
+    A line it cannot vouch for, the author's own text, and a template without HackWin's block stay as they are. A rerun on the same commit gives the same body. A new head commit brings the new facts.
+  - With uncommitted changes and the caller `claude-code`, the refusal says to ask the session to commit the listed files and then type `/ship` again. From a terminal it keeps today's text and ends with a line to paste. The exit code and the listed paths are unchanged.
+  - Lines 336 and 350 of the task prompt (`src/commands/take/prompt.js`) now use `runIn`, so a human who reads the prompt can paste them.
+  - Contracts 5.5 describes the filled body, through a "Scope change:" comment on #147.
+  - The first full `npm test` of the session failed AC14, 1 of 1025. Its two tasks have different acceptance test paths by design, so the two filled bodies differed in that line.
+    - The integrator posted a second "Scope change:" comment, which `lead-55` asked for. It allows one normalization in `test/integration/parity/flows.js`: `src/features/counter/<mode>/` becomes a placeholder next to `withoutIssue`.
+  - Two commits, `6d0670a` and `cd35765`; PR #151 opened at 00:38:16 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 10 files inside issue #147's paths, the contracts in section 5.5 only; no secret pattern; no dash; no conflict with `11c48cb`.
+    - Step 6, with the PR merged into `11c48cb` at a load average of 6.98 with no other vitest process: `npm test` passed 1042 of 1042, and `npm run test:ac -- 1.5i/pr-body 1.5i/uncommitted 1.5i/prompt-lines` passed 1.5i/pr-body 6, 1.5i/uncommitted 3 and 1.5i/prompt-lines 2. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39702108537`, succeeded: both jobs passed 1041 tests and skipped 1 of 1042.
+- Problems: the PR names two limitations, which `lead-55` asked to record:
+  - The green check record stores no list of the acceptance tests. A rerun that reuses the record of the same commit names the task's current list, even if the Lead changed `acceptance_tests` between the two runs.
+  - The merge line of the generated template names `origin/main`. In a project whose default branch is not `main`, `ship` leaves that line unticked.
+
+  No live test ran: everything ran against the fake GitHub and the local fixtures.
+- Workflow notes of the PR:
+  - "The first `npm test` failed 1 of 1025: AC14 (`test/integration/parity/parity.test.js`, the integrator's file). ... The issue's paths did not include the test, and I found it only at the full `npm test`. I stopped before the push and reported to `lead-55`. The integrator posted a Scope change for `test/integration/parity/flows.js`, and I made the one-line normalization. Time lost: about 2 minutes waiting for the Scope change."
+  - "The full `npm test` took 125 s on the first run and 420 s on the second, while other sessions ran on the machine. No test failed from load."
+- Measured: PR open 12 min 11 s (00:38:16 to 00:50:27 UTC); 2 commits, 1 PR run (140 s), 0 conflicts; local merge test `npm test` 133.14 s; the run on main after the merge 149 s.
+- Evidence: issue #147; PR https://github.com/Bartek201301/HackWin/pull/151; head `cd35765`; merge commit `dade826`; runs `39700885527` (PR) and `39702108537` (main).
+
 ### 2026-10-22 · Phase 1 · 1.4m setup: plain questions, friendly event times, a message per member, clear next steps (PR #152, issue #145)
 
 - Setup: a builder session of lane A in worktree `task/145-setup-plain-questions`, created by the integrator from `a15680c`, at the same time as #146 (lane A, the generated files), #147 (lane B) and #148 (lane C). `lead-55` opened the session, reviewed the PR and sent the merge. The task is one of the usability tasks of plan decision 14.
