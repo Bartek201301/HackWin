@@ -122,7 +122,7 @@ describe('AC11: take <N> creates a worktree on a task/ branch whose base is the 
       'No main commit was recorded in this clone before',
       '## 5. When you finish',
       '1. Commit your work on `task/7-counter-reset-button`.',
-      `2. Run \`hackwin ship\` in \`${worktree.path}\`.`,
+      `2. Run \`cd ${worktree.path} && hackwin ship\`.`,
       '3. Stop, and report the pull request number and the full head SHA.',
       'Never merge a pull request',
       '## 6. Security',

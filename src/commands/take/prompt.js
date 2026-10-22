@@ -11,6 +11,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { changesOnMain } from '../../core/changes/index.js'
+import { runIn } from '../../core/runtime/index.js'
 import { latestMainSeen, promptPath, readMainSeen, writeMainSeen } from '../../core/state/index.js'
 import { HANDBACK_LABELS } from './resume.js'
 
@@ -333,21 +334,23 @@ function changesPart({ changes, recorded, defaultBranch, worktree }) {
   if (rest > 0) {
     lines.push(
       '',
-      `And ${rest} more. For the full list, run \`git diff --name-status ${changes.from} ${changes.to}\` in \`${worktree}\`.`,
+      `And ${rest} more. For the full list, ${runIn(`git diff --name-status ${changes.from} ${changes.to}`, worktree)}.`,
     )
   }
   return lines
 }
 
 /**
- * Part 5: commit, `ship`, stop with the pull request number and head SHA, never merge.
+ * Part 5: commit, `ship`, stop with the pull request number and head SHA, never merge. The
+ * `ship` line is one that a human who reads the prompt can paste (#143).
  * @param {PromptInput} input
  * @returns {string[]}
  */
 function finishPart({ worktree, branch, defaultBranch }) {
+  const ship = runIn('hackwin ship', worktree)
   return [
     `1. Commit your work on \`${branch}\`.`,
-    `2. Run \`hackwin ship\` in \`${worktree}\`. It merges \`origin/${defaultBranch}\`, runs the checks and opens the pull request.`,
+    `2. ${ship[0].toUpperCase()}${ship.slice(1)}. It merges \`origin/${defaultBranch}\`, runs the checks and opens the pull request.`,
     '3. Stop, and report the pull request number and the full head SHA.',
     '',
     `Never merge a pull request, your own included, and never push to \`${defaultBranch}\`.`,

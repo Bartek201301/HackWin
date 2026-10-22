@@ -44,6 +44,19 @@ export const MAX_BODY_LENGTH = 65_536
 const DIGEST_HEADING = '## Digest'
 const NO_DIGEST = 'No pull request has finished a run yet.'
 
+/**
+ * The protection line of the Gate's header and of `status` (7.5 step 7, 7.6). While the update
+ * restriction is active GitHub shows every pull request as BLOCKED, so the line starts with one
+ * plain sentence that says this is expected, and the details follow (#148).
+ * @param {string} state The protection state.
+ * @param {boolean} updateRestricted
+ * @returns {string}
+ */
+export function protectionLine(state, updateRestricted) {
+  if (!updateRestricted) return `protection: ${state}`
+  return `protection: only the Gate can merge, so GitHub shows every pull request as BLOCKED, the Lead's included, and that is expected. Details: ${state}; the update restriction is active, so the Gate merges with --admin, and only after its own stages pass`
+}
+
 /** How often one edit is sent at most, the first try and the tries after a refused body. */
 const BODY_ATTEMPTS = 4
 

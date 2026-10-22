@@ -10,6 +10,7 @@
 // report that the earlier run left.
 
 import { BlockedError, PreconditionError } from '../../core/runtime/errors.js'
+import { runIn } from '../../core/runtime/output.js'
 import { parseBranch } from '../../core/tasks/index.js'
 import { currentTask, mainCheckout, taskWorktrees } from '../../core/worktrees/index.js'
 import { recordedChecks, runChecks } from './checks.js'
@@ -106,6 +107,8 @@ async function requireTaskWorktree(ctx) {
 /**
  * The precondition of a clean working tree (7.9): every change is committed, so the checks and
  * the record are for the head commit. A merge left in progress by an earlier `ship` is named.
+ * Through the Claude Code wrapper, which may only run `ship`, the human is told what to ask the
+ * session for and to type `/ship` again; anywhere else, how to start `ship` again.
  * @param {CommandContext} ctx
  * @param {TaskWorktree} worktree
  * @returns {Promise<void>}
@@ -115,17 +118,25 @@ async function requireCleanTree(ctx, worktree) {
   const paths = changedPaths(status.stdout)
   if (paths.length === 0) return
   const merging = (await ctx.git.tryRevParse('MERGE_HEAD')) !== null
+  const dir = worktree.path
   const what = merging
-    ? `a merge is in progress in ${worktree.path}`
-    : `the working tree of ${worktree.path} has changes`
+    ? `a merge is in progress in ${dir}`
+    : `the working tree of ${dir} has changes`
+  const again = runIn('hackwin ship', dir)
+  /** @type {string} */
+  let resolve
+  if (ctx.caller === 'claude-code') {
+    resolve = merging
+      ? 'ask this session to resolve the conflicts and commit the merge, then type `/ship` again'
+      : 'ask this session to commit the listed files, then type `/ship` again'
+  } else {
+    resolve = merging
+      ? `resolve the conflicts and commit the merge in ${dir}, then ${again}`
+      : `commit these changes or remove them in ${dir}, then ${again}`
+  }
   throw new PreconditionError(
     `${what}: ${plural(paths.length, 'path')}, ${listOf(paths)}; ship checks only committed work`,
-    {
-      resolve: merging
-        ? `resolve the conflicts and commit the merge in ${worktree.path}, then start ship again`
-        : `commit these changes or remove them in ${worktree.path}, then start ship again`,
-      details: { paths, merging },
-    },
+    { resolve, details: { paths, merging } },
   )
 }
 

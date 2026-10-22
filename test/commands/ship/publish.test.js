@@ -2,12 +2,29 @@ import { describe, expect, test } from 'vitest'
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { VERSION } from '../../../src/cli/context.js'
-import { pullRequestBody, reportBody, reportMarker } from '../../../src/commands/ship/publish.js'
+import {
+  fillPullRequestBody,
+  pullRequestBody,
+  reportBody,
+  reportMarker,
+} from '../../../src/commands/ship/publish.js'
 import { statePaths } from '../../../src/core/state/index.js'
 import { parseTaskLink } from '../../../src/core/tasks/index.js'
 import { accounts, httpError, rawResult } from '../../harness/index.js'
 import { rewritePulls } from '../take/helpers.js'
-import { BRANCH, ISSUE, TEMPLATE, TITLE, remoteBranch, scene, ship, stepsOf } from './scene.js'
+import {
+  BRANCH,
+  HACKWIN_TEMPLATE,
+  ISSUE,
+  TEMPLATE,
+  TEST_FILE,
+  TITLE,
+  remoteBranch,
+  scene,
+  ship,
+  stepsOf,
+  taskBody,
+} from './scene.js'
 
 /** @import { Scene } from './scene.js' */
 
@@ -344,5 +361,184 @@ describe('1.5c/ship: a rerun reuses only a pull request of this repository and o
     expect(stepsOf(again.stdout)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
     expect(JSON.parse(readFileSync(file, 'utf8')).cli_version).toBe(VERSION)
     await expectShipped(s, head)
+  })
+})
+
+/** @import { BodyFacts } from '../../../src/commands/ship/publish.js' */
+
+/**
+ * The facts of a ship whose checks all passed, for task 12 of the role `counter`.
+ * @param {Partial<BodyFacts>} [facts]
+ * @returns {BodyFacts}
+ */
+function factsOf(facts = {}) {
+  return {
+    role: 'counter',
+    mainRef: 'origin/main',
+    passed: ['merge', 'scope', 'secrets', 'format', 'check', 'acceptance'],
+    tests: [TEST_FILE],
+    ...facts,
+  }
+}
+
+/** The verification lines of HackWin's template after a ship that passed every step. */
+const VERIFIED = [
+  '- [x] Merged the current `origin/main` into the branch; no rebase, no force push',
+  '- [x] Full project check passed on the head commit',
+  `- [x] Acceptance tests of the task passed: \`${TEST_FILE}\``,
+  '- [x] Only the changed files were formatted',
+  '- [x] No env file and no secret in the added lines',
+].join('\n')
+
+/**
+ * HackWin's template as ship fills it for issue 12 of the role `counter` with these tests.
+ * @param {string[]} [tests]
+ */
+function filledTemplate(tests = [TEST_FILE]) {
+  return HACKWIN_TEMPLATE.replace('Closes #\n', `Closes #${ISSUE}\n`)
+    .replace('- Ownership role:\n', '- Ownership role: counter\n')
+    .replaceAll('- [ ] ', '- [x] ')
+    .replace(
+      'Acceptance tests of the task passed:\n',
+      `Acceptance tests of the task passed: ${tests.map((test) => `\`${test}\``).join(', ')}\n`,
+    )
+}
+
+describe('1.5i/pr-body: ship fills in the role, the checks that passed and the acceptance tests in the pull request body built from the template', () => {
+  test('the pull request that ship opens has the template with Closes #12, the role, a tick on each verification line and the acceptance tests', async () => {
+    const s = await scene({ push: false, template: HACKWIN_TEMPLATE })
+    const result = await ship(s)
+    expect(result.code, result.stderr).toBe(0)
+    const head = await s.worktree.git.revParse('HEAD')
+    const number = await expectShipped(s, head)
+
+    const body = /** @type {string} */ (s.fake.find(number)?.body)
+    expect(body).toBe(filledTemplate())
+    expect(body).toContain(`## Task\n\nCloses #${ISSUE}\n`)
+    expect(body).toContain('- Ownership role: counter\n')
+    expect(body).toContain(VERIFIED)
+    expect(body).toContain("- Files changed outside the role's paths and the open list: none\n")
+    expect(parseTaskLink({ branch: BRANCH, body })).toEqual({ ok: true, issue: ISSUE })
+  })
+
+  test('a rerun on the same commit gives the same body; a new head commit gives the new facts and keeps what the author wrote in the body', async () => {
+    const s = await scene({ push: false, template: HACKWIN_TEMPLATE })
+    const first = await ship(s)
+    expect(first.code, first.stderr).toBe(0)
+    const head = await s.worktree.git.revParse('HEAD')
+    const number = await expectShipped(s, head)
+    const pull = /** @type {NonNullable<ReturnType<typeof s.fake.find>>} */ (s.fake.find(number))
+    const body = pull.body
+
+    const again = await ship(s, { json: true })
+    expect(again.code, again.stderr).toBe(0)
+    expect(JSON.parse(again.stdout).data.pullRequest).toMatchObject({
+      action: 'reused',
+      changes: [],
+    })
+    expect(pull.body).toBe(body)
+
+    // The author notes a limitation on GitHub, and the Lead adds an acceptance test to the task.
+    const limitation = 'The reset has no undo yet.'
+    pull.body = body.replace(
+      '<!-- What does not work yet, and what was not checked. -->\n',
+      `<!-- What does not work yet, and what was not checked. -->\n${limitation}\n`,
+    )
+    const second = 'src/features/counter/undo.test.mjs'
+    const issue = /** @type {NonNullable<ReturnType<typeof s.fake.find>>} */ (s.fake.find(ISSUE))
+    issue.body = taskBody({ acceptance_tests: [TEST_FILE, second] })
+    const next = await s.fixture.commit('Add the undo test', {
+      dir: s.worktree.path,
+      files: { [second]: 'PASS\n' },
+    })
+
+    const updated = await ship(s, { json: true })
+    expect(updated.code, updated.stderr).toBe(0)
+    expect(await expectShipped(s, next)).toBe(number)
+    expect(JSON.parse(updated.stdout).data.pullRequest).toMatchObject({
+      action: 'updated',
+      changes: [`body filled in with the role and the checks of ${next}`],
+    })
+    expect(pull.body).toBe(
+      filledTemplate([TEST_FILE, second]).replace(
+        '<!-- What does not work yet, and what was not checked. -->\n',
+        `<!-- What does not work yet, and what was not checked. -->\n${limitation}\n`,
+      ),
+    )
+    expect(pull.body).toContain(
+      `- [x] Acceptance tests of the task passed: \`${TEST_FILE}\`, \`${second}\`\n`,
+    )
+  })
+
+  test("a template that is not HackWin's stays as it is, and so does every line outside HackWin's block", () => {
+    const plain = pullRequestBody(TEMPLATE, ISSUE)
+    expect(fillPullRequestBody(plain, factsOf())).toBe(plain)
+
+    const own =
+      '## Our checklist\n\n- Ownership role:\n- [ ] Full project check passed on the head commit\n\n'
+    const body = pullRequestBody(`${own}${HACKWIN_TEMPLATE}`, ISSUE)
+    const filled = fillPullRequestBody(body, factsOf())
+    expect(filled.startsWith(own)).toBe(true)
+    expect(filled).toBe(`${own}${filledTemplate()}`)
+
+    const broken = HACKWIN_TEMPLATE.replace('<!-- hackwin:end -->', '')
+    expect(fillPullRequestBody(broken, factsOf())).toBe(broken)
+  })
+
+  test('a line ship cannot vouch for stays as it is', () => {
+    const body = pullRequestBody(HACKWIN_TEMPLATE, ISSUE)
+
+    // A step that did not pass, and a project whose default branch is not the one the line names.
+    const unticked = fillPullRequestBody(
+      body,
+      factsOf({ mainRef: 'origin/trunk', passed: ['merge', 'scope', 'secrets', 'check'] }),
+    )
+    expect(unticked).toContain(
+      [
+        '- [ ] Merged the current `origin/main` into the branch; no rebase, no force push',
+        '- [x] Full project check passed on the head commit',
+        '- [ ] Acceptance tests of the task passed:',
+        '- [ ] Only the changed files were formatted',
+        '- [x] No env file and no secret in the added lines',
+      ].join('\n'),
+    )
+
+    // Lines the author changed.
+    const changed = body
+      .replace('- Ownership role:\n', '- Ownership role: counter, with help from shared\n')
+      .replace(
+        '- [ ] Full project check passed on the head commit\n',
+        '- [ ] Full project check passed on the head commit, and the demo runs\n',
+      )
+      .replace(
+        '- [ ] Acceptance tests of the task passed:\n',
+        '- [ ] Acceptance tests of the task passed: all but the slow one\n',
+      )
+    const filled = fillPullRequestBody(changed, factsOf())
+    expect(filled).toContain('- Ownership role: counter, with help from shared\n')
+    expect(filled).toContain(
+      '- [ ] Full project check passed on the head commit, and the demo runs\n',
+    )
+    expect(filled).toContain('- [ ] Acceptance tests of the task passed: all but the slow one\n')
+    expect(filled).toContain('- [x] Only the changed files were formatted\n')
+  })
+
+  test('the same facts give the same body, new facts replace what ship filled in before, and the task link parser accepts the body', () => {
+    const body = pullRequestBody(HACKWIN_TEMPLATE, ISSUE)
+    const filled = fillPullRequestBody(body, factsOf())
+    expect(fillPullRequestBody(filled, factsOf())).toBe(filled)
+    expect(parseTaskLink({ branch: BRANCH, body: filled })).toEqual({ ok: true, issue: ISSUE })
+
+    const later = factsOf({ role: 'todos', tests: [] })
+    const refilled = fillPullRequestBody(filled, later)
+    expect(refilled).toBe(fillPullRequestBody(body, later))
+    expect(refilled).toContain('- Ownership role: todos\n')
+    expect(refilled).toContain('- [x] Acceptance tests of the task passed: the task names none\n')
+    expect(parseTaskLink({ branch: BRANCH, body: refilled })).toEqual({ ok: true, issue: ISSUE })
+  })
+
+  test('a body with CRLF line endings, as GitHub keeps one edited in the browser, keeps them', () => {
+    const body = pullRequestBody(HACKWIN_TEMPLATE, ISSUE).replaceAll('\n', '\r\n')
+    expect(fillPullRequestBody(body, factsOf())).toBe(filledTemplate().replaceAll('\n', '\r\n'))
   })
 })

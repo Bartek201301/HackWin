@@ -1,9 +1,10 @@
 // Step 5 of `setup` (7.1): the stack commands, detected from the project files and confirmed by
 // the Lead, the optional smoke test command, and the path groups of `paths` that are known before
 // planning (I16): manifests and lockfiles of the detected stack, migration directories,
-// production config files and the ledger. Detection is required for Node projects; for another
-// stack setup asks for each command it could not detect. `paths.manifests` must name at least
-// one manifest (A62).
+// production config files and the ledger. In a terminal setup shows all of them as one block, which
+// the Lead keeps with one answer or goes through to change any of them. Detection is required for
+// Node projects; for another stack setup asks for each command it could not detect.
+// `paths.manifests` must name at least one manifest (A62).
 
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -203,100 +204,48 @@ async function readPackageJson(root) {
   }
 }
 
+/** What the questions of step 5 decide, in the words of the team. */
+export const STACK_INTRO =
+  'Commands and files: how HackWin installs, checks, tests and formats this project, a smoke test, which is a quick command that the Gate runs after each merge to see that the app still works, and the files that only the Lead changes.'
+
+/** The commands of `commands` that setup shows, in the order it shows them. */
+const COMMANDS = Object.freeze([...DETECTED_COMMANDS, 'smoke'])
+
+/** What each command and path group is, in the words of the team, for the questions. */
+const LABELS = Object.freeze({
+  install: 'install the dependencies',
+  check: 'full check',
+  test: 'run the tests a task names',
+  format: 'format files',
+  generate: 'rebuild generated files',
+  lockfile_regen: 'rebuild the lockfile',
+  smoke: 'smoke test after each merge',
+  manifests: 'dependency files',
+  lockfiles: 'lockfiles',
+  'gated.migrations': 'database migrations',
+  'gated.production_config': 'production config',
+})
+
 /**
  * Step 5 in the answers file or the terminal: the commands, the smoke test command and the path
- * groups. An answer of the file wins over a detected value; a value that neither gives is asked
- * in the terminal, and is missing otherwise.
+ * groups. An answer of the file wins over a detected value. In a terminal setup shows every value
+ * as one block, and the Lead keeps all of them with one answer, or goes through the ones the file
+ * does not give and changes any of them; a missing required value makes setup go through them.
+ * Without a terminal a required command that neither gives is missing.
  * @param {Questions} questions
  * @param {Detection} detection
  * @returns {Promise<{ commands: Commands, paths: Paths }>}
  */
 export async function askStack(questions, detection) {
-  const commands = await askCommands(questions, detection)
-  const paths = await askPaths(questions, detection)
-  return { commands, paths }
-}
-
-/**
- * @param {Questions} questions
- * @param {Detection} detection
- * @returns {Promise<Commands>}
- */
-async function askCommands(questions, detection) {
   /** @type {Record<string, string | null | undefined>} */
   const values = {}
-  for (const key of DETECTED_COMMANDS) {
+  for (const key of COMMANDS) {
     const given = questions.given(`commands.${key}`)
     values[key] =
-      given !== undefined ? /** @type {string | null} */ (given) : detection.commands[key]
+      given !== undefined
+        ? /** @type {string | null} */ (given)
+        : detection.commands[/** @type {keyof Commands} */ (key)]
   }
-  const undecided = DETECTED_COMMANDS.filter(
-    (key) => !questions.has(`commands.${key}`) && values[key] == null && isRequired(key),
-  )
-  const asked = DETECTED_COMMANDS.filter((key) => !questions.has(`commands.${key}`))
-
-  if (questions.interactive && asked.length > 0) {
-    const from =
-      detection.sources.length > 0
-        ? `detected from ${detection.sources.join(' and ')} (${detection.manager})`
-        : 'none detected: this is not a Node project'
-    questions.say(`Stack commands, ${from}:`)
-    for (const key of DETECTED_COMMANDS) questions.say(`  ${key}: ${values[key] ?? 'none'}`)
-    const edit = undecided.length > 0 || !(await questions.keep('Keep these commands?'))
-    if (edit) {
-      for (const key of asked) values[key] = await askCommand(questions, key, values[key] ?? null)
-    }
-  } else if (undecided.length > 0) {
-    throw questions.missing(
-      `commands.${undecided[0]}`,
-      `setup could not detect the ${undecided[0]} command of this project`,
-    )
-  }
-
-  /** @type {string | null} */
-  let smoke = null
-  if (questions.has('commands.smoke')) {
-    smoke = /** @type {string | null} */ (questions.given('commands.smoke'))
-  } else if (questions.interactive) {
-    smoke = nullWhenNone(
-      await questions.ask('Smoke test command to run after each merge, or none', {
-        fallback: 'none',
-        check: () => null,
-      }),
-    )
-  }
-  return /** @type {Commands} */ ({
-    install: values.install,
-    check: values.check,
-    test: values.test,
-    format: values.format,
-    generate: values.generate ?? null,
-    lockfile_regen: values.lockfile_regen,
-    smoke,
-  })
-}
-
-/**
- * @param {Questions} questions
- * @param {string} key
- * @param {string | null} detected
- * @returns {Promise<string | null>}
- */
-async function askCommand(questions, key, detected) {
-  const required = isRequired(key)
-  const answer = await questions.ask(required ? `Command ${key}` : `Command ${key}, or none`, {
-    fallback: detected ?? (required ? '' : 'none'),
-    check: (value) => (required && nullWhenNone(value) === null ? `${key} is required` : null),
-  })
-  return nullWhenNone(answer)
-}
-
-/**
- * @param {Questions} questions
- * @param {Detection} detection
- * @returns {Promise<Paths>}
- */
-async function askPaths(questions, detection) {
   const proposed = detection.paths
   /** @type {Record<string, string[]>} */
   const groups = {
@@ -309,44 +258,115 @@ async function askPaths(questions, detection) {
     const given = questions.given(`paths.${key}`)
     if (given !== undefined) groups[key] = /** @type {string[]} */ (given)
   }
-  const asked = PATH_GROUPS.filter((key) => !questions.has(`paths.${key}`))
-  if (questions.interactive && asked.length > 0) {
-    questions.say(
-      'Path groups known before planning; the others are set later through a pull request:',
-    )
-    for (const key of PATH_GROUPS) questions.say(`  ${key}: ${listText(groups[key])}`)
-    const edit = groups.manifests.length === 0 || !(await questions.keep('Keep these path groups?'))
-    if (edit) {
-      for (const key of asked) {
-        const required = key === 'manifests'
-        groups[key] = wordsOf(
-          await questions.ask(
-            required
-              ? 'Dependency manifests, globs separated by commas, at least the manifest of the planned stack'
-              : `Globs of ${key}, separated by commas, or none`,
-            {
-              fallback: groups[key].length > 0 ? groups[key].join(', ') : required ? '' : 'none',
-              check: (value) =>
-                required && wordsOf(value).length === 0 ? 'name at least one manifest' : null,
-            },
-          ),
-        )
-      }
+  const askedCommands = COMMANDS.filter((key) => !questions.has(`commands.${key}`))
+  const askedGroups = PATH_GROUPS.filter((key) => !questions.has(`paths.${key}`))
+  const undecided = askedCommands.filter((key) => values[key] == null && isRequired(key))
+
+  if (questions.interactive && askedCommands.length + askedGroups.length > 0) {
+    showStack(questions, detection, values, groups)
+    const missing = undecided.map((key) => LABELS[key])
+    if (askedGroups.includes('manifests') && groups.manifests.length === 0) {
+      missing.push(LABELS.manifests)
     }
+    if (missing.length > 0) questions.say(`Required and missing: ${missing.join(', ')}.`)
+    if (missing.length > 0 || !(await questions.keep('Keep all of these?'))) {
+      questions.say('Type a new value, or press Enter to keep the one in brackets.')
+      for (const key of askedCommands) {
+        values[key] = await askCommand(questions, key, values[key] ?? null)
+      }
+      for (const key of askedGroups) groups[key] = await askGroup(questions, key, groups[key])
+    }
+  } else if (undecided.length > 0) {
+    throw questions.missing(
+      `commands.${undecided[0]}`,
+      `setup could not detect the ${undecided[0]} command of this project`,
+    )
   }
+
   const given = (/** @type {string} */ key, /** @type {unknown} */ fallback) =>
     questions.has(`paths.${key}`) ? questions.given(`paths.${key}`) : fallback
-  return /** @type {Paths} */ ({
-    contracts: given('contracts', []),
-    generated: given('generated', []),
-    manifests: groups.manifests,
-    lockfiles: groups.lockfiles,
-    gated: {
-      migrations: groups['gated.migrations'],
-      production_config: groups['gated.production_config'],
-    },
-    ledger: given('ledger', proposed.ledger),
+  return {
+    commands: /** @type {Commands} */ ({
+      install: values.install,
+      check: values.check,
+      test: values.test,
+      format: values.format,
+      generate: values.generate ?? null,
+      lockfile_regen: values.lockfile_regen,
+      smoke: values.smoke ?? null,
+    }),
+    paths: /** @type {Paths} */ ({
+      contracts: given('contracts', []),
+      generated: given('generated', []),
+      manifests: groups.manifests,
+      lockfiles: groups.lockfiles,
+      gated: {
+        migrations: groups['gated.migrations'],
+        production_config: groups['gated.production_config'],
+      },
+      ledger: given('ledger', proposed.ledger),
+    }),
+  }
+}
+
+/**
+ * The block of step 5: what it decides, then every command and path group with its value.
+ * @param {Questions} questions
+ * @param {Detection} detection
+ * @param {Record<string, string | null | undefined>} values
+ * @param {Record<string, string[]>} groups
+ */
+function showStack(questions, detection, values, groups) {
+  const from =
+    detection.sources.length > 0
+      ? `detected from ${detection.sources.join(' and ')} (${detection.manager})`
+      : 'none detected: this is not a Node project'
+  questions.say(STACK_INTRO)
+  questions.say(`Commands, ${from}:`)
+  for (const key of COMMANDS) questions.say(`  ${LABELS[key]}: ${values[key] ?? 'none'}`)
+  questions.say(
+    'Files that only the Lead changes; other kinds can be added later through a pull request:',
+  )
+  for (const key of PATH_GROUPS) questions.say(`  ${LABELS[key]}: ${listText(groups[key])}`)
+}
+
+/**
+ * @param {Questions} questions
+ * @param {string} key
+ * @param {string | null} current
+ * @returns {Promise<string | null>}
+ */
+async function askCommand(questions, key, current) {
+  const required = isRequired(key)
+  const label = capitalized(LABELS[key])
+  const answer = await questions.ask(required ? label : `${label}, or none`, {
+    fallback: current ?? (required ? '' : 'none'),
+    check: (value) =>
+      required && nullWhenNone(value) === null ? 'this command is required' : null,
   })
+  return nullWhenNone(answer)
+}
+
+/**
+ * @param {Questions} questions
+ * @param {string} key
+ * @param {string[]} current
+ * @returns {Promise<string[]>}
+ */
+async function askGroup(questions, key, current) {
+  const required = key === 'manifests'
+  const label = capitalized(LABELS[key])
+  const answer = await questions.ask(
+    required
+      ? `${label}, paths separated by commas, at least the one of the planned stack, such as package.json`
+      : `${label}, paths separated by commas, or none`,
+    {
+      fallback: current.length > 0 ? current.join(', ') : required ? '' : 'none',
+      check: (value) =>
+        required && wordsOf(value).length === 0 ? 'name at least one dependency file' : null,
+    },
+  )
+  return wordsOf(answer)
 }
 
 /**
@@ -355,6 +375,14 @@ async function askPaths(questions, detection) {
  */
 function isRequired(key) {
   return REQUIRED_COMMANDS.includes(key)
+}
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function capitalized(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /**
