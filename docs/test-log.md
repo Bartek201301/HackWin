@@ -17,6 +17,36 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.5j take: the task prompt leaves out the HTML comments of the issue (PR #155, issue #154)
+
+- Setup: a follow-up for 0.1.0 from `lead-55`'s review of PR #153. PR #153 adds a help comment and a full example task, both HTML comments, to the task issue template, and `take`'s prompt kept HTML comments, so a forgotten help text or example would reach the agent's prompt and the example would read like a second task. The integrator opened #154 for lane B with a worktree `task/154-take-prompt-without-comments` from `df4fb1a`. `lead-55` started the session, reviewed the PR and sent the merge, after #153.
+- What happened:
+  - `issueText` in `src/commands/take/prompt.js` now leaves out every HTML comment outside a fenced code block, on one line or several, with the markers `<!-- hackwin:begin -->` and `<!-- hackwin:end -->`. A line that holds nothing but comments goes too.
+  - The edge cases follow the integrator's reading in the issue:
+    - a comment inside a fenced code block stays;
+    - a fenced block inside a comment goes with it;
+    - a line with visible text keeps its text;
+    - an unclosed `<!--` stays.
+  - The session added one rule, which `lead-55` accepted: a `<!--` inside an inline code span, or after a backslash, is text and stays. Without it, the body of #154 itself would lose visible text in its prompt.
+  - The task block, headings, visible text, code blocks and the Scope change comments are as before. `src/core/tasks` and the task block format did not change.
+  - One test renders an issue body from PR #153's template, with the fields filled and the help, the placeholders and the example left in.
+  - One commit, `6dee5e1`; PR #155 opened at 01:14:07 UTC.
+  - Merged with the procedure of the plan, section 8, after #153.
+    - Steps 1 to 5 passed: 2 files inside issue #154's paths; no secret pattern; no dash; no conflict with `1da4520`.
+    - Step 6, with the PR merged into `1da4520` at a load average of 10.84 with no other vitest process: `npm test` passed 1074 of 1074, and `npm run test:ac -- 1.5j/comments` passed 1.5j/comments 9. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39705688704`, succeeded: both jobs passed 1073 tests and skipped 1 of 1074.
+- Problems: the limits of the code span rule, as the PR names them and `lead-55` asked to record:
+  - a code span is recognized within one line only, so a `<!--` in a span that runs over a line break is treated as a comment;
+  - an indented code block (four spaces) is not treated as code, so a comment in it is left out.
+
+  The tests build the issue body in memory; no real issue on GitHub was read.
+- Workflow notes of the PR:
+  - "The issue had no comments, so no scope change applied."
+  - "The integrator's edge cases do not cover a comment inside an inline code span. I decided it (see above) instead of asking, because the issue's own body shows the case."
+- Measured: PR open 12 min 21 s (01:14:07 to 01:26:28 UTC); 1 commit, 1 PR run (164 s), 0 conflicts; local merge test `npm test` 212.21 s; the run on main after the merge 164 s.
+- Evidence: issue #154; PR https://github.com/Bartek201301/HackWin/pull/155; head `6dee5e1`; merge commit `d1edd83`; runs `39704499988` (PR) and `39705688704` (main).
+
 ### 2026-10-22 · Phase 1 · 1.4n generated files: a guide to the CLI, a task template that knows the team, an allow list (PR #153, issue #146)
 
 - Setup: a builder session of lane A in worktree `task/146-generated-files-guide`, created by the integrator from `a15680c`, beside #145 (lane A, setup). `lead-55` opened the session, reviewed the PR twice and sent the merge. The task is one of the usability tasks of plan decision 14.
