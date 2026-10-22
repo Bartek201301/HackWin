@@ -101,7 +101,7 @@ The data block: `role` is one ownership role; every glob under `paths` lies insi
 
 ## 8. Permission mode of the agent sessions
 
-**Recommended for task sessions: auto mode, or bypass permissions.** With Claude Code's default permissions (Manual mode) the session asks you before every command and edit that no rule allows. The allow list that setup writes into `.claude/settings.json` covers the routine steps: the project's install, check, test and format commands, `git status`, `git diff`, `git log`, `git add`, `git commit`, and `hackwin status`, `take` and `ship`. Every other command and every file edit still asks. Claude Code applies a project's allow list only after you accept the folder's trust dialog.
+**Recommended for task sessions: auto mode, or bypass permissions.** With Claude Code's default permissions (Manual mode) the session asks you before each file edit and each command that is not read-only, unless a rule allows it. The allow list that setup writes into `.claude/settings.json` covers the routine steps: the project's install, check, test and format commands, `git status`, `git diff`, `git log`, `git add`, `git commit`, and `hackwin status`, `take` and `ship`. Every other command and every file edit still asks. Claude Code applies a project's allow list only after you accept the folder's trust dialog.
 
 `hackwin take` starts `claude` without a permission flag, so the session starts in the mode of your own settings. Recent versions of Claude Code start a terminal session in auto mode. If yours starts in Manual mode, press Shift+Tab in the session to switch, or set the mode in your own `~/.claude/settings.json`:
 
