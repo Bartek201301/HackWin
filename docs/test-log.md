@@ -17,6 +17,43 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.4m setup: plain questions, friendly event times, a message per member, clear next steps (PR #152, issue #145)
+
+- Setup: a builder session of lane A in worktree `task/145-setup-plain-questions`, created by the integrator from `a15680c`, at the same time as #146 (lane A, the generated files), #147 (lane B) and #148 (lane C). `lead-55` opened the session, reviewed the PR and sent the merge. The task is one of the usability tasks of plan decision 14.
+- What happened:
+  - Each block of setup questions now starts with one plain sentence that says what it decides.
+    - The sessions question asks how many tasks a person can run at the same time, one agent session each.
+    - The stack commands, the smoke test and the path groups show as one block, with one "Keep all of these?".
+    - The answers file and `hackwin.yml` keep their format. The PR's test builds `hackwin.yml` from today's answers files for teams of 1, 3 and 4 and finds it the same as before.
+  - The event start and end also take `YYYY-MM-DD HH:MM`, read in the machine's time zone. setup stores and echoes the ISO value with its offset. A local time that daylight saving time skips is refused with its own message.
+  - For each member who is not the caller, the summary keeps the state line and adds a message to paste into a chat: accept the invitation where GitHub sent one, install the pinned version (`installCommand`), clone, `cd` into the clone and `hackwin join`.
+  - The next steps for the Lead:
+    - the Gate as a line to paste;
+    - the first tasks, from the template or from the planning session;
+    - `hackwin take` with no number;
+    - `docs/hackwin/using-hackwin.md`.
+  - The E3 refusal and `setup --regenerate`'s message for a member without the shared role give the Lead's command as a line to paste.
+  - One commit, `ca47463`; PR #152 opened at 00:38:18 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 13 files inside issue #145's paths; no secret pattern; no dash; no conflict with `a15680c`.
+    - Before step 6 the load average was 39.75, with 23 vitest processes of the #146 and #148 worktrees. On 15 October, step 6 of PR #64 failed at a load of 26. So the integrator waited, and `lead-55` asked the two sessions not to start a full suite.
+    - Step 6 started at 00:44:41 UTC, with the PR merged into `a15680c`, at a load average of 11.08 with no other vitest process. `npm test` passed 1031 of 1031. `npm run test:ac -- 1.4m/questions 1.4m/times 1.4m/members 1.4m/next 1.4m/paste` passed 1.4m/questions 6, 1.4m/times 5, 1.4m/members 3, 1.4m/next 1 and 1.4m/paste 2. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39701808936`, succeeded: both jobs passed 1030 tests and skipped 1 of 1031.
+- Problems:
+  - The PR names these limitations itself:
+    - the E3 refusal and the `--regenerate` message name a directory of the machine where they are shown, so on a builder's machine the line names the builder's path;
+    - the invitation link `<repo url>/invitations` was not opened on live GitHub;
+    - the messages were checked against the fake GitHub only;
+    - until #146 merges, the next steps name a guide that setup does not write.
+  - The integrator waited about 3 minutes for the machine's load before step 6.
+- Workflow notes of the PR:
+  - "The issue had no comments and no "Scope change:"; every file this task needed was in its paths."
+  - "Item 5 asks for the Lead's command as a line to paste in two messages that are shown on the caller's machine. Both name a directory of that machine (see "Remaining limitations"), so for a builder the line is a correct `cd` only on the builder's machine. I kept the directories of before and did not change who the message is for."
+  - "`npm run format -- $FILES` with the file list in a shell variable gave Prettier one argument holding every path, because zsh does not split words; naming the files one by one worked. A few minutes lost."
+- Measured: PR open 9 min 10 s (00:38:18 to 00:47:28 UTC); 1 commit, 1 PR run (136 s), 0 conflicts; local merge test `npm test` 127.85 s; the run on main after the merge 151 s.
+- Evidence: issue #145; PR https://github.com/Bartek201301/HackWin/pull/152; head `ca47463`; merge commit `11c48cb`; runs `39700887333` (PR) and `39701808936` (main).
+
 ### 2026-10-22 · Phase 1 · runIn: one line to paste, `cd <dir> && <command>`, for every run-this message (PR #144, issue #143)
 
 - Setup: a product decision of the Lead for 0.1.0, after the manual check of 0.1.0-pre.2, through `lead-55` on 22 October 2026. The integrator did the task itself in its worktree `task/143-paste-ready-run-lines`, created from `38ba529`. `lead-55` reviewed the PR and sent the merge.
