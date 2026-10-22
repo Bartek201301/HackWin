@@ -24,6 +24,12 @@
 // refuses, "prevents the tool call". An allow rule "must match each subcommand independently" of
 // a command split at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines (section "Compound commands"),
 // so a project command such as `npm run lint && npm test` gets one rule per part.
+//
+// A command that may take arguments gets two allow rules, the bare command and the command
+// followed by ` *`, as the wrappers' `allowed-tools` have them. The page documents that a trailing
+// ` *` that is the rule's only wildcard also matches the bare command (docs/verification.md,
+// question 8), which has not been run in a real session, and a command that holds a `*` of its own
+// does not get that match.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -74,23 +80,17 @@ export const MERGE_RULES = Object.freeze([
 const ALL_BRANCHES = Object.freeze(['--all', '--branches', '--mirror'])
 
 /**
- * The git commands of a task session that the allow list names: reading the state of the
- * worktree, and the commit that comes before `hackwin ship`.
+ * The git commands of a task session that the allow list names, bare and with arguments: reading
+ * the state of the worktree, and the commit that comes before `hackwin ship`.
  */
-export const GIT_RULES = Object.freeze([
-  'Bash(git status *)',
-  'Bash(git diff *)',
-  'Bash(git log *)',
-  'Bash(git add *)',
-  'Bash(git commit *)',
-])
+export const GIT_RULES = Object.freeze(
+  ['git status', 'git diff', 'git log', 'git add', 'git commit'].flatMap(bareAndWithArguments),
+)
 
-/** The HackWin commands of a task session that the allow list names. */
-export const HACKWIN_RULES = Object.freeze([
-  'Bash(hackwin status *)',
-  'Bash(hackwin take *)',
-  'Bash(hackwin ship *)',
-])
+/** The HackWin commands of a task session that the allow list names, bare and with arguments. */
+export const HACKWIN_RULES = Object.freeze(
+  ['hackwin status', 'hackwin take', 'hackwin ship'].flatMap(bareAndWithArguments),
+)
 
 /**
  * The project's commands of hackwin.yml that a task session runs.
@@ -146,7 +146,7 @@ export function denyRules({ defaultBranch }) {
 /**
  * HackWin's entries of `permissions.allow`: the project's commands, run as they are, the test and
  * format commands also with arguments appended; read-only git, `git add` and `git commit`; and
- * `hackwin status`, `take` and `ship`.
+ * `hackwin status`, `take` and `ship`. Every rule that ends in ` *` comes after its bare form.
  * @param {Pick<SettingsInput, 'commands'>} input
  * @returns {string[]}
  */
@@ -172,16 +172,24 @@ function exactRules(command) {
 }
 
 /**
- * One rule for each part of a command; the last part also with arguments appended, which a
- * trailing ` *` covers together with the bare part.
+ * One rule for each part of a command; the last part also with arguments appended.
  * @param {string} command
  * @returns {string[]}
  */
 function withArguments(command) {
   const parts = subcommands(command)
-  return parts.map((part, index) =>
-    index === parts.length - 1 ? `Bash(${part} *)` : `Bash(${part})`,
+  return parts.flatMap((part, index) =>
+    index === parts.length - 1 ? bareAndWithArguments(part) : [`Bash(${part})`],
   )
+}
+
+/**
+ * The rules of a command run bare or with arguments appended.
+ * @param {string} command
+ * @returns {string[]}
+ */
+function bareAndWithArguments(command) {
+  return [`Bash(${command})`, `Bash(${command} *)`]
 }
 
 /**

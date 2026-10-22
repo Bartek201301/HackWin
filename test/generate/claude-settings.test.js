@@ -323,18 +323,33 @@ describe('1.4n/allow: the generated settings allow the routine steps of a task s
     expect(merged(null).permissions.allow).toEqual([
       'Bash(npm ci)',
       'Bash(npm run check)',
+      'Bash(npm test --)',
       'Bash(npm test -- *)',
+      'Bash(npm run format --)',
       'Bash(npm run format -- *)',
+      'Bash(git status)',
       'Bash(git status *)',
+      'Bash(git diff)',
       'Bash(git diff *)',
+      'Bash(git log)',
       'Bash(git log *)',
+      'Bash(git add)',
       'Bash(git add *)',
+      'Bash(git commit)',
       'Bash(git commit *)',
+      'Bash(hackwin status)',
       'Bash(hackwin status *)',
+      'Bash(hackwin take)',
       'Bash(hackwin take *)',
+      'Bash(hackwin ship)',
       'Bash(hackwin ship *)',
     ])
     expect(allowRules(INPUT)).toEqual(expect.arrayContaining([...GIT_RULES, ...HACKWIN_RULES]))
+    // Each rule that ends in ` *` also has its bare form, whether or not a trailing ` *` matches
+    // the bare command (docs/verification.md, question 8), as the wrappers have them.
+    for (const rule of allowRules(INPUT).filter((entry) => entry.endsWith(' *)'))) {
+      expect(allowRules(INPUT), rule).toContain(rule.replace(/ \*\)$/, ')'))
+    }
   })
 
   test('a command made of several commands gets one rule per part, as Claude Code matches each part', () => {
@@ -353,7 +368,9 @@ describe('1.4n/allow: the generated settings allow the routine steps of a task s
       'Bash(npm test 2>&1)',
       'Bash(tee check.log)',
       'Bash(cd web)',
+      'Bash(npx vitest run)',
       'Bash(npx vitest run *)',
+      "Bash(prettier --write --ignore-path '.a;b|c' --log-level=warn)",
       "Bash(prettier --write --ignore-path '.a;b|c' --log-level=warn *)",
     ])
     // A part that two commands share is allowed once.
