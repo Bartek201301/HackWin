@@ -1,8 +1,9 @@
 // The Claude Code settings (6.4, 10.4): `.claude/settings.json` holds HackWin's three hooks, each
-// a single call to `hackwin internal hook <name>`, and the deny rules for reading env files, for
-// `gh pr merge`, for a merge through `gh api` and for pushes to the default branch. The file
-// belongs to the Lead, so it is not a generated file: HackWin adds or replaces only its own keys
-// and list entries and keeps everything else (6.5).
+// a single call to `hackwin internal hook <name>`, the deny rules for reading env files, for
+// `gh pr merge`, for a merge through `gh api` and for pushes to the default branch, and an allow
+// list for the routine steps of a task session, so that a session with prompts on is not asked
+// about them. The file belongs to the Lead, so it is not a generated file: HackWin adds or
+// replaces only its own keys and list entries and keeps everything else (6.5).
 //
 // The deny rules use the patterns of docs/verification.md, row 2: they match the usual
 // spellings of a merge through `gh api`, not every spelling (the gap of 10.6). The PreToolUse
@@ -15,6 +16,14 @@
 // (docs/verification.md, question 8), so a command that ends right where a rule's last literal
 // text ends, such as `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/merge`, has a rule that ends
 // with that text, `Bash(gh api *pulls/*/merge)`, besides the rule for text after it.
+//
+// The allow list never weakens a refusal. The same page, read 2026-10-22: rules are evaluated
+// "deny, then ask, then allow", "An allow rule can't carve an exception out of a deny rule", and
+// "A blocking hook also takes precedence over allow rules"; https://code.claude.com/docs/en/hooks,
+// read 2026-10-22: a PreToolUse `permissionDecision` of `"deny"`, with which the PreToolUse hook
+// refuses, "prevents the tool call". An allow rule "must match each subcommand independently" of
+// a command split at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines (section "Compound commands"),
+// so a project command such as `npm run lint && npm test` gets one rule per part.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -65,9 +74,39 @@ export const MERGE_RULES = Object.freeze([
 const ALL_BRANCHES = Object.freeze(['--all', '--branches', '--mirror'])
 
 /**
+ * The git commands of a task session that the allow list names: reading the state of the
+ * worktree, and the commit that comes before `hackwin ship`.
+ */
+export const GIT_RULES = Object.freeze([
+  'Bash(git status *)',
+  'Bash(git diff *)',
+  'Bash(git log *)',
+  'Bash(git add *)',
+  'Bash(git commit *)',
+])
+
+/** The HackWin commands of a task session that the allow list names. */
+export const HACKWIN_RULES = Object.freeze([
+  'Bash(hackwin status *)',
+  'Bash(hackwin take *)',
+  'Bash(hackwin ship *)',
+])
+
+/**
+ * The project's commands of hackwin.yml that a task session runs.
+ * @typedef {object} ProjectCommands
+ * @property {string} install
+ * @property {string} check
+ * @property {string} test Runs the test files or ids appended as arguments.
+ * @property {string} format Formats the files appended as arguments.
+ */
+
+/**
  * What the settings are rendered from.
  * @typedef {object} SettingsInput
  * @property {string} defaultBranch `project.default_branch` of hackwin.yml.
+ * @property {ProjectCommands} [commands] `commands` of hackwin.yml; without them the allow list
+ *   holds only the git and HackWin entries.
  */
 
 /**
@@ -105,6 +144,81 @@ export function denyRules({ defaultBranch }) {
 }
 
 /**
+ * HackWin's entries of `permissions.allow`: the project's commands, run as they are, the test and
+ * format commands also with arguments appended; read-only git, `git add` and `git commit`; and
+ * `hackwin status`, `take` and `ship`.
+ * @param {Pick<SettingsInput, 'commands'>} input
+ * @returns {string[]}
+ */
+export function allowRules({ commands }) {
+  const project = commands
+    ? [
+        ...exactRules(commands.install),
+        ...exactRules(commands.check),
+        ...withArguments(commands.test),
+        ...withArguments(commands.format),
+      ]
+    : []
+  return [...new Set([...project, ...GIT_RULES, ...HACKWIN_RULES])]
+}
+
+/**
+ * One rule for each part of a command, each run as it is.
+ * @param {string} command
+ * @returns {string[]}
+ */
+function exactRules(command) {
+  return subcommands(command).map((part) => `Bash(${part})`)
+}
+
+/**
+ * One rule for each part of a command; the last part also with arguments appended, which a
+ * trailing ` *` covers together with the bare part.
+ * @param {string} command
+ * @returns {string[]}
+ */
+function withArguments(command) {
+  const parts = subcommands(command)
+  return parts.map((part, index) =>
+    index === parts.length - 1 ? `Bash(${part} *)` : `Bash(${part})`,
+  )
+}
+
+/**
+ * The text at the start of a command line that stays in its part: a quoted string, an escaped
+ * character, a redirection such as `2>&1` or `&>`, or any other character but a separator.
+ */
+const PART_TEXT = /'[^']*'?|"(?:\\.|[^"\\])*"?|\\.|[<>]&|&>|>\||[^;&|\n]/sy
+
+/** The separators of subcommands: `&&`, `||`, `|&`, `;`, `&`, `|` and newlines. */
+const SEPARATOR = /&&|\|\||\|&|[;&|\n]/y
+
+/**
+ * The parts of a command line as Claude Code splits it for its allow rules: at each separator
+ * outside quotes. Each part is trimmed; an empty one is dropped.
+ * @param {string} command
+ * @returns {string[]}
+ */
+function subcommands(command) {
+  const parts = ['']
+  let at = 0
+  while (at < command.length) {
+    PART_TEXT.lastIndex = at
+    const text = PART_TEXT.exec(command)
+    if (text !== null) {
+      parts[parts.length - 1] += text[0]
+      at = PART_TEXT.lastIndex
+      continue
+    }
+    SEPARATOR.lastIndex = at
+    SEPARATOR.exec(command)
+    parts.push('')
+    at = SEPARATOR.lastIndex
+  }
+  return parts.map((part) => part.trim()).filter((part) => part !== '')
+}
+
+/**
  * The command of a HackWin hook.
  * @param {string} hook
  * @returns {string}
@@ -115,9 +229,10 @@ export function hookCommand(hook) {
 
 /**
  * Merge HackWin's keys and list entries into the text of an existing settings file (6.5):
- * every missing HackWin deny rule is appended to `permissions.deny`, and every HackWin hook
- * handler, a command that starts with `hackwin internal hook`, is replaced by the current one,
- * in the place of the first one it replaces. Every other key, rule and hook stays as it is.
+ * every missing HackWin rule is appended to `permissions.allow` or `permissions.deny`, and every
+ * HackWin hook handler, a command that starts with `hackwin internal hook`, is replaced by the
+ * current one, in the place of the first one it replaces. Every other key, rule and hook stays as
+ * it is.
  * @param {string | null} text The existing file, or null when there is none.
  * @param {SettingsInput} input
  * @returns {string} The new file, formatted with two spaces.
@@ -125,11 +240,15 @@ export function hookCommand(hook) {
 export function mergeClaudeSettings(text, input) {
   const settings = parseSettings(text)
   const permissions = objectAt(settings, 'permissions')
+  const allow = arrayAt(permissions, 'allow', 'permissions.allow')
   const deny = arrayAt(permissions, 'deny', 'permissions.deny')
-  const missing = denyRules(input).filter((rule) => !deny.includes(rule))
   const merged = {
     ...settings,
-    permissions: { ...permissions, deny: [...deny, ...missing] },
+    permissions: {
+      ...permissions,
+      allow: [...allow, ...allowRules(input).filter((rule) => !allow.includes(rule))],
+      deny: [...deny, ...denyRules(input).filter((rule) => !deny.includes(rule))],
+    },
     hooks: mergeHooks(objectAt(settings, 'hooks')),
   }
   return `${JSON.stringify(merged, null, 2)}\n`

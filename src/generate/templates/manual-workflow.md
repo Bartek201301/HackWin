@@ -1,5 +1,7 @@
 # The HackYeah method by hand
 
+This is the method without the HackWin CLI. A team that uses the CLI follows `using-hackwin.md` instead, where `hackwin take` composes the prompt, `hackwin ship` opens the pull request and the Gate merges.
+
 This guide runs the method of HackYeah 2026 with nothing but this template, GitHub issues, `git`, `gh` and each member's agent. Read `before-the-event.md` first.
 
 The method in one paragraph: every directory has one ownership role, and every role has one holder. The Lead holds the shared role and plans. Work is written as task issues; each builder turns a task into a prompt on their own machine and runs it in a fresh agent session in its own worktree. A finished task becomes one small pull request. Only the Lead merges, one pull request at a time, after a merge test on the newest main, from a terminal that is not the planning conversation.

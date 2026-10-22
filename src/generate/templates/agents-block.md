@@ -16,7 +16,7 @@ The project language is {{language}}. Use it for code, commits, issues and pull 
 ## Tasks, branches and worktrees
 
 - One task is one GitHub issue and one pull request.
-- `hackwin take <issue>` creates the worktree of a task, on its own branch `task/<issue>-<slug>` from the current `origin/{{branch}}`. Work only in that worktree.
+- `hackwin take [<issue>]` creates the worktree of a task, on its own branch `task/<issue>-<slug>` from the current `origin/{{branch}}`. The issue number is optional: without it, `hackwin take` takes the next task of the caller's roles. Work only in that worktree.
 - Run every command in the directory your instructions name. A session that works on a task stays in the worktree of that task: never in the main checkout, never in another worktree. Only the Lead's planning session works in the main checkout. Every HackWin message that tells you to run something names the directory.
 - Bring `{{branch}}` into your branch by merging `origin/{{branch}}`. Never rebase, never force push.
 - Format only the files you changed.

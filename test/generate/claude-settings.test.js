@@ -5,15 +5,18 @@ import { join } from 'node:path'
 import { PreconditionError } from '../../src/core/runtime/errors.js'
 import {
   CLAUDE_HOOKS,
+  GIT_RULES,
+  HACKWIN_RULES,
   MERGE_RULES,
   SETTINGS_PATH,
+  allowRules,
   denyRules,
   mergeClaudeSettings,
   writeClaudeSettings,
 } from '../../src/generate/index.js'
-import { nodeProjectFiles } from '../harness/index.js'
+import { hackwinObject, nodeProjectFiles } from '../harness/index.js'
 
-const INPUT = { defaultBranch: 'main' }
+const INPUT = { defaultBranch: 'main', commands: hackwinObject(3).commands }
 
 /** @type {string[]} */
 const dirs = []
@@ -127,7 +130,7 @@ describe('1.4c/settings: HackWin keeps the existing content of .claude/settings.
     expect(result.env).toEqual({ FEATURE_FLAG: '1' })
     expect(result.statusLine).toEqual(existing.statusLine)
     expect(result.permissions).toEqual({
-      allow: ['Bash(npm test *)'],
+      allow: ['Bash(npm test *)', ...allowRules(INPUT)],
       deny: [
         'Read(./secrets/**)',
         'Read(./.env)',
@@ -163,7 +166,10 @@ describe('1.4c/settings: HackWin keeps the existing content of .claude/settings.
   })
 
   test("without a file the settings hold only HackWin's keys, and the file is written once", async () => {
-    expect(merged(null)).toEqual({ permissions: { deny: denyRules(INPUT) }, hooks: HACKWIN_HOOKS })
+    expect(merged(null)).toEqual({
+      permissions: { allow: allowRules(INPUT), deny: denyRules(INPUT) },
+      hooks: HACKWIN_HOOKS,
+    })
     const root = mkdtempSync(join(tmpdir(), 'hackwin-settings-'))
     dirs.push(root)
 
@@ -181,6 +187,7 @@ describe('1.4c/settings: HackWin keeps the existing content of .claude/settings.
       ['[]', 'must hold a JSON object'],
       ['{ "permissions": [] }', 'permissions must be an object'],
       ['{ "permissions": { "deny": "Bash(rm *)" } }', 'permissions.deny must be a list'],
+      ['{ "permissions": { "allow": "Bash(ls *)" } }', 'permissions.allow must be a list'],
       ['{ "hooks": { "PreToolUse": {} } }', 'hooks.PreToolUse must be a list'],
     ]) {
       let error
@@ -280,5 +287,104 @@ describe('1.4g/regenerate: the deny rules that setup --regenerate writes', () =>
     expect(deniedBy(rules, 'gh api -X PUT repos/{owner}/{repo}/pulls/14/merge')).toEqual([
       'Bash(gh api *pulls/*/merge)',
     ])
+  })
+})
+
+/**
+ * The forms that the deny rules cover, as docs/verification.md row 2 lists them for the default
+ * branch `main`: those of its second column and, in the last three, those that a rule covers only
+ * if a `*` matches empty text (its third column).
+ */
+const DENIED_FORMS = [
+  'gh pr merge 14 --merge --match-head-commit 0123456789abcdef0123456789abcdef01234567',
+  'gh pr merge',
+  'gh api -X PUT repos/acme/app/pulls/14/merge',
+  'gh api --method PUT repos/acme/app/pulls/14/merge',
+  'gh api repos/acme/app/pulls/14/merge -X PUT -f merge_method=merge',
+  'gh api -X PUT "repos/acme/app/pulls/14/merge"',
+  `gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: "PR_1"}) { clientMutationId } }'`,
+  'git push origin main',
+  'git push --force origin main',
+  'git push origin main --force-with-lease',
+  'git push origin HEAD:main',
+  'git push origin HEAD:main --force',
+  'git push origin +main',
+  'git push origin HEAD:refs/heads/main',
+  'git push --all origin',
+  'git push --all',
+  'git push origin --all',
+  'git push backup --mirror',
+  'git push origin --branches --force',
+  'git push -f --all origin',
+]
+
+describe('1.4n/allow: the generated settings allow the routine steps of a task session', () => {
+  test("the allow list holds the project's commands, read-only git, git add and commit, and hackwin status, take and ship", () => {
+    expect(merged(null).permissions.allow).toEqual([
+      'Bash(npm ci)',
+      'Bash(npm run check)',
+      'Bash(npm test -- *)',
+      'Bash(npm run format -- *)',
+      'Bash(git status *)',
+      'Bash(git diff *)',
+      'Bash(git log *)',
+      'Bash(git add *)',
+      'Bash(git commit *)',
+      'Bash(hackwin status *)',
+      'Bash(hackwin take *)',
+      'Bash(hackwin ship *)',
+    ])
+    expect(allowRules(INPUT)).toEqual(expect.arrayContaining([...GIT_RULES, ...HACKWIN_RULES]))
+  })
+
+  test('a command made of several commands gets one rule per part, as Claude Code matches each part', () => {
+    const commands = {
+      install: 'rm -rf node_modules && npm ci',
+      check: 'npm run lint && npm run typecheck || exit 1; npm test 2>&1 | tee check.log',
+      test: 'cd web && npx vitest run',
+      format: "prettier --write --ignore-path '.a;b|c' --log-level=warn",
+    }
+    expect(allowRules({ commands }).slice(0, -GIT_RULES.length - HACKWIN_RULES.length)).toEqual([
+      'Bash(rm -rf node_modules)',
+      'Bash(npm ci)',
+      'Bash(npm run lint)',
+      'Bash(npm run typecheck)',
+      'Bash(exit 1)',
+      'Bash(npm test 2>&1)',
+      'Bash(tee check.log)',
+      'Bash(cd web)',
+      'Bash(npx vitest run *)',
+      "Bash(prettier --write --ignore-path '.a;b|c' --log-level=warn *)",
+    ])
+    // A part that two commands share is allowed once.
+    const same = { install: 'npm ci', check: 'npm ci && npm test', test: 'npm test', format: 'x' }
+    expect(allowRules({ commands: same }).filter((rule) => rule === 'Bash(npm ci)')).toHaveLength(1)
+  })
+
+  test('every deny rule and hook stays, and no allow entry matches a command that a deny rule matches', () => {
+    const settings = merged(null)
+    expect(settings.permissions.deny).toEqual(denyRules(INPUT))
+    expect(settings.hooks).toEqual(HACKWIN_HOOKS)
+    for (const command of DENIED_FORMS) {
+      // Each form is denied, at least where a * matches empty text (verification.md, question 8) ...
+      expect(
+        deniedBy(settings.permissions.deny, command, { emptyMatch: true }),
+        command,
+      ).not.toEqual([])
+      // ... and no allow entry matches it, whether or not a * matches empty text.
+      expect(notDeniedBy(settings.permissions.allow, command), command).toBe(true)
+    }
+  })
+
+  test("merging keeps the user's own allow entries first and adds only the missing ones", () => {
+    const own = ['Bash(make demo)', 'Bash(git status *)', 'WebFetch(domain:example.com)']
+    const result = merged(JSON.stringify({ permissions: { allow: own } }))
+    expect(result.permissions.allow).toEqual([
+      ...own,
+      ...allowRules(INPUT).filter((rule) => rule !== 'Bash(git status *)'),
+    ])
+    expect(mergeClaudeSettings(JSON.stringify(result), INPUT)).toBe(
+      `${JSON.stringify(result, null, 2)}\n`,
+    )
   })
 })

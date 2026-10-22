@@ -35,6 +35,7 @@ import {
   linkOn,
   mergeClaudeSettings,
   planBlockFiles,
+  projectInput,
   refuseLinks,
   withCliVersion,
   writeClaudeSettings,
@@ -72,8 +73,7 @@ export async function regenerate(ctx) {
 
   const root = ctx.repoRoot
   const read = (/** @type {string} */ path) => readTextSync(join(root, path))
-  const defaultBranch = proposed.hackwin.project.default_branch
-  const input = { defaultBranch, language: proposed.hackwin.project.language }
+  const input = projectInput(proposed)
   const hackwin = withCliVersion(/** @type {string} */ (read(HACKWIN_FILE)), ctx.version)
   validateConfig(
     parseHackwinConfig(hackwin),
@@ -84,7 +84,7 @@ export async function regenerate(ctx) {
   for (const { path } of PROJECT_FILES) links.set(path, await linkOn(root, path))
   const blocks = planBlockFiles(read, input, (path) => links.get(path) ?? null)
   const settings = read(SETTINGS_PATH)
-  const settingsChange = mergeClaudeSettings(settings, { defaultBranch }) !== settings
+  const settingsChange = mergeClaudeSettings(settings, input) !== settings
   const pinChange = hackwin !== read(HACKWIN_FILE)
   await refuseLinks(root, [
     ...MANIFEST.map((file) => file.path),
@@ -96,7 +96,7 @@ export async function regenerate(ctx) {
   let changed = []
   try {
     await writeGeneratedFiles(root, { version: ctx.version })
-    await writeClaudeSettings(root, { defaultBranch })
+    await writeClaudeSettings(root, input)
     await writeBlocks(root, blocks)
     if (pinChange) await writeText(root, HACKWIN_FILE, hackwin)
     changed = await changedPaths(ctx.git)

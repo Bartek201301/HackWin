@@ -9,10 +9,13 @@ import { undo } from '../../../src/commands/setup/regenerate.js'
 import {
   MANIFEST,
   SETTINGS_PATH,
+  allowRules,
   denyRules,
   mergeClaudeSettings,
   planProjectFiles,
+  projectInput,
   renderAgentsBlock,
+  renderTaskTemplate,
   staleGeneratedFiles,
   writeGeneratedFiles,
 } from '../../../src/generate/index.js'
@@ -44,7 +47,7 @@ const ADDED_RULES = [
   'Bash(git push *--mirror)',
 ]
 
-const INPUT = { defaultBranch: 'main', language: 'en' }
+const INPUT = projectInput({ hackwin: hackwinObject(3), owners: ownersObject() })
 
 /** hackwin.yml of a team of three pinned to a version, with a comment of the Lead's. */
 function hackwinText(version) {
@@ -65,13 +68,19 @@ const OLD_AGENTS = [
   '',
 ].join('\n')
 
-/** .claude/settings.json of the earlier release, with the Lead's own key and rule. */
-function oldSettings() {
+/**
+ * .claude/settings.json of the earlier release, with the Lead's own key and rule. That release
+ * wrote no allow list (#146); `allow` gives the Lead's own allow entries.
+ * @param {{ allow?: string[] }} [options]
+ */
+function oldSettings({ allow } = {}) {
   const own = { model: 'opus', permissions: { deny: ['Bash(rm -rf /*)'] } }
   const settings = JSON.parse(mergeClaudeSettings(JSON.stringify(own), INPUT))
   settings.permissions.deny = settings.permissions.deny.filter(
     (/** @type {string} */ rule) => !ADDED_RULES.includes(rule),
   )
+  if (allow) settings.permissions.allow = allow
+  else delete settings.permissions.allow
   return `${JSON.stringify(settings, null, 2)}\n`
 }
 
@@ -111,12 +120,14 @@ function taskBody(role, paths) {
  * @param {string} [options.role] The role of the task.
  * @param {Record<string, string>} [options.branchFiles] A commit of these files on the task branch.
  * @param {Record<string, string>} [options.mainFiles] More files of the release's commit on main.
+ * @param {string} [options.settings] .claude/settings.json on main.
  */
 async function createProject({
   pinned = LOWER,
   role = 'shared',
   branchFiles,
   mainFiles = {},
+  settings = oldSettings(),
 } = {}) {
   const setup = await createSetupFixture({
     nodeProject: false,
@@ -132,7 +143,7 @@ async function createProject({
     push: true,
     files: {
       'AGENTS.md': OLD_AGENTS,
-      [SETTINGS_PATH]: oldSettings(),
+      [SETTINGS_PATH]: settings,
       '.gitignore': /** @type {string} */ (current['.gitignore']),
       '.github/pull_request_template.md': /** @type {string} */ (
         current['.github/pull_request_template.md']
@@ -223,6 +234,8 @@ describe('1.4g/regenerate: setup --regenerate in a task worktree of the shared r
     expect(settings.permissions.deny[0]).toBe('Bash(rm -rf /*)')
     expect(settings.permissions.deny).toEqual(expect.arrayContaining(denyRules(INPUT)))
     expect(settings.permissions.deny.slice(-ADDED_RULES.length)).toEqual(ADDED_RULES)
+    // The allow list, which the earlier release did not write (#146).
+    expect(settings.permissions.allow).toEqual(allowRules(INPUT))
     // Files that hold no block, or do not exist, stay as they are: no document is created.
     expect(existsSync(join(worktree.path, '.github/ISSUE_TEMPLATE/hackwin-task.md'))).toBe(false)
     expect(existsSync(join(worktree.path, 'docs/hackwin/documents.md'))).toBe(false)
@@ -435,5 +448,39 @@ describe('AC77/regenerate: setup --regenerate run with a CLI of another phase ex
     expect(await project.worktree.git.revParse('HEAD')).toBe(head)
     expect(await project.worktree.git.isClean()).toBe(true)
     expect(await staleGeneratedFiles(project.worktree.path, { version: LOWER })).toEqual([])
+  })
+})
+
+describe('1.4n/allow: setup --regenerate and the allow list', () => {
+  test("1.4n/allow: setup --regenerate keeps the Lead's own allow entries and adds the missing ones", async () => {
+    const own = ['Bash(make demo)', 'Bash(git status *)']
+    const project = await createProject({ settings: oldSettings({ allow: own }) })
+    const result = await regenerate(project)
+    expect(result.code).toBe(0)
+    const settings = JSON.parse(readFileSync(join(project.worktree.path, SETTINGS_PATH), 'utf8'))
+    expect(settings.permissions.allow).toEqual([
+      ...own,
+      ...allowRules(INPUT).filter((rule) => !own.includes(rule)),
+    ])
+    expect(settings.permissions.deny[0]).toBe('Bash(rm -rf /*)')
+    expect(settings.permissions.deny).toEqual(expect.arrayContaining(denyRules(INPUT)))
+  })
+})
+
+describe('1.4n/task-template: setup --regenerate and the task issue template', () => {
+  test("1.4n/task-template: setup --regenerate writes the template's block from the branch's hackwin.yml and owners.yml", async () => {
+    const path = '.github/ISSUE_TEMPLATE/hackwin-task.md'
+    const release1 = nodeProjectFiles()[path]
+    const project = await createProject({ mainFiles: { [path]: release1 } })
+    const { worktree } = project
+    const result = await regenerate(project)
+    expect(result.code).toBe(0)
+    expect(await changedBy(worktree.git, await worktree.git.revParse('HEAD'))).toContain(path)
+    const block = renderTaskTemplate(INPUT).block
+    expect(block).toContain('deadline: "2026-10-25T15:00:00+02:00"')
+    expect(block).toContain('  - counter: "src/features/counter/**"\n')
+    expect(readFileSync(join(worktree.path, path), 'utf8')).toBe(
+      release1.replace(/<!-- hackwin:begin -->[\s\S]*<!-- hackwin:end -->/, () => block),
+    )
   })
 })

@@ -157,8 +157,10 @@ describe('1.4d/bootstrap: the commit holds only what setup writes, and no secret
     })
     const result = await runSetup(fixture, fake, { answers })
     expect(result.code).toBe(1)
-    expect(result.stderr).toContain('setup would commit a secret; it stopped before the commit')
+    // The allow list of the settings repeats the check command (#146), so the secret is in two files.
+    expect(result.stderr).toContain('setup would commit 2 secrets; it stopped before the commit')
     expect(result.stderr).toMatch(/hackwin\.yml:\d+: github-token/)
+    expect(result.stderr).toMatch(/\.claude\/settings\.json:\d+: github-token/)
     expect(result.stderr).not.toContain(TOKEN)
     expect(await state(fixture)).toEqual(before)
     expect(writes(fake)).toEqual([])
