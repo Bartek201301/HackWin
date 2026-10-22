@@ -50,12 +50,14 @@ git clone <repository URL>
 cd <repository> && hackwin join        # prepares this machine
 ```
 
-Then everyone, again and again, in the main checkout of their clone:
+Then everyone, again and again:
 
 ```sh
-hackwin take     # takes the next task of your roles and starts your agent in its worktree
-                 # work with your agent; it commits
-hackwin ship     # checks, pushes and opens the pull request; the Gate merges it
+# in the main checkout of your clone:
+hackwin take     # takes the next task of your roles and starts your agent in the task's worktree
+# in the task's worktree, where the agent session runs; the agent works and commits:
+hackwin ship     # or /ship in the session: checks, pushes and opens the pull request; the Gate merges it
+# in the main checkout:
 hackwin status   # who does what, what waits for the Gate, what is blocked
 ```
 
@@ -82,7 +84,7 @@ hackwin status   # who does what, what waits for the Gate, what is blocked
 
 1. **Take.** In the main checkout, `hackwin take` with no number takes the next task of your roles: the first task of your queue that passes every check. It says which tasks it skipped and why. `hackwin take <N>` takes task N. Either way it claims the issue, creates the worktree and its branch `task/<N>-<slug>` from the current main, and starts your agent with a prompt built from the issue.
 2. **Work.** Your agent works in the worktree, on the paths of the task's role, and commits.
-3. **Ship.** `hackwin ship`, or `/ship` in the session, merges main into the branch, runs every check of the project and the task's acceptance tests, pushes the branch, and opens the pull request with `Closes #<N>`. It fills in the pull request what it checked, reports on the issue and stops. When a check fails, fix it in your own files, commit and ship again.
+3. **Ship.** In the task's worktree, `hackwin ship`, or `/ship` in the agent's session there, merges main into the branch, runs every check of the project and the task's acceptance tests, pushes the branch, and opens the pull request with `Closes #<N>`. It fills in the pull request what it checked, reports on the issue and stops. When a check fails, fix it in your own files, commit and ship again.
 4. **Merge.** The Gate merges the pull request and the issue closes. Close the session and run `hackwin take` again; it removes the worktree of the merged task.
 
 In Claude Code, `/take`, `/ship`, `/status` and `/gate` run the same commands as the terminal. `/gate` refuses inside a session: the Gate runs only in a terminal of its own.
