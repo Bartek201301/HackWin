@@ -152,14 +152,14 @@ describe('AC1: setup configures the repository and GitHub', () => {
     expect(lines).toContain('push protection: on')
     expect(lines).toContain(`Lead (${LEAD}): joined on this machine`)
     for (const login of [BUILDER1, BUILDER2]) {
-      expect(lines).toMatch(
-        new RegExp(
-          `\\(${login}\\): run \`hackwin join\` in the main checkout of their clone of ${url}`,
-        ),
-      )
+      expect(lines).toContain(`(${login}): send them this message:`)
     }
-    expect(lines).toContain(`run \`cd ${fixture.main} && hackwin gate\`, in a separate terminal`)
-    expect(lines).toContain('write the first tasks by hand')
+    expect(lines).toContain(`git clone ${url}`)
+    expect(lines).toContain('cd app && hackwin join')
+    expect(lines).toContain(
+      `start the Gate in a terminal of its own and leave it open: run \`cd ${fixture.main} && hackwin gate\``,
+    )
+    expect(lines).toContain('write the first tasks as issues from the template "HackWin task"')
     expect(lines).toContain('send .env.local to each member over a private channel')
     expect(json.data.protection.state).toBe('full-restricted')
     expect(json.data.pushProtection.on).toBe(true)
@@ -228,7 +228,10 @@ describe('AC6: setup --resume finishes an interrupted setup and creates nothing 
     expect(result.stdout).toContain('labels: 0 created, 24 were there already')
     expect(result.stdout).toContain(`invited earlier, not accepted yet: ${BUILDER2}`)
     expect(result.stdout).toContain(
-      `Builder Two (${BUILDER2}): accept the invitation GitHub sent, then run \`hackwin join\``,
+      `Builder Two (${BUILDER2}): GitHub sent them an invitation; send them this message:`,
+    )
+    expect(result.stdout).toContain(
+      `1. Accept the invitation to hackwin-test/app that GitHub sent you: https://github.com/hackwin-test/app/invitations`,
     )
     expect((await readProtection(leadClient(fake))).state).toBe('full-restricted')
     expect(isJoinComplete(await readLocal(join(fixture.main, '.git')), LEAD)).toBe(true)

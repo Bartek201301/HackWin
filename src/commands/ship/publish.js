@@ -4,6 +4,7 @@
 // pull request or writes a second report (CM3). A failure in these steps exits 3.
 
 import { parseTaskLink, setTaskStatus } from '../../core/tasks/index.js'
+import { HTML_MARKERS } from '../../generate/blocks.js'
 import { PUBLISH_STEPS, STEPS, listOf, plural, progress, publishing, seconds } from './steps.js'
 
 /** @import { CommandContext } from '../../cli/context.js' */
@@ -20,6 +21,31 @@ export const TEMPLATE_PATH = '.github/pull_request_template.md'
 
 /** The line of the template that `ship` fills with the task: exactly `Closes #`. */
 const EMPTY_CLOSES_LINE = /^Closes #[ \t]*(\r?)$/
+
+/** A line without its trailing spaces and tabs, and the `\r` of a CRLF line ending. */
+const LINE_END = /^(.*?)[ \t]*(\r?)$/
+
+/** The role line of HackWin's block: empty as in the template, or with one role name. */
+const ROLE_LINE = /^- Ownership role:(?:[ \t]+[A-Za-z0-9][A-Za-z0-9._-]*)?$/
+
+/** A verification line of HackWin's block, ticked or not. */
+const CHECKBOX_LINE = /^- \[[ xX]\] (.*)$/
+
+/** The start of the acceptance line of HackWin's block, after its checkbox. */
+const ACCEPTANCE = 'Acceptance tests of the task passed:'
+
+/** What follows `ACCEPTANCE`: nothing, as in the template, or what `ship` writes there. */
+const ACCEPTANCE_TAIL = /^(?:| the task names none| `[^`]+`(?:, `[^`]+`)*)$/
+
+/**
+ * What `ship` vouches for in the body of the task's pull request (contracts 5.5).
+ * @typedef {object} BodyFacts
+ * @property {string} role The ownership role of the task.
+ * @property {string} mainRef `origin/<default branch>`, which step 2 merged into the head commit.
+ * @property {string[]} passed The steps that passed on the head commit, by their names in
+ *   `STEPS`.
+ * @property {string[]} tests The acceptance tests of the task, which step 8 ran.
+ */
 
 /**
  * @typedef {object} OpenedPull
@@ -58,7 +84,7 @@ export async function publish(ctx, worktree, synced, checked) {
     pushBranch(ctx, worktree, synced.head),
   )
   const pull = await publishing(PUBLISH_STEPS.pull, dir, () =>
-    openPullRequest(ctx, worktree, synced),
+    openPullRequest(ctx, worktree, synced, checked),
   )
   const report = await publishing(PUBLISH_STEPS.report, dir, () =>
     reportOnIssue(ctx, synced, checked, pull.pull),
@@ -94,6 +120,93 @@ export function pullRequestBody(template, issue) {
   if (index === -1) return `${closes}\n\n${template}`
   lines[index] = lines[index].replace(EMPTY_CLOSES_LINE, `${closes}$1`)
   return lines.join('\n')
+}
+
+/**
+ * A pull request body with what `ship` vouches for filled in (contracts 5.5): in HackWin's block
+ * of the template, the ownership role of the task, a tick on each verification line whose step
+ * passed on the head commit, and the acceptance tests. Only a line as the template has it, or as
+ * `ship` filled it before, is filled; every other line stays as it is, and so does a body
+ * without HackWin's block. The same facts give the same body, so a body filled for an earlier
+ * head commit gets the facts of the new one.
+ * @param {string} body
+ * @param {BodyFacts} facts
+ * @returns {string}
+ */
+export function fillPullRequestBody(body, facts) {
+  const lines = body.split('\n')
+  const begin = lines.findIndex((line) => line.trim() === HTML_MARKERS.begin)
+  const end =
+    begin === -1
+      ? -1
+      : lines.findIndex((line, index) => index > begin && line.trim() === HTML_MARKERS.end)
+  if (end === -1) return body
+  for (let index = begin + 1; index < end; index += 1) {
+    lines[index] = fillLine(lines[index], facts)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * One line of HackWin's block, filled when `ship` vouches for it.
+ * @param {string} line
+ * @param {BodyFacts} facts
+ * @returns {string}
+ */
+function fillLine(line, { role, mainRef, passed, tests }) {
+  const match = LINE_END.exec(line)
+  if (match === null) return line
+  const [, text, cr] = match
+  if (ROLE_LINE.test(text)) return `- Ownership role: ${role}${cr}`
+  const item = CHECKBOX_LINE.exec(text)?.[1]
+  if (item === undefined) return line
+  if (item.startsWith(ACCEPTANCE)) {
+    if (!passed.includes('acceptance') || !ACCEPTANCE_TAIL.test(item.slice(ACCEPTANCE.length))) {
+      return line
+    }
+    const named =
+      tests.length === 0 ? 'the task names none' : tests.map((test) => `\`${test}\``).join(', ')
+    return `- [x] ${ACCEPTANCE} ${named}${cr}`
+  }
+  const step = verificationLines(mainRef).get(item)
+  return step !== undefined && passed.includes(step) ? `- [x] ${item}${cr}` : line
+}
+
+/**
+ * The verification lines of HackWin's block that a step vouches for, after their checkbox, with
+ * the name of that step in `STEPS`. The merge line names the default branch, so it is not
+ * ticked in a project whose default branch is not the one it names.
+ * @param {string} mainRef
+ * @returns {Map<string, string>}
+ */
+function verificationLines(mainRef) {
+  return new Map([
+    [`Merged the current \`${mainRef}\` into the branch; no rebase, no force push`, 'merge'],
+    ['Full project check passed on the head commit', 'check'],
+    ['Only the changed files were formatted', 'format'],
+    ['No env file and no secret in the added lines', 'secrets'],
+  ])
+}
+
+/**
+ * What `ship` vouches for on the head commit: the role of the task, step 2, the checks that
+ * passed and the acceptance tests of the task. A check record that an earlier `ship` wrote for
+ * the same commit and task stands for its checks (7.9).
+ * @param {Synced} synced
+ * @param {Checked} checked
+ * @returns {BodyFacts}
+ */
+function bodyFacts(synced, checked) {
+  const { block } = synced.task
+  return {
+    role: block.role,
+    mainRef: synced.mainRef,
+    passed: [
+      'merge',
+      ...checked.checks.filter((check) => check.result === 'passed').map((check) => check.name),
+    ],
+    tests: block.acceptance_tests,
+  }
 }
 
 /**
@@ -165,18 +278,21 @@ async function pushBranch(ctx, worktree, head) {
  * request that was closed without a merge is not reused, and neither is one from a fork's branch
  * of the same name: only a head in this repository is the task's branch. An open one gets back
  * what `ship` would have opened it with: ready for review, into the default branch, a body that
- * closes the task.
+ * closes the task, with what `ship` vouches for on the head commit filled in.
  * @param {CommandContext} ctx
  * @param {TaskWorktree} worktree
  * @param {Synced} synced
+ * @param {Checked} checked
  * @returns {Promise<OpenedPull>}
  */
-async function openPullRequest(ctx, worktree, synced) {
+async function openPullRequest(ctx, worktree, synced, checked) {
   const config = /** @type {Config} */ (ctx.config)
   const base = config.hackwin.project.default_branch
   const { branch } = worktree
   const { task } = synced
-  const body = pullRequestBody(await ctx.git.showFile(synced.head, TEMPLATE_PATH), task.number)
+  const facts = bodyFacts(synced, checked)
+  const template = await ctx.git.showFile(synced.head, TEMPLATE_PATH)
+  const body = fillPullRequestBody(pullRequestBody(template, task.number), facts)
   const link = parseTaskLink({ branch, body })
   const repository = (await ctx.github.repository()).nameWithOwner.toLowerCase()
   const open = (await ctx.github.listPullRequests({ state: 'open', head: branch })).filter(
@@ -218,6 +334,12 @@ async function openPullRequest(ctx, worktree, synced) {
     changes.push(
       `body rebuilt from the template, because it did not close the task (${own.reason})`,
     )
+  } else {
+    const filled = fillPullRequestBody(pull.body, facts)
+    if (filled !== pull.body) {
+      update.body = filled
+      changes.push(`body filled in with the role and the checks of ${synced.head}`)
+    }
   }
   if (update.base !== undefined || update.body !== undefined) {
     pull = await ctx.github.updatePullRequest(pull.number, update)

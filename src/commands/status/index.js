@@ -6,6 +6,7 @@
 
 import { RemoteError } from '../../core/runtime/index.js'
 import { writeLastStatus } from '../../core/state/index.js'
+import { mainCheckout } from '../../core/worktrees/index.js'
 import { parseStatusBody } from '../gate/status-issue.js'
 import { localHeartbeatLine, statusLines } from './format.js'
 import { readClone, readGitHub, readLocalHeartbeat } from './read.js'
@@ -35,7 +36,7 @@ export async function run(ctx) {
   const gateStatus = read.statusIssue === null ? null : parseStatusBody(read.statusIssue.body)
   const data = buildStatus({ config, identity, now, ...read, ...clone, gateStatus })
   await recordSeen(ctx, gateStatus?.heartbeat_at ?? null)
-  return { lines: statusLines(data), data }
+  return { lines: statusLines(data, { main: await mainCheckout(ctx.git) }), data }
 }
 
 /**

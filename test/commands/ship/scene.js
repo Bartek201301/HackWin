@@ -1,6 +1,7 @@
 // The scene of the ship tests: a team of 3 on a stand-in project, a joined main checkout, the
 // task issue on a fake GitHub linked to the fixture's origin, and the worktree of the task.
 
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { main } from '../../../src/cli/main.js'
@@ -22,6 +23,12 @@ export const NODE = quoteShellArg(process.execPath)
 
 /** The project's pull request template on main, with the line that ship fills. */
 export const TEMPLATE = '## Task\n\nCloses #\n\n## Notes\n\nnone\n'
+
+/** The pull request template that setup writes, with HackWin's block. */
+export const HACKWIN_TEMPLATE = readFileSync(
+  new URL('../../../src/generate/templates/pull-request-template.md', import.meta.url),
+  'utf8',
+)
 
 // Stand-ins for the project's commands, committed on main under tools/ (a shared path).
 const TOOLS = {
@@ -81,10 +88,13 @@ export const WORK = {
 }
 
 /**
- * The task block of issue 12, in the form of 8.1.
+ * The body of issue 12 with its task block, in the form of 8.1.
  * @param {{ paths?: string[], acceptance_tests?: string[] }} [block]
  */
-function taskBody({ paths = ['src/features/counter/**'], acceptance_tests = [TEST_FILE] } = {}) {
+export function taskBody({
+  paths = ['src/features/counter/**'],
+  acceptance_tests = [TEST_FILE],
+} = {}) {
   const fields = {
     kind: 'task',
     role: 'counter',
@@ -113,6 +123,7 @@ function taskBody({ paths = ['src/features/counter/**'], acceptance_tests = [TES
  *   the stand-ins.
  * @param {Parameters<typeof createFakeGitHub>[0]['pulls']} [options.pulls] Pull requests that
  *   exist before ship runs.
+ * @param {string} [options.template] The project's pull request template on main.
  */
 export async function scene({
   work = WORK,
@@ -123,6 +134,7 @@ export async function scene({
   generate = null,
   commands = {},
   pulls = [],
+  template = TEMPLATE,
 } = {}) {
   const hackwin = hackwinObject(3)
   hackwin.commands = {
@@ -136,7 +148,7 @@ export async function scene({
     ...commands,
   }
   const fixture = await createFixture({
-    files: MAIN_FILES,
+    files: { ...MAIN_FILES, '.github/pull_request_template.md': template },
     config: { hackwin, owners: ownersObject() },
   })
   const joined = await fixture.join(fixture.main, { login: accounts.builder1.login })
@@ -153,18 +165,19 @@ export async function scene({
 /** @typedef {Awaited<ReturnType<typeof scene>>} Scene */
 
 /**
- * Run `hackwin ship` in-process as builder1.
+ * Run `hackwin ship` in-process as builder1. With `tty`, stdin and stdout are terminals, so the
+ * caller kind is `terminal` unless `env` sets HACKWIN_CALLER.
  * @param {Scene} s
- * @param {{ cwd?: string, json?: boolean }} [options]
+ * @param {{ cwd?: string, json?: boolean, env?: Record<string, string>, tty?: boolean }} [options]
  */
-export async function ship(s, { cwd = s.worktree.path, json = false } = {}) {
+export async function ship(s, { cwd = s.worktree.path, json = false, env = {}, tty = false } = {}) {
   let stdout = ''
   let stderr = ''
   const code = await main(json ? ['ship', '--json'] : ['ship'], {
     cwd,
-    env: s.env,
-    stdin: Readable.from([]),
-    stdout: { write: (text) => (stdout += text) },
+    env: { ...s.env, ...env },
+    stdin: Object.assign(Readable.from([]), { isTTY: tty }),
+    stdout: { write: (text) => (stdout += text), isTTY: tty },
     stderr: { write: (text) => (stderr += text) },
     ghExecutor: s.fake.as(accounts.builder1.login),
   })

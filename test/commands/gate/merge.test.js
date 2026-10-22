@@ -9,6 +9,7 @@ import { deletableBranch } from '../../../src/commands/gate/merge.js'
 import { quoteShellArg } from '../../../src/core/runtime/index.js'
 import { ONE_APPROVAL } from '../../core/protection/rulesets.js'
 import { httpError, rawResult } from '../../harness/index.js'
+import { fixedClock, runStatus } from '../status/helpers.js'
 import { BUILDER1, BUILDER2, LEAD, createScene, task } from './scene.js'
 
 /** @typedef {import('./scene.js').Scene} Scene */
@@ -433,7 +434,7 @@ describe('AC29: gated paths in version 1', () => {
     await s.start()
     await s.quit()
     expect(s.out).toContain(
-      'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
+      'notice: the Gate cannot ask you to review a migration or a production config change, because paths.gated in hackwin.yml is empty; if the project has such files, add their globs to paths.gated in a task of the shared role; if it has none, nothing needs doing',
     )
   })
 })
@@ -810,6 +811,80 @@ describe('1.6d/after-merge: what the Gate checks around the merge', () => {
         stage: 'merge',
         note: 'merge-refused: rules the Lead can bypass',
       })
+    },
+    SLOW,
+  )
+})
+
+describe('1.6h/labels: a merged task is closed without its status label', () => {
+  test(
+    'the closed tasks lose in-review and keep their role, an open task keeps its labels, and status shows the tasks as closed',
+    async () => {
+      const s = await scene({
+        issues: [
+          task(180, 'counter'),
+          task(182, 'todos'),
+          task(184, 'counter', undefined, { dependsOn: [180], status: 'blocked' }),
+          task(186, 'counter'),
+        ],
+      })
+      const first = await shipped(s, {
+        issue: 180,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/first.js': 'export const first = 1\n' },
+      })
+      const second = await shipped(s, {
+        issue: 186,
+        role: 'counter',
+        author: BUILDER1,
+        files: { 'src/features/counter/second.js': 'export const second = 2\n' },
+      })
+      // GitHub closes #180 through `Closes #180`; #186 is still open after its merge, as when
+      // GitHub has not closed it yet, so the Gate closes it.
+      s.fake.on('pr merge', async ({ args }) => {
+        const merged = await mergeAsGitHub(s, args)
+        if (Number(args[2]) === second.pr) {
+          Object.assign(/** @type {any} */ (s.fake.find(186)), {
+            state: 'open',
+            stateReason: null,
+            closedAt: null,
+          })
+        }
+        return merged
+      })
+      await s.start()
+      await s.ended(first.pr, 'merged')
+      await s.ended(second.pr, 'merged')
+      await s.quit()
+
+      expect(s.out).not.toContain(`#${first.pr} closed its task #180`)
+      expect(s.out).toContain(`#${second.pr} closed its task #186`)
+      for (const issue of [180, 186]) {
+        expect(/** @type {any} */ (s.fake.find(issue)).state).toBe('closed')
+        expect(s.labels(issue)).toEqual(['role:counter'])
+      }
+      // An open task keeps its labels: #182 waits for a pull request, #184 is ready now.
+      expect(s.labels(182)).toEqual(['in-review', 'role:todos'])
+      expect(s.labels(184).sort()).toEqual(['ready', 'role:counter'])
+
+      const status = await runStatus({
+        cwd: s.fixture.main,
+        env: s.fixture.env,
+        executor: s.fake.as(BUILDER1),
+        clock: fixedClock('2026-10-24T12:00:00.000Z'),
+        json: true,
+      })
+      expect(status.code, status.err).toBe(0)
+      const builder = status.json.data.who.find(
+        (/** @type {any} */ member) => member.login === BUILDER1,
+      )
+      expect(builder.working.map((/** @type {any} */ item) => [item.number, item.status])).toEqual([
+        [182, 'in-review'],
+      ])
+      // #184 is next: status reads its dependency #180 as closed.
+      expect(builder.next.map((/** @type {any} */ item) => item.number)).toEqual([184])
+      expect(status.json.data.blocked).toEqual([])
     },
     SLOW,
   )
