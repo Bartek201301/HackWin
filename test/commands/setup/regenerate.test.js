@@ -437,3 +437,15 @@ describe('AC77/regenerate: setup --regenerate run with a CLI of another phase ex
     expect(await staleGeneratedFiles(project.worktree.path, { version: LOWER })).toEqual([])
   })
 })
+
+describe("1.4m/paste: setup --regenerate gives the Lead's command as a line to paste", () => {
+  test('1.4m/paste: a member who does not hold the shared role is told that the Lead runs it, with the line to paste', async () => {
+    const project = await createProject()
+    const { issue, path } = project.worktree
+    const result = await regenerate(project, { login: accounts.builder1.login })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(
+      `  to resolve: the holder of shared, the Lead, runs it (run \`cd ${path} && hackwin setup --regenerate\`); to stop working on #${issue}, run \`cd ${project.fixture.main} && hackwin take ${issue} --release\``,
+    )
+  })
+})

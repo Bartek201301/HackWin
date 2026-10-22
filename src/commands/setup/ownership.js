@@ -32,6 +32,13 @@ export const FEATURE_PARENTS = Object.freeze([
   'packages',
 ])
 
+/** What the questions of step 4 about the roles decide, in the words of the team. */
+export const ROLES_INTRO =
+  'Roles decide who may edit which folders: each role owns the folders and files listed after it, only the member who holds the role may change them, and every other path belongs to the shared role, which the Lead holds.'
+
+/** How a path of a role is written, for the questions. */
+const PATH_FORM = '<folder>/** is a folder and everything in it'
+
 /** The HackYeah layout, shown as an example where the Lead types the roles (7.1 step 4). */
 const EXAMPLE = Object.freeze([
   'shared: src/shared/**, src/app/**, docs/**, .github/**',
@@ -166,17 +173,18 @@ export async function ownersUnchanged(root, owners) {
 async function confirmRoles(questions, owners, proposal) {
   const roles = Object.entries(owners.roles)
   const empty = roles.every(([, role]) => role.paths.length === 0) && roles.length === 1
+  questions.say(ROLES_INTRO)
   if (!empty) {
-    questions.say(`Ownership roles, from ${proposal.source}:`)
+    questions.say(`Ownership roles, from ${proposal.source}; ${PATH_FORM}:`)
     for (const line of rolesText(owners)) questions.say(`  ${line}`)
     questions.say(`  open (every member may edit): ${listText(owners.open)}`)
-    if (await questions.keep('Keep these roles and globs?')) return owners
+    if (await questions.keep('Keep these roles?')) return owners
   } else {
     questions.say('No ownership roles yet. An example, the layout of HackYeah 2026:')
     for (const line of EXAMPLE) questions.say(`  ${line}`)
   }
   questions.say(
-    'Type one role per line as <role>: <glob>, <glob>. The first role is the shared role, which the Lead holds. An empty line ends the list.',
+    `Type one role per line as <role>: <path>, <path>, where ${PATH_FORM}. The first role is the shared role, which the Lead holds. An empty line ends the list.`,
   )
   for (;;) {
     /** @type {Owners['roles']} */
@@ -185,7 +193,7 @@ async function confirmRoles(questions, owners, proposal) {
       const line = await questions.ask(`Role ${Object.keys(typed).length + 1}`, {
         fallback: '',
         check: (answer) =>
-          answer === '' || /^[^:]+:/.test(answer) ? null : 'type <role>: <glob>, <glob>',
+          answer === '' || /^[^:]+:/.test(answer) ? null : 'type <role>: <path>, <path>',
       })
       if (line === '') break
       const colon = line.indexOf(':')
@@ -234,7 +242,7 @@ async function askHolders(questions, { owners, team, proposed, members }) {
     }
   }
   questions.say(
-    `Who holds which role. Every role has exactly one holder; ${shared} goes to the Lead.`,
+    `Who holds which role: every role has exactly one holder, the member whose tasks may change its folders, and ${shared} goes to the Lead.`,
   )
   for (;;) {
     /** @type {MemberAnswer[]} */

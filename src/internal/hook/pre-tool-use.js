@@ -18,6 +18,7 @@
 
 import { resolve } from 'node:path'
 import { BlockedError } from '../../core/runtime/errors.js'
+import { runIn } from '../../core/runtime/output.js'
 import { scopeCheck } from '../../core/config/index.js'
 import { parseBranch } from '../../core/tasks/index.js'
 import { mainCheckout } from '../../core/worktrees/index.js'
@@ -100,7 +101,7 @@ async function checkCommand(ctx, line, dir) {
           {
             rule: 'E3: no agent session merges; only the Gate does',
             objects: [words.join(' ')],
-            resolve: `leave the merge to the Gate, which the Lead runs with \`hackwin gate\` in ${main}; stop and report the pull request number and the full head SHA`,
+            resolve: `leave the merge to the Gate, which the Lead runs in a terminal of its own (${runIn('hackwin gate', main)}); stop and report the pull request number and the full head SHA`,
           },
         ),
       )
