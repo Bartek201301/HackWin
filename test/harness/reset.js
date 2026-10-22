@@ -9,6 +9,10 @@
 // A gh call that fails without an HTTP status (a network error, a cut response) or with a 5xx is
 // made again, up to RESET_ATTEMPTS times in all.
 //
+// GitHub's listing of open issues can lag a few seconds behind a close (#162). While the state read
+// back differs only in issues or pull requests that this reset closed itself, it is read again, up
+// to READ_BACK_ATTEMPTS times in all; any other difference fails at once.
+//
 // It never assumes an issue or pull request number: it lists what is open.
 
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -24,6 +28,12 @@ export const RESET_ATTEMPTS = 4
 
 /** The wait before the second attempt of such a call; it doubles before each further one. */
 export const RETRY_DELAY_MS = 1000
+
+/** How often the reset reads the state back while GitHub still lists what the reset closed. */
+export const READ_BACK_ATTEMPTS = 6
+
+/** The wait between two such reads. */
+export const READ_BACK_DELAY_MS = 1000
 
 const STATE_QUERY = `query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -72,15 +82,23 @@ const DELETE_RULE = `mutation($id: ID!) {
  * Reset a fixture repository, as its owner.
  * @param {GitHub} lead The Lead's client for the repository.
  * @param {FixtureRepoInfo} info
- * @param {{ log?: (line: string) => void, attempts?: number, retryDelayMs?: number }} [options]
+ * @param {{ log?: (line: string) => void, attempts?: number, retryDelayMs?: number, readBackAttempts?: number, readBackDelayMs?: number }} [options]
  *   `attempts`: how often a call that fails without an HTTP status or with a 5xx is made;
- *   `retryDelayMs`: the wait before its second attempt, doubled before each further one.
+ *   `retryDelayMs`: the wait before its second attempt, doubled before each further one;
+ *   `readBackAttempts`: how often the state is read back while GitHub still lists an issue or a
+ *   pull request that the reset closed; `readBackDelayMs`: the wait between two such reads.
  * @returns {Promise<ResetReport>}
  */
 export async function resetFixtureRepo(
   lead,
   info,
-  { log = () => {}, attempts = RESET_ATTEMPTS, retryDelayMs = RETRY_DELAY_MS } = {},
+  {
+    log = () => {},
+    attempts = RESET_ATTEMPTS,
+    retryDelayMs = RETRY_DELAY_MS,
+    readBackAttempts = READ_BACK_ATTEMPTS,
+    readBackDelayMs = READ_BACK_DELAY_MS,
+  } = {},
 ) {
   const github = retrying(lead, {
     attempts,
@@ -180,8 +198,18 @@ export async function resetFixtureRepo(
     })
   }
 
-  // Read the state back.
-  const problems = problemsOf(await readFixtureRepoState(github, info), info)
+  // Read the state back. On 22 October 2026 the read right after the close still listed issue #37
+  // of hackwin-fixture-c, which this reset had closed (#162), so such a state is read again.
+  let state = await readFixtureRepoState(github, info)
+  for (let read = 1; read < readBackAttempts && onlyJustClosed(state, report, info); read += 1) {
+    const listed = [...state.openIssues, ...state.openPullRequests].map((n) => `#${n}`).join(', ')
+    log(
+      `reset ${info.repo}: GitHub still lists ${listed} as open after closing it, read ${read + 1}`,
+    )
+    await sleep(readBackDelayMs)
+    state = await readFixtureRepoState(github, info)
+  }
+  const problems = problemsOf(state, info)
   if (problems.length > 0) {
     throw new Error(`the reset of ${info.repo} did not hold: ${problems.join('; ')}`)
   }
@@ -238,6 +266,24 @@ export function problemsOf(state, info) {
     state.branchRules.length === 0 ? null : `branch rules: ${list(state.branchRules)}`,
     state.pinnedIssues.length === 0 ? null : `pinned issues: ${list(state.pinnedIssues)}`,
   ].filter((problem) => problem !== null)
+}
+
+/**
+ * True when the state differs from the one a reset leaves only in open issues or pull requests
+ * that this reset closed itself: what GitHub's listing may still show for a few seconds.
+ * @param {FixtureRepoState} state
+ * @param {ResetReport} report
+ * @param {FixtureRepoInfo} info
+ * @returns {boolean}
+ */
+export function onlyJustClosed(state, report, info) {
+  if (state.openIssues.length + state.openPullRequests.length === 0) return false
+  const rest = {
+    ...state,
+    openIssues: state.openIssues.filter((n) => !report.closedIssues.includes(n)),
+    openPullRequests: state.openPullRequests.filter((n) => !report.closedPullRequests.includes(n)),
+  }
+  return problemsOf(rest, info).length === 0
 }
 
 /**

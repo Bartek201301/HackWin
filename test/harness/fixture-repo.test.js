@@ -24,7 +24,7 @@ import { FIXTURE_REPOS, RESET_SHA, SANDBOX, fixtureRepo } from './fixture-repos.
 import { inspectFixtureRepo, withFixtureRepo } from './fixture-repo.js'
 import { BUILD_REPO, guardExecutor, refusalOf } from './guard.js'
 import { acquireLock, processStart } from './lock.js'
-import { RESET_ATTEMPTS, resetFixtureRepo } from './reset.js'
+import { READ_BACK_ATTEMPTS, RESET_ATTEMPTS, resetFixtureRepo } from './reset.js'
 import { TEAM_SIZES, teamMembers } from './team.js'
 
 /** @type {string[]} */
@@ -1206,5 +1206,85 @@ describe('1.3d/driver: withFixtureRepo against the fake GitHub', () => {
         },
       }),
     ).rejects.toThrow(/the Lead \(Bartek201301\) is not an admin/)
+  })
+})
+
+/**
+ * An executor in front of the fake whose listing of open issues lags behind a close: once the
+ * reset has closed issue `number`, the next `stale` listings still show it open, as GitHub's
+ * listing did for issue #37 of hackwin-fixture-c on 22 October 2026 (#162). With `stranger`, every
+ * listing after the close also shows that issue, which the reset never closed.
+ * @param {ReturnType<typeof createFakeGitHub>} fake
+ * @param {{ number: number, stale: number, stranger?: number }} options
+ */
+function laggingListing(fake, { number, stale, stranger }) {
+  /** @type {any} */
+  let remembered = null
+  let left = stale
+  let reads = 0
+  /** @type {import('../../src/core/github/index.js').GhExecutor} */
+  const executor = async (args, call) => {
+    const result = await fake.executor(args, call)
+    const listing =
+      args[0] === 'api' && args[2] === 'GET' && /\/issues\?(?:.*&)?state=open(?:&|$)/.test(args[3])
+    if (!listing || result.code !== 0) return result
+    const items = JSON.parse(result.stdout)
+    const own = items.find((/** @type {any} */ item) => item.number === number)
+    if (own) {
+      remembered = own
+      return result
+    }
+    if (remembered === null || fake.find(number)?.state !== 'closed') return result
+    reads += 1
+    const extra = []
+    if (left > 0) {
+      left -= 1
+      extra.push(remembered)
+    }
+    if (stranger !== undefined)
+      extra.push({ ...remembered, number: stranger, title: 'Not closed by the reset' })
+    return extra.length === 0 ? result : { ...result, stdout: JSON.stringify([...extra, ...items]) }
+  }
+  return { executor, reads: () => reads }
+}
+
+describe('1.3d/reset: GitHub still lists an issue that the reset just closed (#162)', () => {
+  test('for a few reads: the reset reads the state again and then holds', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-c')
+    const lagging = laggingListing(fake, { number: 41, stale: 2 })
+    /** @type {string[]} */
+    const lines = []
+    const github = createGitHub({ executor: lagging.executor, repo: info.repo })
+    const report = await resetFixtureRepo(github, info, {
+      log: (line) => lines.push(line),
+      readBackDelayMs: 0,
+    })
+    expect(report.closedIssues).toEqual([41])
+    expect(lagging.reads()).toBe(3)
+    expect(lines.filter((line) => line.includes('still lists'))).toEqual([
+      'reset Bartek201301/hackwin-fixture-c: GitHub still lists #41 as open after closing it, read 2',
+      'reset Bartek201301/hackwin-fixture-c: GitHub still lists #41 as open after closing it, read 3',
+    ])
+    expect(lines.at(-1)).toMatch(/^reset Bartek201301\/hackwin-fixture-c: rule sets /)
+  })
+
+  test('for longer than the reads allow: the reset fails and names the issue', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-c')
+    const lagging = laggingListing(fake, { number: 41, stale: 99 })
+    const github = createGitHub({ executor: lagging.executor, repo: info.repo })
+    await expect(resetFixtureRepo(github, info, { readBackDelayMs: 0 })).rejects.toThrow(
+      'the reset of Bartek201301/hackwin-fixture-c did not hold: open issues: 41',
+    )
+    expect(lagging.reads()).toBe(READ_BACK_ATTEMPTS)
+  })
+
+  test('an open issue that the reset did not close fails at once, without a second read', async () => {
+    const { fake, info } = fakeFixtureRepo('hackwin-fixture-c')
+    const lagging = laggingListing(fake, { number: 41, stale: 1, stranger: 77 })
+    const github = createGitHub({ executor: lagging.executor, repo: info.repo })
+    await expect(resetFixtureRepo(github, info, { readBackDelayMs: 0 })).rejects.toThrow(
+      'the reset of Bartek201301/hackwin-fixture-c did not hold: open issues: 41, 77',
+    )
+    expect(lagging.reads()).toBe(1)
   })
 })
