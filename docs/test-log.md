@@ -17,6 +17,42 @@ Every test of HackWin, while it is built and at real events, with what happened 
 
 ## Entries
 
+### 2026-10-22 · Phase 1 · 1.3f README with the whole workflow, take in the help, friendly task deadlines, plan decision 14 (PR #156, issue #149)
+
+- Setup: the integrator's own usability task of plan decision 14, in its worktree `task/149-readme-help-deadlines`, created from `a15680c`. `lead-55` decided the order: the help, the deadlines and the plan first, the README after #145 to #148 were merged. `lead-55` reviewed the PR twice and sent the merge.
+- What happened:
+  - Help:
+    - `hackwin --help` says after the list of commands that `hackwin take` without a number takes the next task of your roles;
+    - `hackwin take --help` adds what `take` does without N and with N;
+    - the lines come from a new optional `details` field of the registry, which the generated wrappers do not read, and a test checks that the take wrapper does not change.
+  - Task deadlines (`src/core/tasks/block.js`):
+    - a deadline `YYYY-MM-DD HH:MM` is read in the offset of the event times in `hackwin.yml`, and the block gives it in the ISO form;
+    - a day or time that does not exist is refused;
+    - when the event's start and end have different offsets, the short form is refused, because either offset could be an hour off, a rule `lead-55` accepted;
+    - the ISO form is unchanged.
+
+    The old test "a deadline without an offset" used the short form, which is now valid, so it changed.
+  - Plan decision 14 records the usability decision for 0.1.0 and the PRD lines that change in the next revision. The template's row is PRD line 583, not 588 as `lead-55`'s draft had it. Section 6, item 6 and row 13 make the manual check's wrapper call use a wrapper whose command is not on the allow list, such as `/gate`, as `lead-55` decided.
+  - README for 0.1.0: the whole workflow, with the HackYeah numbers at the top, the phases with Phase 2 and 3 marked as coming, and the statements of PRD 17.4, AC49, AC50 and the Codex beta note. Its claims were checked against main `d1edd83`, the guide of #146 and the bodies of PRs #150 to #153 and #155.
+  - Two "Scope change:" comments on #149:
+    - `test/integration/parity/parity.test.js`, whose AC67 check of `take --help` needed the new lines; the first full `npm test` found it;
+    - one line of `src/generate/templates/using-hackwin.md` (lane A), so that the guide names both deadline forms, at `lead-55`'s request.
+  - At the review of `e7166a1`, `lead-55` found that the quick start put `hackwin ship` in the main checkout, where `ship` refuses (PRD 7.9). `8c39cde` says where each command runs.
+  - Five commits: `7bee61b`, `8faa246`, a merge of main `f30f79a`, `e7166a1` and `8c39cde`. PR #156 opened at 01:33:24 UTC.
+  - Merged with the procedure of the plan, section 8.
+    - Steps 1 to 5 passed: 10 files inside issue #149's paths, one of them lane A's under the scope change; no secret pattern; no dash; no conflict with `d1edd83`.
+    - Step 6, with the PR merged into `d1edd83` (a fast-forward to `8c39cde`), at a load average of 1.83 that rose to 18.10 by the end of the run: `npm test` passed 1082 of 1082, and `npm run test:ac -- 1.3f/help 1.3f/deadline` passed 1.3f/help 3 and 1.3f/deadline 5. No sleep in that time.
+    - Main had not moved, and the merge was pinned to the head SHA.
+  - The run on main after the merge, `39707958037`, succeeded: both jobs passed 1081 tests and skipped 1 of 1082.
+- Problems:
+  - The README's install line names `hackwin@0.1.0` on npm, which step 1.8 publishes; until then the pre-releases install by URL.
+  - The README was checked against the code, the tests and the PRs, not against a live run of 0.1.0.
+- Workflow notes of the PR:
+  - "The first full `npm test` failed AC67, an integrator test outside the issue's paths, which expected `take --help` without the new lines. A "Scope change:" comment came first, then the fix."
+  - "At the review of `e7166a1`, `lead-55` asked to say where `ship` runs and to fold the guide's deadline line into this PR; `8c39cde` does both."
+- Measured: PR open 16 min 45 s (01:33:24 to 01:50:09 UTC); 5 commits, 2 PR runs (176 s and 151 s), 0 conflicts; local merge test `npm test` 228.68 s; the run on main after the merge 172 s.
+- Evidence: issue #149; PR https://github.com/Bartek201301/HackWin/pull/156; head `8c39cde`; merge commit `7e57c0b`; runs `39706369792` and `39707222093` (PR) and `39707958037` (main).
+
 ### 2026-10-22 · Phase 1 · 1.5j take: the task prompt leaves out the HTML comments of the issue (PR #155, issue #154)
 
 - Setup: a follow-up for 0.1.0 from `lead-55`'s review of PR #153. PR #153 adds a help comment and a full example task, both HTML comments, to the task issue template, and `take`'s prompt kept HTML comments, so a forgotten help text or example would reach the agent's prompt and the example would read like a second task. The integrator opened #154 for lane B with a worktree `task/154-take-prompt-without-comments` from `df4fb1a`. `lead-55` started the session, reviewed the PR and sent the merge, after #153.
