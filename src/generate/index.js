@@ -26,8 +26,11 @@ export {
   CLAUDE_HOOKS,
   ENV_READ_RULES,
   FORMATTED_TOOLS,
+  GIT_RULES,
+  HACKWIN_RULES,
   MERGE_RULES,
   SETTINGS_PATH,
+  allowRules,
   denyRules,
   hookCommand,
   isHackwinHandler,
@@ -43,7 +46,9 @@ export {
   languageName,
   planBlockFiles,
   planProjectFiles,
+  projectInput,
   renderAgentsBlock,
+  renderTaskTemplate,
 } from './project-files.js'
 export { CONFIG_FILES, renderHackwinConfig, renderOwners, withCliVersion } from './config-files.js'
 export { linkError, linkOn, refuseLinks } from './links.js'

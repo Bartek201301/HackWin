@@ -325,7 +325,7 @@ describe('1.6a/header: the gated notice and the status issue', () => {
     expect(gate.io.out).toContain(
       `status issue: #31 https://github.com/${DEFAULT_FAKE_REPO}/issues/31\n`,
     )
-    expect(gate.io.out).not.toContain('paths.gated is empty')
+    expect(gate.io.out).not.toContain('paths.gated in hackwin.yml is empty')
     await quit(gate)
   })
 })

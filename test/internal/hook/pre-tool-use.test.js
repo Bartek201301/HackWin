@@ -76,7 +76,7 @@ describe('AC55: the PreToolUse hook in a Claude Code session', () => {
           'hackwin: blocked: merging a pull request from an agent session is blocked: only the Gate merges, one pull request at a time, after testing it with the newest main',
           '  rule: E3: no agent session merges; only the Gate does',
           `  - ${command}`,
-          `  to resolve: leave the merge to the Gate, which the Lead runs with \`hackwin gate\` in ${lead.path}; stop and report the pull request number and the full head SHA`,
+          `  to resolve: leave the merge to the Gate, which the Lead runs in a terminal of its own (run \`cd ${lead.path} && hackwin gate\`); stop and report the pull request number and the full head SHA`,
         ].join('\n'),
       )
     }
@@ -466,5 +466,15 @@ describe('1.4c/pre-tool-use: the command line of the settings', () => {
       hookEventName: 'PreToolUse',
       permissionDecision: 'deny',
     })
+  })
+})
+
+describe("1.4m/paste: the E3 refusal gives the Lead's command as a line to paste", () => {
+  test('1.4m/paste: a session is told that the Lead runs the Gate, with the line to paste', async () => {
+    const { clone, task, run } = await builderScene()
+    const reason = denial(await run(bashCall(task.path, 'gh pr merge 14 --merge')))
+    expect(reason).toContain(
+      `  to resolve: leave the merge to the Gate, which the Lead runs in a terminal of its own (run \`cd ${clone.path} && hackwin gate\`); stop and report the pull request number and the full head SHA`,
+    )
   })
 })

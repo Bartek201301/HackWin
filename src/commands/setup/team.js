@@ -25,6 +25,10 @@ const SESSIONS = Object.freeze([1, 2, 3])
 /** The number of sessions proposed to every member. */
 const DEFAULT_SESSIONS = 2
 
+/** What the questions of step 2 decide, in the words of the team. */
+export const TEAM_INTRO =
+  'The team: who works on this project, which coding agent each person uses, and how many tasks each person can run at the same time.'
+
 /**
  * A member as the questions give it. `roles` is null until step 4 assigns the roles, unless the
  * answers file names them.
@@ -144,6 +148,7 @@ function memberFromAnswers(questions, value, index) {
  * @returns {Promise<Team>}
  */
 async function teamFromTerminal(questions, { login }) {
+  questions.say(TEAM_INTRO)
   const count = Number(
     await questions.ask(`How many people are in the team, 1 to ${MAX_MEMBERS}`, {
       check: (answer) => (/^[1-9]\d*$/.test(answer) ? null : 'answer with a number'),
@@ -188,10 +193,13 @@ async function teamFromTerminal(questions, { login }) {
       },
     )
     const sessions = Number(
-      await questions.ask(`Agent sessions of ${name}: 1 or 2, or 3 as an advanced option`, {
-        fallback: String(DEFAULT_SESSIONS),
-        check: (answer) => (['1', '2', '3'].includes(answer) ? null : 'answer 1, 2 or 3'),
-      }),
+      await questions.ask(
+        `How many tasks can ${name} run at the same time, one agent session each: 1 or 2, or 3 as an advanced option`,
+        {
+          fallback: String(DEFAULT_SESSIONS),
+          check: (answer) => (['1', '2', '3'].includes(answer) ? null : 'answer 1, 2 or 3'),
+        },
+      ),
     )
     members.push({
       name,

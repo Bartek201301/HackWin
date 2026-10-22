@@ -3,7 +3,8 @@
 // that does not lie in exactly one role or on the `open` list, empty acceptance tests outside the
 // kind `foundation`, and a missing deadline. Any account can write a block, and `take` prints its
 // errors, so no error carries a control character, a line break or a bidirectional format
-// character of the body.
+// character of the body. A deadline is an ISO 8601 time with an offset, or a date and time
+// `YYYY-MM-DD HH:MM` in the event's time zone, which the block gives in the ISO form (#149).
 
 import { parseDocument } from 'yaml'
 import { isIsoTimeWithOffset } from '../config/fields.js'
@@ -55,7 +56,7 @@ const BLOCK_KEYS = Object.freeze([
  * @property {string[]} paths The allowed paths, globs.
  * @property {number[]} depends_on Issue numbers.
  * @property {string[]} acceptance_tests
- * @property {string} deadline ISO 8601 with an offset.
+ * @property {string} deadline ISO 8601 with an offset, also when the issue gives the short form.
  */
 
 /**
@@ -147,12 +148,14 @@ export function parseTaskBlock(body, config) {
   }
 
   const deadline = data.deadline
+  /** @type {string | null} */
+  let due = null
   if (deadline === undefined || deadline === null || deadline === '') {
     errors.push('deadline is missing; every task has one (T11)')
-  } else if (!isIsoTimeWithOffset(deadline)) {
-    errors.push(
-      `deadline ${quoted(deadline)} is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00"`,
-    )
+  } else {
+    const read = readDeadline(deadline, config)
+    if ('error' in read) errors.push(read.error)
+    else due = read.time
   }
 
   if (errors.length > 0) return { isTask: true, valid: false, errors }
@@ -166,9 +169,68 @@ export function parseTaskBlock(body, config) {
       paths: /** @type {string[]} */ (paths),
       depends_on: dependsOn,
       acceptance_tests: /** @type {string[]} */ (tests),
-      deadline,
+      deadline: /** @type {string} */ (due),
     },
   }
+}
+
+/** A date and time without an offset, as people type it: `2026-10-24 20:00`. */
+const LOCAL_TIME = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/
+
+/**
+ * The deadline of a block as an ISO 8601 time with an offset. The short form `YYYY-MM-DD HH:MM`
+ * is read in the event's time zone, the offset of the event times in hackwin.yml. When the start
+ * and the end of the event have different offsets, daylight saving time changes during the event
+ * and either offset could be an hour off, so the short form is refused there.
+ * @param {unknown} value
+ * @param {OwnershipConfig} config
+ * @returns {{ time: string } | { error: string }}
+ */
+function readDeadline(value, config) {
+  if (isIsoTimeWithOffset(value)) return { time: /** @type {string} */ (value) }
+  const local = typeof value === 'string' ? LOCAL_TIME.exec(value) : null
+  const event = config.hackwin.project?.event
+  if (local === null || !isCalendarTime(local.slice(1).map(Number)) || !event) {
+    return {
+      error: `deadline ${quoted(value)} is not an ISO 8601 time with an offset, such as "2026-10-17T23:59:00+02:00", or a date and time in the event's time zone, such as "2026-10-17 23:59"`,
+    }
+  }
+  const [, year, month, day, hour, minute] = local
+  const at = `${year}-${month}-${day}T${hour}:${minute}:00`
+  const start = offsetOf(event.start)
+  const end = offsetOf(event.end)
+  if (start !== end) {
+    return {
+      error: `deadline ${quoted(value)} has no offset, and the event's start and end have different offsets (${start} and ${end}), so either could be an hour off; write it with its offset, such as "${at}${end}"`,
+    }
+  }
+  return { time: `${at}${start}` }
+}
+
+/**
+ * The offset of an ISO 8601 time with an offset, with `Z` written as `+00:00`.
+ * @param {string} time
+ * @returns {string}
+ */
+function offsetOf(time) {
+  const offset = /(Z|[+-]\d{2}:\d{2})$/.exec(time)?.[1] ?? ''
+  return offset === 'Z' ? '+00:00' : offset
+}
+
+/**
+ * True when the numbers name a real day of the calendar and a time of that day.
+ * @param {number[]} parts Year, month, day, hour and minute.
+ * @returns {boolean}
+ */
+function isCalendarTime([year, month, day, hour, minute]) {
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    hour <= 23 &&
+    minute <= 59
+  )
 }
 
 /**

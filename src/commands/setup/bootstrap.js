@@ -20,7 +20,12 @@ import { readFileSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, rmdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { HACKWIN_FILE, OWNERS_FILE } from '../../core/config/index.js'
+import {
+  HACKWIN_FILE,
+  OWNERS_FILE,
+  parseHackwinConfig,
+  parseOwners,
+} from '../../core/config/index.js'
 import {
   BlockedError,
   GitError,
@@ -39,6 +44,7 @@ import {
   linkOn,
   mergeClaudeSettings,
   planProjectFiles,
+  projectInput,
   refuseLinks,
   writeClaudeSettings,
   writeGeneratedFiles,
@@ -174,7 +180,7 @@ async function planFiles(root, git, input) {
   for (const { path } of PROJECT_FILES) links.set(path, await linkOn(root, path))
   const planned = planProjectFiles(
     (path) => readTextSync(join(root, path)),
-    { defaultBranch: input.branch, language: input.language },
+    filesInput(root, input),
     (path) => links.get(path) ?? null,
   )
   // Only a tracked check.yml is the template's; an untracked one is not setup's to remove.
@@ -185,7 +191,7 @@ async function planFiles(root, git, input) {
       : change,
   )
   const settings = readTextSync(join(root, SETTINGS_PATH))
-  const settingsChange = mergeClaudeSettings(settings, { defaultBranch: input.branch }) !== settings
+  const settingsChange = mergeClaudeSettings(settings, filesInput(root, input)) !== settings
   await refuseLinks(root, [
     HACKWIN_FILE,
     ...(input.owners === null ? [] : [OWNERS_FILE]),
@@ -193,6 +199,19 @@ async function planFiles(root, git, input) {
     ...(settingsChange ? [SETTINGS_PATH] : []),
   ])
   return plan
+}
+
+/**
+ * What the team's files and the settings are rendered from: hackwin.yml of the commit, and its
+ * owners.yml, which is the file in the checkout when setup keeps it.
+ * @param {string} root
+ * @param {BootstrapInput} input
+ */
+function filesInput(root, input) {
+  return projectInput({
+    hackwin: parseHackwinConfig(input.hackwin),
+    owners: parseOwners(input.owners ?? readTextSync(join(root, OWNERS_FILE)) ?? ''),
+  })
 }
 
 /**
@@ -250,7 +269,7 @@ async function writeFiles(root, input, plan) {
   await writeText(root, HACKWIN_FILE, input.hackwin)
   if (input.owners !== null) await writeText(root, OWNERS_FILE, input.owners)
   await writeGeneratedFiles(root, { version: input.version })
-  await writeClaudeSettings(root, { defaultBranch: input.branch })
+  await writeClaudeSettings(root, filesInput(root, input))
   for (const change of plan) {
     if (change.action === 'write') await writeText(root, change.path, change.content ?? '')
     else if (change.action === 'remove') await rm(join(root, change.path), { force: true })

@@ -40,6 +40,7 @@ import {
   findStatusIssue,
   otherGateHeartbeat,
   parseStatusBody,
+  protectionLine,
 } from './status-issue.js'
 
 /** @import { CommandContext, CommandResult } from '../../cli/context.js' */
@@ -54,6 +55,17 @@ import {
 
 /** The longest wait between two looks at the clock and at `quit`. */
 const TICK_MS = 1000
+
+/**
+ * The Resolver's availability in the header (7.5 step 7): it comes in Phase 3 (A28), and until
+ * then every conflict fails with `needs-owner` (I7).
+ */
+const RESOLVER_LINE =
+  'conflict resolver: not in this version, so the author of a pull request resolves each conflict'
+
+/** The header's notice while `paths.gated` is empty (7.5 step 7, 9.5), with what to do. */
+const GATED_NOTICE =
+  'notice: the Gate cannot ask you to review a migration or a production config change, because paths.gated in hackwin.yml is empty; if the project has such files, add their globs to paths.gated in a task of the shared role; if it has none, nothing needs doing'
 
 /**
  * The pull request pipeline of section 9, which the loop runs.
@@ -581,22 +593,15 @@ function headerLines({ gate, status, awake, pid, pipeline }) {
   const issue = status.issue
   const lines = [
     `${hoursAndMinutes(ctx.clock.now())} Gate started: start ${state.starts}${restarts}, pid ${pid}`,
-    `protection: ${protection.state}`,
-    'resolver: none',
+    protectionLine(protection.state, protection.rules.updateRestricted),
+    RESOLVER_LINE,
     `poll: every ${config.hackwin.gate.poll_seconds} s`,
     `queue: ${queued} pull ${queued === 1 ? 'request' : 'requests'}`,
     `status issue: ${issue === null ? 'not created yet' : `#${issue.number} ${issue.url}`}`,
     `keep awake: ${awake.active ? awake.command : 'off'}`,
   ]
-  if (protection.rules.updateRestricted) {
-    lines.push(
-      "notice: the update restriction is active, so GitHub shows every pull request as BLOCKED, the Lead's included; that is expected: the Gate merges with --admin, and only after its own stages pass",
-    )
-  }
   if (gated.migrations.length === 0 && gated.production_config.length === 0) {
-    lines.push(
-      'notice: paths.gated is empty, so the Gate can raise no attention line for a migration or a production config change',
-    )
+    lines.push(GATED_NOTICE)
   }
   if (!pipeline.run) {
     lines.push('notice: the pipeline is not built yet: this Gate polls, but takes no pull request')
